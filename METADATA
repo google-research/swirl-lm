@@ -1,0 +1,18 @@
+# go/google3metadata
+# proto-file: devtools/metadata/metadata.proto
+# proto-message: MetaData
+
+name: "swirl-lm"
+description:
+  "Swirl-LM is a computational fluid dynamics simulation framework for low "
+  "Mach number turbulent flows with variable density implemented with "
+  "TensorFlow."
+third_party {
+  url {
+    type: PIPER
+    value: "http://google3/third_party/py/swirl-lm/"
+  }
+}
+presubmit: {
+  include_presubmit: "//depot/google3/research/simulation/METADATA"
+}

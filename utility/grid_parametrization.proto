@@ -1,0 +1,69 @@
+syntax = "proto2";
+
+package swirl_lm;
+
+// Defines the type of boundary condition to be used for each variable in a
+// specific boundary.
+// Next id: 5
+enum BoundaryConditionType {
+  // The default option where no boundary condition is set. Results in an error
+  // if that direction is not periodic.
+  BC_TYPE_UNKNOWN = 0;
+  // The Dirichlet boundary condition. A value needs to be specified for this
+  // type of boundary condition.
+  BC_TYPE_DIRICHLET = 1;
+  // The Neumann boundary condition.
+  BC_TYPE_NEUMANN = 2;
+  // Maintains the current value for the specified boundary.
+  BC_TYPE_NO_TOUCH = 3;
+  // The periodic boundary condition.
+  BC_TYPE_PERIODIC = 4;
+}
+
+// Messages encapsulating 3-D coordinates. Dimensions may correspond to x, y,
+// and z, respectively, but need not.
+message CoordinateInt {
+  optional int32 dim_0 = 1;
+  optional int32 dim_1 = 2;
+  optional int32 dim_2 = 3;
+}
+
+message CoordinateFloat {
+  optional float dim_0 = 1;
+  optional float dim_1 = 2;
+  optional float dim_2 = 3;
+}
+
+message CoordinateBC {
+  optional BoundaryConditionType dim_0 = 1;
+  optional BoundaryConditionType dim_1 = 2;
+  optional BoundaryConditionType dim_2 = 3;
+}
+
+// A message that parameterizes a distributed simulation.
+// Next id: 11
+message GridParametrization {
+  // The shape or topology of compute cores.
+  optional CoordinateInt computation_shape = 1;
+  // The full grid length in each dimension. This is the length of the grid
+  // including padding, if any.
+  optional CoordinateFloat length = 2;
+  // The grid size per core in each dimension.
+  optional CoordinateInt grid_size = 3;
+  // The full grid size (over all cores) in each dimension. This is the physical
+  // grid size (padding is excluded).
+  optional CoordinateInt physical_full_grid_size = 9;
+  // The halo width.
+  optional int32 halo_width = 4;
+  // The absolute time step per simulation finite difference step.
+  optional float dt = 5;
+  // The convolutional kernel dimension.
+  optional int32 kernel_size = 6;
+  // The chunk size for input.
+  optional int32 input_chunk_size = 7;
+  // The number of splits for processing outputs.
+  optional int32 num_output_splits = 8;
+  // The number of boundary points to be to each end of the computational
+  // domain.
+  optional int32 num_boundary_points = 10 [default = 1];
+}

@@ -16,3 +16,4 @@
 import swirl_lm.utility.grid_parametrization
 import swirl_lm.utility.grid_parametrization_pb2
 import swirl_lm.utility.tf_test_util
+import swirl_lm.utility.types

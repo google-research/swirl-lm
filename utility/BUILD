@@ -17,6 +17,7 @@ pytype_strict_library(
         ":grid_parametrization",
         ":grid_parametrization_py_pb2",
         ":tf_test_util",
+        ":types",
     ],
 )
 
@@ -35,6 +36,15 @@ pytype_strict_library(
     name = "tf_test_util",
     srcs = ["tf_test_util.py"],
     deps = ["//third_party/py/tensorflow"],
+)
+
+pytype_strict_library(
+    name = "types",
+    srcs = ["types.py"],
+    deps = [
+        "//third_party/py/numpy",
+        "//third_party/py/tensorflow:tensorflow_google",
+    ],
 )
 
 py_strict_test(

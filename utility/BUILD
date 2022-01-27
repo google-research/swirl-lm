@@ -14,10 +14,23 @@ pytype_strict_library(
     visibility = ["//visibility:public"],
     # everything except test_util
     deps = [
+        ":common_ops",
         ":grid_parametrization",
         ":grid_parametrization_py_pb2",
         ":tf_test_util",
         ":types",
+    ],
+)
+
+pytype_strict_library(
+    name = "common_ops",
+    srcs = ["common_ops.py"],
+    srcs_version = "PY3",
+    deps = [
+        ":types",
+        "//research/simulation/tensorflow/fluid/framework:fluid",
+        "//third_party/py/numpy",
+        "//third_party/py/tensorflow",
     ],
 )
 
@@ -52,6 +65,26 @@ py_strict_test(
     srcs = ["tf_test_util_test.py"],
     deps = [
         ":tf_test_util",
+        "//third_party/py/tensorflow",
+    ],
+)
+
+py_strict_test(
+    name = "common_ops_test",
+    srcs = ["common_ops_test.py"],
+    python_version = "PY3",
+    shard_count = 30,
+    srcs_version = "PY3",
+    tags = ["requires-dragonfish:4"],
+    deps = [
+        ":common_ops",
+        ":grid_parametrization",
+        "//learning/brain/google/xla:deepsea_hardware_device",
+        "//research/simulation/tensorflow/fluid/framework:initializer",
+        "//research/simulation/tensorflow/fluid/framework:tpu_runner",
+        "//research/simulation/tensorflow/fluid/framework:util",
+        "//testing/pybase:parameterized",
+        "//third_party/py/numpy",
         "//third_party/py/tensorflow",
     ],
 )

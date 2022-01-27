@@ -13,6 +13,7 @@
 # limitations under the License.
 """Low level utility functions for Swirl-LM."""
 
+import swirl_lm.utility.common_ops
 import swirl_lm.utility.grid_parametrization
 import swirl_lm.utility.grid_parametrization_pb2
 import swirl_lm.utility.tf_test_util

@@ -168,7 +168,8 @@ class GridParametrization(object):
       grid_lengths: Sequence[float],
       computation_shape: Sequence[int],
       subgrid_shape: Optional[Sequence[int]],
-      halo_width: int
+      halo_width: int,
+      num_boundary_points: int = 1,
   ):
     """Creates grid parametrization from specific arguments (grid lengths, etc).
 
@@ -182,6 +183,7 @@ class GridParametrization(object):
       computation_shape: The number of TPU cores assigned to each of three axes.
       subgrid_shape: The subgrid shape in the three dimensions.
       halo_width: The halo width.
+      num_boundary_points: The number of boundary points.
 
     Returns:
       The `GridParametrization` encapsulating the input arguments.
@@ -202,6 +204,7 @@ class GridParametrization(object):
       proto.grid_size.dim_2 = subgrid_shape[2]
 
     proto.halo_width = halo_width
+    proto.num_boundary_points = num_boundary_points
 
     return cls(proto)
 

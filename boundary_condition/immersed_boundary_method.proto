@@ -1,0 +1,91 @@
+syntax = "proto2";
+
+package research.simulation;
+
+option java_multiple_files = true;
+
+// Information of a variable that's required to update its value in the immersed
+// boundary.
+message IBVariableInfo {
+  // Types of boundary conditions to be applied at the solid-fluid interface.
+  // Next id: 4
+  enum BoundaryConditionType {
+    DIRICHLET = 1;
+    NEUMANN = 2;
+    // Neuamnn BC in the z direction. This can only be applied when there's only
+    // 1 fluid-solid interface in the z direction.
+    NEUMANN_Z = 3;
+  }
+
+  // The name of the variable.
+  // Next id: 6
+  optional string name = 1;
+  // The reference value of this variable. This value is used as the target
+  // value inside the solid body. Currently only a single value is allowed
+  // inside the body. Cases that have multiple values inside the solid will be
+  // handled externally.
+  optional float value = 2;
+  // The type of boundary condition to be applied at the solid-fluid interface.
+  optional BoundaryConditionType bc = 3;
+  // An indicator of whether generated IB field overrides the original value.
+  // If `false`, the newly computed value will be added to the existing field
+  // with the same key.
+  optional bool override = 4 [default = true];
+  // The value of the damping coefficient. This damping coefficient will
+  // override the global damping coefficient, and will be applied to this
+  // specific variable only. This coefficient is only used in the `sponge`
+  // and direct forcing methods.
+  // Note that this parameter is not affected by the `override` option provided
+  // above.
+  optional float damping_coeff = 5;
+}
+
+// Parameters required by the Cartesian grid method. With this method, for
+// variables with Dirichlet boundary condition, a mirror-flow approach is
+// applied; and for those with Neumann boundary conditions, the values at the
+// boundary is updated by taking average across all neighboring fluid nodes.
+message CartesianGridMethod {
+  // Variables for which the Cartesian grid method is applied.
+  repeated IBVariableInfo variables = 1;
+}
+
+// Parameters required by the marker-and-cell (MAC) method. With this method,
+// for variables with Dirichlet boundary condition, the prescribed value is
+// assgined directly at the solid-fluid interface; for those with Neumann
+// boundary conditions, values at the boundary is updated by taking values from
+// the node right above it in the z direction.
+message MarkerAndCellMethod {
+  // Variables for which the marker-and-cell method is applied.
+  repeated IBVariableInfo variables = 1;
+}
+
+// Parameters required by the Rayleigh-damping method. With this method, a
+// forcing term with constant damping coefficient is applied inside the solid
+// for all variables listed.
+message RayleighDampingMethod {
+  // Variables for which the Rayleigh damping method is applied.
+  repeated IBVariableInfo variables = 1;
+  // The value of the damping coefficient.
+  optional float damping_coeff = 2;
+}
+
+// Parameters required by the direct forcing method. With this method, a
+// Rayleigh damping force is applied inside the solid for all variables listed,
+// which overrides the original equation right hand side function.
+message DirectForcingMethod {
+  // Variables for which the Rayleigh damping method is applied.
+  repeated IBVariableInfo variables = 1;
+  // The value of the damping coefficient.
+  optional float damping_coeff = 2 [default = 1.0];
+}
+
+// Parameters required by the immersed boundary method.
+// Next id: 5
+message ImmersedBoundaryMethod {
+  oneof type {
+    CartesianGridMethod cartesian_grid = 1;
+    MarkerAndCellMethod mac = 2;
+    RayleighDampingMethod sponge = 3;
+    DirectForcingMethod direct_forcing = 4;
+  }
+}

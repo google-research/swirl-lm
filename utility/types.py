@@ -16,7 +16,7 @@
 from typing import Callable, List, Mapping, MutableMapping, NamedTuple, Optional, Sequence, Text, Tuple, Union
 
 import numpy as np
-import tensorflow.google.compat.v1 as tf
+import tensorflow as tf
 
 # Note that tf.float{n} needs to match with tf.complex{m} here, and m == 2 * n.
 TF_DTYPE = tf.float32

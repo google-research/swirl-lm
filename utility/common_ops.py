@@ -1,4 +1,3 @@
-# Lint as: python3
 """Library for common operations.
 
 TODO(yusef): Refactor over time so this does not become a catch-all spot.
@@ -6,7 +5,6 @@ TODO(yusef): Refactor over time so this does not become a catch-all spot.
 import collections
 import enum
 import functools
-import itertools
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Text, Tuple, Union
 
 import numpy as np
@@ -14,7 +12,7 @@ from swirl_lm.utility import types
 import tensorflow as tf
 import tensorflow.compat.v1 as tf1
 
-from google3.research.simulation.tensorflow.fluid.framework import fluid
+from google3.research.simulation.tensorflow.fluid.framework.tf1 import fluid
 
 StateVariable = Union[tf.Tensor, Sequence[tf.Tensor]]
 Dot = Callable[[StateVariable, StateVariable], tf.Tensor]
@@ -31,6 +29,135 @@ class NormType(enum.Enum):
   L2 = 1
   # The L infinity norm.
   L_INF = 2
+
+
+def tensor_scatter_1d_update(
+    tensor: List[tf.Tensor],
+    dim: int,
+    index: int,
+    updates: Union[Sequence[tf.Tensor], float],
+) -> List[tf.Tensor]:
+  """Updates a plane in a 3D tensor represented as a list of `tf.Tensor`.
+
+  This is not an in-place update. A new tensor will be created.
+
+  Args:
+    tensor: The 3D tensor to be updated.
+    dim: The dimension of the plane normal to.
+    index: The index of the plane to be updated in `dim`.
+    updates: The new values to be assigned in the plane specified by `dim` and
+      `index`. If it's a `Sequence[tf.Tensor]`, its shape must be the same as
+      the plane to be updated; if it's a floating point number, the value of the
+      plane will be set to this number.
+
+  Returns:
+    A 3D tensor with values updated at specified plane.
+
+  Raises:
+    ValueError: If the shape of `updates` is different from the plane to be
+      updated.
+  """
+  nz = len(tensor)
+  nx, ny = tensor[0].get_shape().as_list()
+  target_dims = [nx, ny, nz]
+  target_dims[dim] = 1
+
+  if isinstance(updates, Sequence):
+    nz_u = len(updates)
+    nx_u, ny_u = updates[0].get_shape().as_list()
+    update_dims = [nx_u, ny_u, nz_u]
+
+    for i in range(3):
+      if target_dims[i] != update_dims[i]:
+        raise ValueError(
+            f'Dimension {i} of update plane is {update_dims[i]}, which is '
+            f'different from the tensor dimension to be updated '
+            f'({target_dims[i]}).')
+
+  def update_tensor(
+      data: tf.Tensor,
+      update_val: Union[tf.Tensor, float],
+  ) -> tf.Tensor:
+    """Updates `data` at `index` in dimension `dim`."""
+    if dim not in (0, 1):
+      raise ValueError(
+          f'Tensor slice update only applies for 2D tensors, but dim {dim} is '
+          f'applied.')
+
+    if isinstance(update_val, float):
+      if dim == 0:
+        update_shape = (ny,)
+      else:  # dim == 1:
+        update_shape = (nx,)
+      update_val = update_val * tf.ones(update_shape, dtype=data.dtype)
+    else:
+      update_val = tf.squeeze(update_val)
+
+    # Because slice updates with the `tensor_scatter_nd_update` function
+    # applies to the outer dimension only, the input tensor needs to be
+    # transposed when updates need to be applied to the inner dimension.
+    if dim == 1:
+      data = tf.transpose(data)
+
+    data = tf.tensor_scatter_nd_update(data, tf.constant([[index]]),
+                                       update_val[tf.newaxis, ...])
+
+    return tf.transpose(data) if dim == 1 else data
+
+  tensor_updated = tf.nest.map_structure(tf.identity, tensor)
+  if dim == 2:
+    tensor_updated[index] = tf.identity(updates[0]) if isinstance(
+        updates, Sequence) else updates * tf.ones_like(tensor[index])
+  else:
+    if isinstance(updates, float):
+      updates = [updates,] * nz
+    tensor_updated = tf.nest.map_structure(update_tensor, tensor, updates)
+
+  return tensor_updated
+
+
+def tensor_scatter_1d_update_global(
+    replica_id: tf.Tensor,
+    replicas: np.ndarray,
+    tensor: List[tf.Tensor],
+    dim: int,
+    core_index: int,
+    plane_index: int,
+    updates: Union[Sequence[tf.Tensor], float],
+) -> List[tf.Tensor]:
+  """Updates a plane in a 3D tensor represented as a list of `tf.Tensor`.
+
+  This is not an in-place update. A new tensor will be created.
+
+  Args:
+    replica_id: The index of the current TPU replica.
+    replicas: A numpy array that maps grid coordinates to replica id numbers.
+    tensor: The 3D tensor to be updated.
+    dim: The dimension of the plane normal to.
+    core_index: The index of the core in `dim`, in which the plane will be
+      updated. The 3D tensor with other indices will remain unchanged.
+    plane_index: The local index of the plane to be updated in `dim`.
+    updates: The new values to be assigned in the plane specified by `dim` and
+      `index`. If it's a `Sequence[tf.Tensor]`, its shape must be the same as
+      the plane to be updated; if it's a floating point number, the value of the
+      plane will be set to this number.
+
+  Returns:
+    A 3D tensor with values updated at specified plane.
+
+  Raises:
+    ValueError: If the shape of `updates` is different from the plane to be
+      updated.
+  """
+  coordinates = get_core_coordinate(replicas, replica_id, dtype=tf.int32)
+
+  tensor_updated = tensor_scatter_1d_update(
+      tf.nest.map_structure(tf.identity, tensor), dim, plane_index, updates)
+
+  return tf.cond(
+      tf.equal(coordinates[dim], core_index),
+      true_fn=lambda: tensor_updated,
+      false_fn=lambda: tf.nest.map_structure(tf.identity, tensor))
 
 
 def tf_cast(tensor: Sequence[tf.Tensor], dtype) -> List[tf.Tensor]:
@@ -71,11 +198,6 @@ def linear_combination(
     return [
         lhs_i * scale_lhs + rhs_i * scale_rhs for lhs_i, rhs_i in zip(lhs, rhs)
     ]
-
-
-def add(lhs: Sequence[tf.Tensor], rhs: Sequence[tf.Tensor]) -> List[tf.Tensor]:
-  """Utility function to add tensors: `+`."""
-  return [lhs_i + rhs_i for lhs_i, rhs_i in zip(lhs, rhs)]
 
 
 def subtract(
@@ -556,7 +678,7 @@ def merge_state_in_z(
 
   Args:
     state: A dictionary of keyed tuples as defined by
-      //research/simulation/tensorflow/fluid/framework/ fluid.py?l=63
+      //research/simulation/tensorflow/fluid/framework/tf1/fluid.py?l=63
     state_keys: A list of string keys (must be present in state dictionary).
     nz: Z-dimension length/size.
 
@@ -988,11 +1110,12 @@ def get_tensor_shape(state: Sequence[tf.Tensor]) -> Tuple[int, int, int]:
   return (nz, tensor_shape[0], tensor_shape[1])
 
 
-def integration_in_z(
+def integration_in_dim(
     replica_id: tf.Tensor,
     replicas: np.ndarray,
     f: Sequence[tf.Tensor],
-    dz: float,
+    h: float,
+    dim: int,
 ) -> Tuple[List[tf.Tensor], List[tf.Tensor]]:
   """Computes the integration of `f` along the z dimension.
 
@@ -1008,7 +1131,8 @@ def integration_in_z(
     f: The field to be integrated. Note that `f` is represented as a list of 2D
       x-y slices. The integration includes all nodes. If there are halos, those
       nodes will also be included in the integration result.
-    dz: The uniform grid spacing in the integration direction.
+    h: The uniform grid spacing in the integration direction.
+    dim: The dimension along which the integration is performed.
 
   Returns:
     Two decks of tensors that has the same size of `f`. In the first deck, each
@@ -1016,24 +1140,107 @@ def integration_in_z(
     the second one, each layer is the integrated value from the current layer to
     the last one.
   """
-  cx, cy, _ = replicas.shape
-  _, _, iz = get_core_coordinate(replicas, replica_id)
-  group_assignment = np.array(
-      [replicas[i, j, :] for i, j in itertools.product(range(cx), range(cy))])
+  ix, iy, iz = get_core_coordinate(replicas, replica_id)
+  group_assignment = group_replicas(replicas, dim)
 
-  local_integral = tf.cumsum(tf.stack(f), axis=0)
-  # Because the last layer in `local_integral` is the sum of all layers in the
+  def plane_index(idx: int):
+    """Generates the indices slice to get a plane from a 3D tensor at `idx`."""
+    if dim == 0:
+      indices = [slice(0, None), idx, slice(0, None)]
+    elif dim == 1:
+      indices = [slice(0, None), slice(0, None), idx]
+    elif dim == 2:
+      indices = [idx, slice(0, None), slice(0, None)]
+    else:
+      raise ValueError(
+          'Integration dimension should be one of 0, 1, and 2. {} is given.'
+          .format(dim))
+
+    return indices
+
+  if dim == 0:
+    iloc = ix
+    axis = 1
+  elif dim == 1:
+    iloc = iy
+    axis = 2
+  elif dim == 2:
+    iloc = iz
+    axis = 0
+  else:
+    raise ValueError(
+        'Integration dimension should be one of 0, 1, and 2. {} is given.'
+        .format(dim))
+
+  def cumsum(g: tf.Tensor) -> tf.Tensor:
+    """Performs cumulative sum of a 3D tensor along `dim`."""
+    # In the case of global reduce, the local tensor has an added dimension 0
+    # for the all-to-all function. We need to transform it back to a 3D tensor
+    # for cumulative sum along the correct dimension.
+    if len(g.shape) == 4:
+      if dim == 0:
+        perm = (1, 0, 2)
+      elif dim == 1:
+        perm = (1, 2, 0)
+      elif dim == 2:
+        perm = (0, 1, 2)
+
+      # Here we move the dimension of replicas to the integration dimension. For
+      # example, assuming dim = 1 (or y dimension) which implies axis = 2, if
+      # originally the f tensor had shape [REPLICAS, dim_z, dim_x, 1], the
+      # squeeze will result in shape [REPLICAS, dim_z, dim_x] and the transpose
+      # will result in [dim_z, dim_x, REPLICAS]. And then the last line of the
+      # global_reduce will just run tf.cumsum on this last tensor with axis=2.
+      # So the final output of global_reduce will be [dim_z, dim_x, REPLICAS]
+      # which contains the block-level integral along `axis`.
+      g = tf.transpose(tf.squeeze(g, axis=axis + 1), perm)
+
+    return tf.cumsum(g, axis=axis)
+
+  f_stacked = tf.stack(f)
+  local_cumsum = cumsum(f_stacked)
+  # Because the last layer in `local_cumsum` is the sum of all layers in the
   # current TPU replica, the following operation provides block-level integrals
   # across all replicas.
-  replica_integral = global_reduce(
-      tf.expand_dims(local_integral[-1, ...], axis=0), tf.cumsum,
+  replica_cumsum = global_reduce(
+      tf.expand_dims(local_cumsum[plane_index(-1)], axis=axis), cumsum,
       group_assignment)
-  integral_from_0 = tf.cond(
-      pred=tf.equal(iz, 0),
-      true_fn=lambda: local_integral,
-      false_fn=lambda: local_integral + replica_integral[iz - 1, ...])
-  integral_to_end = replica_integral[-1, ...] - integral_from_0
-  return (tf.unstack(dz * integral_from_0), tf.unstack(dz * integral_to_end))
+  cumsum_from_0 = tf.cond(
+      pred=tf.equal(iloc, 0),
+      true_fn=lambda: local_cumsum,
+      false_fn=lambda: local_cumsum + tf.expand_dims(  # pylint: disable=g-long-lambda
+          replica_cumsum[plane_index(iloc - 1)],
+          axis=axis))
+  cumsum_to_end = tf.expand_dims(
+      replica_cumsum[plane_index(-1)], axis=axis) - cumsum_from_0
+
+  # Subtract half of the sum of the starting and end points of the cumulative
+  # sum to conform with the trapazoidal rule of integral.
+  num_replicas = len(group_assignment[0])
+  local_lim_low = tf.repeat(
+      tf.expand_dims(f_stacked[plane_index(0)], 0), num_replicas, 0)
+  local_lim_high = tf.repeat(
+      tf.expand_dims(f_stacked[plane_index(-1)], 0), num_replicas, 0)
+
+  global_lim_low = tf.raw_ops.AllToAll(
+      input=local_lim_low,
+      group_assignment=group_assignment,
+      concat_dimension=0,
+      split_dimension=0,
+      split_count=num_replicas)[0, ...]
+  global_lim_high = tf.raw_ops.AllToAll(
+      input=local_lim_high,
+      group_assignment=group_assignment,
+      concat_dimension=0,
+      split_dimension=0,
+      split_count=num_replicas)[-1, ...]
+
+  integral_from_0 = cumsum_from_0 - 0.5 * (
+      tf.expand_dims(global_lim_low, axis=axis) + f_stacked)
+  integral_to_end = cumsum_to_end + 0.5 * (
+      f_stacked - tf.expand_dims(global_lim_high, axis=axis))
+
+  return (tf.unstack(h * integral_from_0), tf.unstack(h * integral_to_end))
 
 
 def strip_halos(
@@ -1129,3 +1336,32 @@ def cross_replica_gather(x: tf.Tensor, num_replicas: int) -> List[tf.Tensor]:
       name='CrossReplicaGather',
   )
   return [gathered[i, ...] for i in range(num_replicas)]
+
+
+def pad(
+    f: Sequence[tf.Tensor],
+    paddings: Sequence[Sequence[int]],
+    value: float = 0.0,
+) -> Sequence[tf.Tensor]:
+  """Pads the input field with a given value.
+
+  Args:
+    f: A field component. This is expected to be expressed in the form of a list
+      of 2D Tensors representing x-y slices, where each list element represents
+      the slice of at a given z coordinate in ascending z order. The halos of
+      the field are included.
+    paddings: The padding lengths for each dimension. For instance,
+      ((0, 0), (2, 0), (0, 3)) means f will be padded with a width of 2 on the
+      lower face of the y dimension and with a width of 3 on the upper face of
+      the z dimension.
+    value: The constant value to be used for padding.
+
+  Returns:
+    The padded input field as a list of 2D tensors.
+  """
+  padded = [tf.pad(f_i, paddings[0:2], constant_values=value) for f_i in f]
+  lower_pad = [value * tf.ones_like(padded[0])
+              ] * paddings[2][0] if paddings[2][0] > 0 else []
+  upper_pad = [value * tf.ones_like(padded[0])
+              ] * paddings[2][1] if paddings[2][1] > 0 else []
+  return lower_pad + list(padded) + upper_pad

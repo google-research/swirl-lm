@@ -1,0 +1,18 @@
+# proto-file: google3/research/simulation/tensorflow/fluid/models/incompressible_structured_mesh/incompressible_structured_mesh_parameters.proto
+# proto-message: IncompressibleNavierStokesParameters
+
+diffusion_scheme: DIFFUSION_SCHEME_CENTRAL_3
+kinematic_viscosity: 1e-5
+boundary_models {
+  most {
+    u_star: 0.25
+    t_0: 265.0
+    t_s: 265.0
+    z_0: 0.1
+    z_t: 0.1
+    heat_flux: 1.27e-2
+    alpha: 1.0
+    beta_m: 5.0
+    beta_h: 6.0
+  }
+}

@@ -46,6 +46,103 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
     self.assertEqual([0], outputs)
     self.assertAllEqual(state['u'], np.ones((3, 3, 2)))
 
+  @parameterized.named_parameters(
+      ('TensorUpdateIn0', 0, 2,
+       np.reshape(np.arange(30, dtype=np.float32), (6, 1, 5))),
+      ('TensorUpdateIn1', 1, 3,
+       np.reshape(np.arange(24, dtype=np.float32), (6, 4, 1))),
+      ('TensorUpdateIn2', 2, 4,
+       np.reshape(np.arange(20, dtype=np.float32), (1, 4, 5))),
+      ('ConstantUpdateIn0', 0, 3, 6.0),
+      ('ConstantUpdateIn1', 1, 2, 8.0),
+      ('ConstantUpdateIn2', 2, 1, 36.0),
+  )
+  def testTensorScatter1DUpdatesProvidesCorrectPlaneUpdates(
+      self, dim, index, updates):
+    """Checks if a plane in a 3D tensor is updated correctly."""
+    nx = 4
+    ny = 5
+    nz = 6
+
+    updates_tf = tf.unstack(tf.convert_to_tensor(
+        updates,
+        dtype=tf.float32)) if not isinstance(updates, float) else updates
+
+    tensor = tf.unstack(
+        tf.convert_to_tensor(np.zeros((nz, nx, ny)), dtype=tf.float32))
+
+    result = self.evaluate(
+        common_ops.tensor_scatter_1d_update(tensor, dim, index, updates_tf))
+
+    with self.subTest(name='UpdatedTensorIsCorrect'):
+      expected = np.zeros((nz, nx, ny), dtype=np.float32)
+      updates = np.squeeze(updates)
+      if dim == 0:
+        expected[:, index, :] = updates
+      elif dim == 1:
+        expected[..., index] = updates
+      else:  # dim == 2
+        expected[index, ...] = updates
+
+      self.assertAllClose(expected, result)
+
+    with self.subTest(name='OriginalTensorUnchanged'):
+      expected = np.zeros((nz, nx, ny), dtype=np.float32)
+      self.assertAllEqual(expected, self.evaluate(tensor))
+
+  _REPLICAS = (
+      np.array([[[0, 1]]]),
+      np.array([[[0], [1]]]),
+      np.array([[[0]], [[1]]]),
+  )
+  _DIM = (0, 1, 2)
+  _CORE_INDEX = (0, 1)
+
+  @parameterized.parameters(*itertools.product(_REPLICAS, _DIM, _CORE_INDEX))
+  def testTensorScatter1DUpdatesGlobalProvidesCorrectPlaneUpdates(
+      self, replicas, dim, core_index):
+    """Checks if the wall normal velocity is 0 at lower wall."""
+    nx = 4
+    ny = 5
+    nz = 6
+
+    tensor = tf.unstack(
+        tf.convert_to_tensor(np.zeros((nz, nx, ny)), dtype=tf.float32))
+
+    plane_index = 2
+    updates = 6.0
+
+    def device_fn(replica_id):
+      """The face interpolation function wrapper for TPU."""
+      return common_ops.tensor_scatter_1d_update_global(replica_id, replicas,
+                                                        tensor, dim, core_index,
+                                                        plane_index, updates)
+
+    inputs = [[tf.constant(0)], [tf.constant(1)]]
+    device_inputs = [list(x) for x in zip(*inputs)]
+
+    computation_shape = np.array(replicas.shape)
+    runner = TpuRunner(computation_shape=computation_shape)
+    output = runner.run(device_fn, *device_inputs)
+    output_0 = np.array(output[0])
+    output_1 = np.array(output[1])
+
+    axis = np.where(np.roll(computation_shape, 1) == 2)[0]
+    output_all = np.concatenate([output_0, output_1], axis=int(axis))
+
+    expected = np.zeros((nz * computation_shape[2], nx * computation_shape[0],
+                         ny * computation_shape[1]),
+                        dtype=np.float32)
+    if core_index < computation_shape[dim]:
+      if dim == 0:
+        expected[:, core_index * 4 + 2, :] = 6.0
+      elif dim == 1:
+        expected[..., core_index * 5 + 2] = 6.0
+      else:
+        expected[core_index * 6 + 2, ...] = 6.0
+
+    self.assertAllEqual(expected, output_all)
+
   def testApplyMulopX(self):
     tile_0 = tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9]], tf.float32)
     tile_1 = tf.constant([[10, 20, 30], [40, 50, 60], [70, 80, 90]], tf.float32)
@@ -347,9 +444,6 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
                   [[10, 40, 70], [20, 50, 80], [30, 60, 90]]], np.float32))
 
   @parameterized.named_parameters(
-      # +
-      ('Case00', common_ops.add, 1, 2, tf.float32, np.float32, 3),
-      ('Case01', common_ops.add, 2, 1, tf.float64, np.float64, 3),
       # -
       ('Case10', common_ops.subtract, 1, 2, tf.float32, np.float32, -1),
       ('Case11', common_ops.subtract, 2, 1, tf.float64, np.float64, +1),
@@ -773,8 +867,9 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
     nz = 6
     halo_width = 2
 
-    def generate_init_field(xx, yy, zz, lx, ly, lz):
+    def generate_init_field(xx, yy, zz, lx, ly, lz, coord):
       """Generates the initial field as a step function in each dimension."""
+      del coord
       return 8. * tf.where(
           tf.greater(xx, lx / 2.), tf.ones_like(xx),
           tf.zeros_like(xx)) * tf.where(
@@ -835,8 +930,9 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
     ly = 1.
     lz = 1.
 
-    def generate_init_field(xx, yy, zz, lx, ly, lz):
+    def generate_init_field(xx, yy, zz, lx, ly, lz, coord):
       """Generates the initial field as a step function in each dimension."""
+      del coord
       return 8. * tf.where(
           tf.greater(xx, lx / 2.), tf.ones_like(xx),
           tf.zeros_like(xx)) * tf.where(
@@ -869,7 +965,7 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
     y = np.linspace(0, ly, global_ny)
     z = np.linspace(0, lz, global_nz)
     xx, yy, zz = np.meshgrid(x, y, z, indexing='ij')
-    global_grid = generate_init_field(xx, yy, zz, lx, ly, lz)
+    global_grid = generate_init_field(xx, yy, zz, lx, ly, lz, None)
 
     # Computes the mean of the physical full grid along the axis.
     reduced_physical_grid = tf.reduce_mean(
@@ -1237,10 +1333,13 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
       for k in {'xx', 'yy', 'zz', 'xx_c', 'yy_c', 'zz_c'}:
         self.assertAllEqual(expected_grid[i][k], result[i][k])
 
-  @parameterized.parameters(*zip(_REPLICAS))
-  def testIntegrationInZ(
+  _DIMS = (0, 1, 2)
+
+  @parameterized.parameters(*itertools.product(_REPLICAS, _DIMS))
+  def testIntegrationInDim(
       self,
       replicas,
+      dim,
   ):
     """Checks if integrating a constant function results in linear integral."""
     computation_shape = np.array(replicas.shape)
@@ -1256,7 +1355,7 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
     num_replicas = np.product(computation_shape)
     runner = TpuRunner(replicas)
     output = runner.run_with_replica_args(
-        functools.partial(common_ops.integration_in_z, dz=0.2),
+        functools.partial(common_ops.integration_in_dim, h=0.2, dim=dim),
         f=[ones] * num_replicas)
 
     buf_z_0 = []
@@ -1279,14 +1378,26 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
 
     def expand_dims(a):
       """Expands a 1D array to 3D in the last 2 dimensions."""
-      return np.expand_dims(np.expand_dims(a, 1), 2)
+      if dim == 0:
+        return a[np.newaxis, :, np.newaxis]
+      elif dim == 1:
+        return a[np.newaxis, np.newaxis, :]
+      elif dim == 2:
+        return a[:, np.newaxis, np.newaxis]
+
+    if dim == 0:
+      tile_shape = (32, 1, 32)
+    elif dim == 1:
+      tile_shape = (32, 32, 1)
+    elif dim == 2:
+      tile_shape = (1, 32, 32)
 
     with self.subTest(name='IntegrationFrom0'):
-      expected = np.tile(expand_dims(0.2 * np.linspace(1, 32, 32)), (1, 32, 32))
+      expected = np.tile(expand_dims(0.2 * np.linspace(0, 31, 32)), tile_shape)
       self.assertAllClose(expected, integral_from_0)
 
     with self.subTest(name='IntegrationToEnd'):
-      expected = np.tile(expand_dims(0.2 * np.arange(31, -1, -1)), (1, 32, 32))
+      expected = np.tile(expand_dims(0.2 * np.arange(31, -1, -1)), tile_shape)
       self.assertAllClose(expected, integral_to_end)
 
   def testGetTensorShapeProducesCorrectShapeOfEmptyTensor(self):
@@ -1331,6 +1442,28 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
       with self.assertRaisesRegex(ValueError,
                                   'The tensor in the list has to be 2D'):
         _ = common_ops.get_tensor_shape(state)
+
+  def testPadCorrectlyPadsInputField(self):
+    f = [tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9]], tf.float32),
+         tf.constant([[10, 11, 12], [13, 14, 15], [16, 17, 18]], tf.float32)]
+
+    out = self.evaluate(common_ops.pad(f, [[1, 2], [2, 1], [2, 3]], value=0.0))
+    self.assertLen(out, 7)
+    self.assertAllEqual(out[0], tf.zeros([6,6], dtype=tf.float32))
+    self.assertAllEqual(out[1], tf.zeros([6,6], dtype=tf.float32))
+    self.assertAllEqual(
+        out[2],
+        np.array([[0, 0, 0, 0, 0, 0], [0, 0, 1, 2, 3, 0], [0, 0, 4, 5, 6, 0],
+                  [0, 0, 7, 8, 9, 0], [0, 0, 0, 0, 0, 0],
+                  [0, 0, 0, 0, 0, 0]], np.float32))
+    self.assertAllEqual(
+        out[3],
+        np.array([[0, 0, 0, 0, 0, 0], [0, 0, 10, 11, 12, 0],
+                  [0, 0, 13, 14, 15, 0], [0, 0, 16, 17, 18, 0],
+                  [0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]], np.float32))
+    self.assertAllEqual(out[4], tf.zeros([6,6], dtype=tf.float32))
+    self.assertAllEqual(out[5], tf.zeros([6,6], dtype=tf.float32))
+    self.assertAllEqual(out[5], tf.zeros([6,6], dtype=tf.float32))
 
 
 class CrossReplicaGatherTest(tf.test.TestCase, parameterized.TestCase):

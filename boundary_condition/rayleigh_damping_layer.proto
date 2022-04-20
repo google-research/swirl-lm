@@ -1,0 +1,61 @@
+syntax = "proto2";
+
+package research.simulation;
+
+// Stores information required by the Rayleigh damping (sponge) layer.
+// Next id: 4
+message RayleighDampingLayer {
+  // Information of the orientation of the sponge layer/layers.
+  // Next id: 4
+  message Orientation {
+    // The dimension along which the sponge layer is applied. Allowed values are
+    // 0, 1, and 2, which corresponds to the x, y, and z directions,
+    // respectively.
+    optional int32 dim = 1;
+    // The face index at which the sponge is applied. Should be one of 0 and 1,
+    // where 0 suggests the sponge is arranged at the lower end of `dim`, and 1
+    // is at the higher end of `dim`.
+    optional int32 face = 3;
+    // The fraction in the domain along `dim` that the sponge layer is applied.
+    // NB: the sponge layer is always applied close to the face with a larger
+    // index.
+    optional float fraction = 2;
+  }
+  repeated Orientation orientation = 1;
+  // The information required to compute the forcing term in the sponge layers.
+  // NB: only one target value can be applied to a single variable. Otherwise
+  // the connection between sponge layers is ambiguous.
+  // Next id: 6
+  message VariableInfo {
+    // The name of the variable to which the sponge force is applied.
+    optional string name = 1;
+    // The target value in the sponge layer for this specific variable. If none
+    // provided, then the target will be the mean of the field along the
+    // homogeneous dimensions.
+    oneof target {
+      // The fixed target value of the sponge layer.
+      float target_value = 2;
+      // The name of the state to be used as a sponge target.
+      string target_state_name = 5;
+    }
+    // An indicator of whether this is the only forcing term of this variable:
+    // 'true' if it's the only force and need to replace previous values;
+    // 'false' if it's not the only force and need to be added after other
+    // forces are updated
+    optional bool override = 3;
+    // An indicator of whether the sponge force is applied to a primitive
+    // variable or a conservative one. If 'true', the force term is generated
+    // for the primitive variable; otherwise the force term is for a
+    // conservative variable and needs to be multiplied by `rho`. For example,
+    // if the premitive variable is `phi`, then the corresponding conservative
+    // variable is `rho phi`. `phi` here can ben any velocity components or
+    // transported scalars. Setting the default to 'true' to match the behavior
+    // before adding this field.
+    optional bool primitive = 4 [default = true];
+  }
+  repeated VariableInfo variable_info = 2;
+  // The direction(s) to take average for variables whose target value is not
+  // provided. This average value will be used as the target value for that
+  // variable. Valid values are 0, 1, and 2.
+  repeated int32 target_value_mean_dim = 3 [packed = true];
+}

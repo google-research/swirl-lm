@@ -1,0 +1,20 @@
+syntax = "proto2";
+
+package research.simulation;
+
+import "third_party/py/swirl_lm/boundary_condition/immersed_boundary_method.proto";
+import "third_party/py/swirl_lm/boundary_condition/monin_obukhov_similarity_theory.proto";
+import "third_party/py/swirl_lm/boundary_condition/rayleigh_damping_layer.proto";
+
+option java_multiple_files = true;
+
+// Stores parameters required by boundary models.
+// Next id: 4
+message BoundaryModels {
+  // Parameters required by the immersed boundary method.
+  optional ImmersedBoundaryMethod ib = 1;
+  // Parameters required by the Monin-Obukhov Similarity Theory.
+  optional MoninObukhovSimilarityTheory most = 2;
+  // Parameters required by the Rayleigh damping layer (a.k.a sponge layer).
+  optional RayleighDampingLayer sponge = 3;
+}

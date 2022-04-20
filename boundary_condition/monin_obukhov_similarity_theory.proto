@@ -1,0 +1,50 @@
+syntax = "proto2";
+
+package research.simulation;
+
+option java_multiple_files = true;
+
+// Parameters required by the Monin-Obukhov Similarity Theory.
+// Next id = 15;
+message MoninObukhovSimilarityTheory {
+  // The roughness length, in units of m.
+  optional float z_0 = 1;
+  // The heat roughness thickness, in units of m.
+  optional float z_t = 2;
+  // The friction velocity, in units of m/s.
+  optional float u_star = 3;
+  // The The heat flux from the ground to the surface air, in units of J/m^2.
+  optional float heat_flux = 4;
+  // The reference temeprature, in units of K.
+  optional float t_0 = 5;
+  // The stability correction coefficient for momentum.
+  optional float beta_m = 6;
+  // The stability correction coefficient for heat.
+  optional float beta_h = 7;
+  // An empirical constant with a value 0.74–1.0.
+  optional float alpha = 8;
+  // The surface temperature, in units of K.
+  optional float t_s = 9;
+  // An empirical coefficient used in the formulation of the momentum stability
+  // function for unstable boundary layer. Default value is taken from
+  // Stoll, Rob, and Fernando Porté-Agel. 2006. “Dynamic Subgrid-Scale Models
+  // for Momentum and Scalar Fluxes in Large-Eddy Simulations of Neutrally
+  // Stratified Atmospheric Boundary Layers over Heterogeneous Terrain.” Water
+  // Resources Research 42 (1): 2121.
+  optional float gamma_m = 10 [default = 15.0];
+  // An empirical coefficient used in the formulation of the energy stability
+  // function for unstable boundary layer. Default value is taken from
+  // Stoll, Rob, and Fernando Porté-Agel. 2006. “Dynamic Subgrid-Scale Models
+  // for Momentum and Scalar Fluxes in Large-Eddy Simulations of Neutrally
+  // Stratified Atmospheric Boundary Layers over Heterogeneous Terrain.” Water
+  // Resources Research 42 (1): 2121.
+  optional float gamma_h = 11 [default = 15.0];
+  // An option of whether to apply regularization to the potential temperature
+  // when evaluating the model closrue. If `true`, the potential temperature
+  // will be capped by an upper bound that is defined by `theta_max`.
+  optional bool enable_theta_reg = 12 [default = false];
+  // The maximum potential temperature for the model evaluation.
+  optional float theta_max = 13 [default = 300.0];
+  // The minimum potential temperature for the model evaluation.
+  optional float theta_min = 14 [default = 280.0];
+}

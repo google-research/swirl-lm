@@ -1,0 +1,38 @@
+# proto-file: research/simulation/tensorflow/fluid/models/incompressible_structured_mesh/incompressible_structured_mesh_parameters.proto
+# proto-message: IncompressibleNavierStokesParameters
+
+p_thermal: 1.01325e5
+density: 1.2061764708
+thermodynamics {
+  ideal_gas_law {}
+}
+combustion {
+  wood {
+    s_b: 2.0
+    s_x:  0.05
+    h_conv:  20.0
+    a_v:  8.0
+    cp_g:  1200.0
+    h_f:  1.63e7
+    t_pyr:  500.0
+    n_step:  10
+    moist_wood {
+      h_w: 2.2564e6
+      t_vap: 373.0
+      c_w: 0.002
+    }
+  }
+}
+scalars {
+  name: "Y_O"
+  diffusivity: 1.0e-5
+  density: 1.2061764708
+  molecular_weight: 0.029
+}
+scalars {
+  name: "ambient"
+  diffusivity: 1.0e-5
+  density: 1.2061764708
+  molecular_weight: 0.029
+  solve_scalar: false
+}

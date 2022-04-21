@@ -1,0 +1,29 @@
+syntax = "proto2";
+
+package research.simulation;
+
+import "third_party/py/swirl_lm/linalg/poisson_solver.proto";
+
+// A library of parameters for solving the pressure equation.
+// Next id: 5
+message Pressure {
+  // The option and parameters of the Poisson solver.
+  optional PoissonSolver solver = 1;
+  // The number of filter operations to be applied to dϱ / dt on the right hand
+  // side of the Poisson equation for pressure correction. The default values is
+  // from reference: Charles D. Pierce and Parviz Moin, Progress-variable
+  // approach for large-eddy simulation of turbulent combustion. California,
+  // USA: Stanford University, 2001.
+  optional int32 num_d_rho_filter = 2 [default = 3];
+  // A threshold for the rate change of density, i.e. the d rho / dt term, on
+  // the right hand side of the pressure Poisson equation. If the relative
+  // density change magnitude is smaller than `d_rho_rtol`, it's considered as
+  // 0.
+  optional float d_rho_rtol = 3 [default = 0.0];
+  // An option for making OUTFLOW (homogenoeus Neuamnn boundary condition for
+  // all velocity components) a pressure outlet. If this option is `true`, a
+  // homogeneous Dirichlet boundary condition will be enforced for pressure
+  // and its correction when an OUTLET boundary condition is detected. Default
+  // set to `false` for backward compatibility.
+  optional bool pressure_outlet = 4 [default = false];
+}

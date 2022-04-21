@@ -1,0 +1,31 @@
+# proto-file: research/simulation/tensorflow/fluid/models/incompressible_structured_mesh/incompressible_structured_mesh_parameters.proto
+# proto-message: IncompressibleNavierStokesParameters
+
+p_thermal: 1.013e5
+thermodynamics {
+  water {
+    r_v: 461.89
+    t_0: 273.0
+    t_min: 250.0
+    t_freeze: 273.15
+    t_triple: 273.16
+    p_triple: 611.7
+    e_int_v0: 2.132e6
+    e_int_i0: 3.34e5
+    lh_v0: 2.258e6
+    lh_s0: 2.592e6
+    cv_d: 716.9
+    cv_v: 1397.11
+    cv_l: 4217.4
+    cv_i: 2050.0
+    cp_v: 1859.0
+    cp_l: 4219.9
+    cp_i: 2050.0
+    max_temperature_iterations: 100
+    temperature_tolerance: 1e-3
+    num_density_iterations: 10
+    const_theta_reference_state {
+      theta: 300.0
+    }
+  }
+}

@@ -1,0 +1,78 @@
+syntax = "proto2";
+
+package research.simulation;
+
+// The specification of a norm.
+message NormSpec {
+  enum NormType {
+    UNKNOWN = 0;
+    L1 = 1;
+    L2 = 2;
+    L_INF = 3;
+  }
+  optional NormType norm_type = 1;
+}
+
+// The specification of a moment statistic. The k-th order moment of a state
+// f is defined as E[(f - E[f])^k], where the expected value operator is
+// over the homogeneous dimensions of the grid.
+message MomentStatisticSpec {
+  optional int32 order = 1;
+  // Provide the name of a second state to obtain the cross moment of the two
+  // variables. This is useful when computing fluxes.
+  optional string second_state = 2;
+}
+
+// An analytics specification for a raw state, without any transformation or
+// reduction. Note that if time averaging is enabled the actual value stored
+// is the average of the state over time.
+message RawStateSpec {}
+
+message AnalyticsSpec {
+  // The name of the analytics variable that will serve as an internal state
+  // key and as the dump filename prefix. It is highly recommended that the
+  // key's prefix conform to the following format:
+  // MONITOR_[ANALYTICS_TYPE]_[STATE_NAME]
+  // E.g. a reasonable name for the second moment of the vertical velocity is
+  // 'MONITOR_moment_w_variance'.
+  // Note that this convention is recommended for readability purposes only, and
+  // the only true requirement is that there be no collisions between this and
+  // any of the state names or any of the keys specified in `helper_var_keys`.
+  optional string key = 1;
+
+  oneof spec {
+    MomentStatisticSpec moment_statistic = 2;
+    NormSpec norm = 3;
+    RawStateSpec raw_state = 4;
+  }
+}
+
+// Stores information about analytics requests for a single state.
+message StateAnalyticsSpec {
+  // The name of the field or state from which the analytics will be computed.
+  optional string state_name = 1;
+  // The list of analytics specifications for this state.
+  repeated AnalyticsSpec analytics = 2;
+}
+
+message TimeAveraging {
+  // Physical time (in seconds) to start computing time-averaged analytics. If
+  // this field is unset, the averaging will start from step 0.
+  optional float start_time_seconds = 1;
+  // Physical time (in seconds) to stop updating time-averaged analytics. If
+  // unset, the end time is assumed to be the end of the simulation.
+  optional float end_time_seconds = 2;
+}
+
+// The specification of analytics quantities to be tracked by the analytics
+// monitor. Note that every AnalyticsSpec will contribute an additional state to
+// the simulation that will be dumped along with the other states.
+message MonitorSpec {
+  // A list of analytics requests, one for each state.
+  repeated StateAnalyticsSpec state_analytics = 1;
+  // Time averaging specification. This is most useful for simulations that are
+  // supposed to reach a steady statistical state (i.e. time can be treated as a
+  // homogeneous dimension). It is also useful for eliminating the often noisy
+  // spinup phase from the analytics computation.
+  optional TimeAveraging time_averaging = 2;
+}

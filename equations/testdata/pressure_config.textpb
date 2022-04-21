@@ -1,0 +1,205 @@
+# proto-file: research/simulation/tensorflow/fluid/models/incompressible_structured_mesh/incompressible_structured_mesh_parameters.proto
+# proto-message: IncompressibleNavierStokesParameters
+
+pressure {
+  solver {
+    jacobi {
+      max_iterations: 1
+      halo_width: 1
+      omega: 0.67
+    }
+  }
+  num_d_rho_filter: 3
+}
+density: 1.0
+kinematic_viscosity: 1e-5
+
+helper_var_keys: "MONITOR_pressure_convergence_l-1"
+helper_var_keys: "MONITOR_pressure_convergence_l-inf"
+helper_var_keys: "MONITOR_pressure_convergence_solver-iterations"
+helper_var_keys: "MONITOR_pressure_convergence_solver-l-2"
+helper_var_keys: "MONITOR_pressure_raw_b"
+helper_var_keys: "MONITOR_pressure_raw_b-term-div"
+helper_var_keys: "MONITOR_pressure_raw_b-term-drho-dt"
+helper_var_keys: "MONITOR_pressure_raw_b-term-source-rho"
+helper_var_keys: "MONITOR_pressure_raw_convergence"
+helper_var_keys: "MONITOR_pressure_raw_dp"
+helper_var_keys: "MONITOR_pressure_raw_p-rho"
+helper_var_keys: "MONITOR_pressure_raw_p-rho-v"
+helper_var_keys: "MONITOR_pressure_raw_p-u"
+helper_var_keys: "MONITOR_pressure_raw_p-w"
+helper_var_keys: "MONITOR_pressure_scalar_b-l-inf"
+helper_var_keys: "MONITOR_pressure_scalar_b-term-div-l-1"
+helper_var_keys: "MONITOR_pressure_scalar_b-term-drho-dt-l-2"
+helper_var_keys: "MONITOR_pressure_scalar_b-term-source-rho-l-inf"
+helper_var_keys: "MONITOR_pressure_scalar_dp-l-2"
+helper_var_keys: "MONITOR_pressure_scalar_p-l-1"
+helper_var_keys: "MONITOR_pressure_scalar_p-rho-l-1"
+helper_var_keys: "MONITOR_pressure_scalar_p-rho-u-l-1"
+helper_var_keys: "MONITOR_pressure_scalar_p-rho-v-l-2"
+helper_var_keys: "MONITOR_pressure_scalar_p-rho-w-l-inf"
+helper_var_keys: "MONITOR_pressure_scalar_p-u-l-inf"
+helper_var_keys: "MONITOR_pressure_scalar_p-v-l-2"
+helper_var_keys: "MONITOR_pressure_scalar_p-w-l-1"
+helper_var_keys: "MONITOR_pressure_subiter-scalar_convergence_l-2"
+helper_var_keys: "MONITOR_pressure_subiter-scalar_convergence_l-inf"
+
+boundary_conditions {
+  name: "u"
+  boundary_info {
+    dim: 0
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 0.0
+  }
+  boundary_info {
+    dim: 0
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: 0.0
+  }
+  boundary_info {
+    dim: 1
+    location: 0
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 1
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 1.0
+  }
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 1.0
+  }
+}
+
+boundary_conditions {
+  name: "v"
+  boundary_info {
+    dim: 0
+    location: 0
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 0
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 1.0
+  }
+  boundary_info {
+    dim: 1
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 0.0
+  }
+  boundary_info {
+    dim: 1
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: 0.0
+  }
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 1.0
+  }
+}
+
+boundary_conditions {
+  name: "w"
+  boundary_info {
+    dim: 0
+    location: 0
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 0
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 1.0
+  }
+  boundary_info {
+    dim: 1
+    location: 0
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 1
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 1.0
+  }
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 0.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: 0.0
+  }
+}
+
+boundary_conditions {
+  name: "p"
+  boundary_info {
+    dim: 0
+    location: 0
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 0
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 1
+    location: 0
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 1
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+}

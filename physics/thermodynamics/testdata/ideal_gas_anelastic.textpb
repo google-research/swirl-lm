@@ -1,0 +1,17 @@
+# proto-file: research/simulation/tensorflow/fluid/models/incompressible_structured_mesh/incompressible_structured_mesh_parameters.proto
+# proto-message: IncompressibleNavierStokesParameters
+p_thermal: 1.013e5
+thermodynamics {
+  solver_mode: ANELASTIC
+  ideal_gas_law {
+    t_s: 290.4
+    height: 8000.0
+    delta_t: 60.0
+  }
+}
+scalars {
+  name: "Y_CO2" molecular_weight: 0.044 solve_scalar: true
+}
+scalars {
+  name: "ambient" molecular_weight: 0.02900170916 solve_scalar: false
+}

@@ -1,0 +1,131 @@
+# proto-file: research/simulation/tensorflow/fluid/models/incompressible_structured_mesh/incompressible_structured_mesh_parameters.proto
+# proto-message: IncompressibleNavierStokesParameters
+
+periodic {
+  dim_0: false
+  dim_1: false
+  dim_2: false
+}
+time_integration_scheme: TIME_SCHEME_CN_EXPLICIT_ITERATION
+thermodynamics { constant_density {} }
+# Boundary conditions are constructed as:
+# Dim 0: Inflow - Free-slip wall
+# Dim 1: Shear wall - Shear wall
+# Dim 2: Non-slip wall - Free-slip wall
+boundary_conditions {
+  name: "u"
+  boundary_info {
+    dim: 0
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 6.0
+  }
+  boundary_info {
+    dim: 0
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: 0.0
+  }
+  boundary_info {
+    dim: 1
+    location: 0
+    type: BC_TYPE_NEUMANN
+    value: 2.0
+  }
+  boundary_info {
+    dim: 1
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: -2.0
+  }
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 0.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+}
+boundary_conditions {
+  name: "v"
+  boundary_info {
+    dim: 0
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 0.0
+  }
+  boundary_info {
+    dim: 0
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 1
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 0.0
+  }
+  boundary_info {
+    dim: 1
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: 0.0
+  }
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 0.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+}
+boundary_conditions {
+  name: "w"
+  boundary_info {
+    dim: 0
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 0.0
+  }
+  boundary_info {
+    dim: 0
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 1
+    location: 0
+    type: BC_TYPE_NEUMANN
+    value: -3.0
+  }
+  boundary_info {
+    dim: 1
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 3.0
+  }
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 0.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: 0.0
+  }
+}

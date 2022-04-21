@@ -1,0 +1,22 @@
+syntax = "proto2";
+
+package research.simulation;
+
+import "third_party/py/swirl_lm/utility/grid_parametrization.proto";
+
+// Defines parameters that initializes probes.
+// Next id: 5
+message Probe {
+  // The physical coordinates of the probe location in units of m. The origin
+  // is (0, 0, 0).
+  repeated swirl_lm.CoordinateFloat location = 1;
+  // The name of the variables to be retrieved by the probe.
+  repeated string variable_name = 2;
+  // The total number of time steps that values are collected. This field will
+  // be replaced by the value computed from the flag input after b/142351512 is
+  // resolved.
+  optional int32 nt = 3;
+  // The starting step of the simulation. This field will be replaced by the
+  // value defined by flag after b/142351512 is resolved.
+  optional int32 start_step_id = 4;
+}

@@ -10,6 +10,29 @@ package(
 
 licenses(["notice"])
 
+proto_library(
+    name = "monitor_proto",
+    srcs = ["monitor.proto"],
+)
+
+py_proto_library(
+    name = "monitor_py_pb2",
+    api_version = 2,
+    deps = [":monitor_proto"],
+)
+
+proto_library(
+    name = "probe_proto",
+    srcs = ["probe.proto"],
+    deps = ["//third_party/py/swirl_lm/utility:grid_parametrization_proto"],
+)
+
+py_proto_library(
+    name = "probe_py_pb2",
+    api_version = 2,
+    deps = [":probe_proto"],
+)
+
 pytype_strict_library(
     name = "utility",
     srcs = ["__init__.py"],
@@ -39,6 +62,17 @@ pytype_strict_library(
 )
 
 pytype_strict_library(
+    name = "components_debug",
+    srcs = ["components_debug.py"],
+    srcs_version = "PY3",
+    deps = [
+        ":common_ops",
+        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
+        "//third_party/py/tensorflow",
+    ],
+)
+
+pytype_strict_library(
     name = "get_kernel_fn",
     srcs = ["get_kernel_fn.py"],
     srcs_version = "PY3",
@@ -59,6 +93,66 @@ pytype_strict_library(
         "//third_party/py/absl/flags",
         "//third_party/py/numpy",
         "//third_party/py/tensorflow",
+    ],
+)
+
+pytype_strict_library(
+    name = "init_fn",
+    srcs = ["init_fn.py"],
+    srcs_version = "PY3",
+    deps = [
+        ":get_kernel_fn",
+        ":types",
+        "//research/simulation/tensorflow/fluid/framework:initializer",
+        "//third_party/py/numpy",
+        "//third_party/py/scipy",
+        "//third_party/py/tensorflow",
+    ],
+)
+
+pytype_strict_library(
+    name = "log_invocation",
+    srcs = ["log_invocation.py"],
+    srcs_version = "PY3",
+    deps = [
+        "//file/colossus/public:cns",
+        "//file/namespace",
+        "//pyglib:build_data",
+        "//pyglib:gfile",
+        "//third_party/py/absl/flags",
+        "//third_party/py/absl/logging",
+    ],
+)
+
+pytype_strict_library(
+    name = "monitor",
+    srcs = ["monitor.py"],
+    srcs_version = "PY3",
+    deps = [
+        ":monitor_py_pb2",
+        ":types",
+        "//research/simulation/tensorflow/fluid/framework:analytics_util",
+        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
+        "//third_party/py/absl/logging",
+        "//third_party/py/numpy",
+        "//third_party/py/tensorflow",
+    ],
+)
+
+pytype_strict_library(
+    name = "probe",
+    srcs = ["probe.py"],
+    deps = [
+        ":common_ops",
+        ":get_kernel_fn",
+        ":grid_parametrization",
+        ":types",
+        "//research/simulation/tensorflow/fluid/framework:initializer",
+        "//research/simulation/tensorflow/fluid/framework/post_processing:data_processing",
+        "//research/simulation/tensorflow/fluid/framework/tf1:model_function",
+        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
+        "//third_party/py/numpy",
+        "//third_party/py/tensorflow:tensorflow_no_contrib",
     ],
 )
 
@@ -101,6 +195,22 @@ py_strict_test(
         "//research/simulation/tensorflow/fluid/framework:tpu_runner",
         "//research/simulation/tensorflow/fluid/framework:util",
         "//testing/pybase:parameterized",
+        "//third_party/py/numpy",
+        "//third_party/py/tensorflow",
+    ],
+)
+
+py_strict_test(
+    name = "components_debug_test",
+    srcs = ["components_debug_test.py"],
+    python_version = "PY3",
+    srcs_version = "PY3",
+    deps = [
+        ":components_debug",
+        ":tf_test_util",
+        "//net/proto2/python/public",
+        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
+        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_parameters_py_pb2",
         "//third_party/py/numpy",
         "//third_party/py/tensorflow",
     ],
@@ -182,6 +292,80 @@ py_strict_test(
         "//third_party/py/absl/testing:parameterized",
         "//third_party/py/numpy",
         "//third_party/py/tensorflow",
+    ],
+)
+
+py_strict_test(
+    name = "init_fn_test",
+    srcs = ["init_fn_test.py"],
+    python_version = "PY3",
+    srcs_version = "PY3",
+    deps = [
+        ":init_fn",
+        ":tf_test_util",
+        "//testing/pybase:parameterized",
+        "//third_party/py/numpy",
+        "//third_party/py/tensorflow",
+    ],
+)
+
+py_strict_test(
+    name = "log_invocation_test",
+    srcs = ["log_invocation_test.py"],
+    python_version = "PY3",
+    deps = [
+        ":log_invocation",
+        "//pyglib:gfile",
+        "//testing/pybase",
+        "//testing/pybase:parameterized",
+        "//third_party/py/absl/logging",
+    ],
+)
+
+py_strict_test(
+    name = "monitor_test",
+    srcs = ["monitor_test.py"],
+    python_version = "PY3",
+    shard_count = 5,
+    srcs_version = "PY3",
+    tags = ["requires-dragonfish:4"],
+    deps = [
+        ":monitor",
+        "//learning/brain/google/xla:deepsea_hardware_device",
+        "//net/proto2/python/public",
+        "//research/simulation/tensorflow/fluid/framework:test_util",
+        "//research/simulation/tensorflow/fluid/framework:tpu_runner",
+        "//research/simulation/tensorflow/fluid/framework:util",
+        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
+        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_parameters_py_pb2",
+        "//testing/pybase:parameterized",
+        "//third_party/py/numpy",
+        "//third_party/py/swirl_lm/utility:monitor_py_pb2",
+        "//third_party/py/tensorflow",
+    ],
+)
+
+py_strict_test(
+    name = "probe_test",
+    srcs = ["probe_test.py"],
+    args = ["--xla_jf_conv_full_precision=True"],
+    python_version = "PY3",
+    srcs_version = "PY3",
+    tags = [
+        "optonly",
+        "requires-dragonfish:4",
+    ],
+    deps = [
+        ":get_kernel_fn",
+        ":probe",
+        "//learning/brain/google/xla:deepsea_hardware_device",
+        "//net/proto2/python/public",
+        "//research/simulation/tensorflow/fluid/framework:tpu_runner",
+        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
+        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_parameters_py_pb2",
+        "//third_party/py/absl/flags",
+        "//third_party/py/numpy",
+        "//third_party/py/tensorflow:tensorflow_no_contrib",
     ],
 )
 

@@ -29,6 +29,8 @@ from typing import List, Mapping, Sequence, Text, Tuple, Union
 
 import numpy as np
 from swirl_lm.boundary_condition import monin_obukhov_similarity_theory_pb2
+from swirl_lm.equations import common
+from swirl_lm.numerics import root_finder
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
@@ -39,8 +41,6 @@ from google3.research.simulation.tensorflow.fluid.framework import util
 from google3.research.simulation.tensorflow.fluid.framework.tf1 import model_function
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import physical_variable_keys_manager
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh.equations import common
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh.numerics import root_finder
 
 # The type of a state variable.
 StateVariableType = Union[List[tf.Tensor], tf.Tensor]

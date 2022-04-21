@@ -1,0 +1,75 @@
+syntax = "proto2";
+
+package research.simulation;
+
+import "third_party/py/swirl_lm/numerics/numerics.proto";
+
+// A library for parameters required by the wood combustion model.
+// References:
+// [1] Linn, Rodman Ray. 1997. “A Transport Model for Prediction of Wildfire
+//     Behavior (No. LA-13334-T).” Edited by Francis H. Harlow. Ph.D, Los
+//     Alamos National Lab., NM (United States).
+// [2] Linn, Rodman R. 2005. “Numerical Simulations of Grass Fires Using a
+//     Coupled Atmosphere–fire Model: Basic Fire Behavior and Dependence on Wind
+//     Speed.” Journal of Geophysical Research 110 (D13): 287.
+//
+// Next id: 16
+message Wood {
+  // The B scale of the fuel elements, in units of m.
+  optional float s_b = 1;
+  // The length scale of the smallest fuel elements, in units of m.
+  optional float s_x = 2;
+  // The convective heat transfer coefficient, W/m²/K.
+  optional float h_conv = 3;
+  // The ratio of the surface area of the fuel to the resolved volume (surface
+  // area per unit volume of fuel times the volume fraction).
+  optional float a_v = 4;
+  // The specific heats at constant pressure of the combined gas, J/kg/K.
+  optional float cp_g = 5;
+  // The heat energy per unit mass associated with the reaction, J/kg.
+  optional float h_f = 6;
+  // The temperature at which the solid fuel begins to pyrolyze.
+  optional float t_pyr = 7;
+  // Number of RK3 iterations with each time step for the integration of
+  // reaction source term.
+  optional int32 n_step = 8 [default = 1];
+  // The option of including radiation in the fire source term. Default set to
+  // `false` to match behavior before change.
+  optional bool include_radiation = 9 [default = false];
+  // The ambient air temperature in K. This is only used when
+  // `include_radiation` is true.
+  optional float t_ambient = 10;
+  // The efficiency factor that combines the effect of sub-grid scale
+  // temperature and emissivity. Default value set to 1 based one reference [1].
+  optional float efficiency = 11 [default = 1.0];
+  // An empirical scaling coefficient in local fire reaction rates. This is
+  // number between 0.07 and 0.9. Default set to 0.9 suggested by FireTec.
+  optional float c_f = 12 [default = 0.9];
+  // The option of integration scheme to be used to compute the reaction source
+  // term.
+  optional TimeIntegrationScheme reaction_integration_scheme = 13
+      [default = TIME_SCHEME_RK3];
+
+  // Parameters required by the combustion model with moisture.
+  message MoistWood {
+    // The heat energy per unit mass associated with liquid water evaporation,
+    // in units of J/kg. The default value is taken at 100 Celsius degree.
+    // Reference:
+    // https://www.engineeringtoolbox.com/water-properties-d_1573.html
+    optional float h_w = 1 [default = 2.2564e6];
+    // The temperature at which the liquid water evaporates, in units of K.
+    // Default temperature set to 100 Celsius degree.
+    optional float t_vap = 2 [default = 373.0];
+    // An empirical scaling coefficient for the evaporation rate.
+    optional float c_w = 3 [default = 1.0];
+  }
+
+  // Parameters required by the dry wood combustion model.
+  message DryWood {}
+
+  // The type of wood combustion model.
+  oneof combustion_model_option {
+    DryWood dry_wood = 14;
+    MoistWood moist_wood = 15;
+  }
+}

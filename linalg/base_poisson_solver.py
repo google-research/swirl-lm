@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # coding=utf-8
-# Lint as: python3
 """A library of solvers for the Poisson equation.
 
 Methods presented here are used to solve the Poisson equation, i.e.

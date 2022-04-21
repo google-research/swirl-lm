@@ -6,6 +6,7 @@ import os
 from absl import flags
 import numpy as np
 from swirl_lm.boundary_condition import monin_obukhov_similarity_theory
+from swirl_lm.equations import common
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import tf_test_util as test_util
@@ -17,7 +18,6 @@ from google3.pyglib import resources
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import physical_variable_keys_manager
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh.equations import common
 from google3.testing.pybase import parameterized
 
 FLAGS = flags.FLAGS

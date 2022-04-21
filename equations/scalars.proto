@@ -1,0 +1,53 @@
+syntax = "proto2";
+
+package research.simulation;
+
+import "third_party/py/swirl_lm/numerics/numerics.proto";
+
+// Defines the properties of a scalar to be included in the flow field.
+// Next id: 11
+message Scalar {
+  // The name of the scalar.
+  optional string name = 1;
+  // The diffusivity of the scalar.
+  optional float diffusivity = 2;
+  // The density of the scalar, in units of kg/m^3. Setting default to 1.0
+  // for a gereric gas.
+  optional float density = 3 [default = 1.0];
+  // The molecular weight of the scalar, in units kg/mol. Setting default to
+  // air for common uses that are not mixing or reacting.
+  optional float molecular_weight = 4 [default = 0.02875];
+  // An indicator for whether this scalar is solved in the flow system.
+  // Default setting to true, which indicates that scalars included in the
+  // textproto will be solved by default.
+  optional bool solve_scalar = 5 [default = true];
+
+  // The scheme to be used to discretize the convection term.
+  optional ConvectionScheme scheme = 6 [default = CONVECTION_SCHEME_QUICK];
+  // The scheme to be used for time advancement for a scalar, and if absent it
+  // will fall back to the shared time integration scheme, specified in
+  // `IncompressibleNavierStokesParameters`'s `time_integration_scheme`:
+  // google3/research/simulation/tensorflow/fluid/models/incompressible_structured_mesh/incompressible_structured_mesh_parameters.proto
+  optional TimeIntegrationScheme time_integration_scheme = 10;
+
+  // A reference value for the scalar.
+  optional float reference_value = 7 [deprecated = true];
+  // Configurations for specific scalars.
+  oneof scalar_config {
+    GenericScalar generic_scalar = 8;
+    TotalEnergy total_energy = 9;
+  }
+}
+
+// Defines configurations for a generic scalar.
+message GenericScalar {}
+
+// Defines configurations for total energy.
+// Next id: 3
+message TotalEnergy {
+  // An option of whether radiation is included in the total energy equation.
+  optional bool include_radiation = 1;
+  // An option of whether the effect of subsidence velocity is included in the
+  // total energy equation.
+  optional bool include_subsidence = 2;
+}

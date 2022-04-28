@@ -200,7 +200,7 @@ class PoissonSolverRunner(object):
     p0 = []
     for rhs_i in rhs:
       p0_core = tf.random.normal(rhs_i.shape, mean=0.0, stddev=1.0)
-      mean_value = tf.reduce_mean(p0_core)
+      mean_value = tf.math.reduce_mean(p0_core)
       p0.append(p0_core - mean_value)
 
     return (self._solver.solve(

@@ -94,8 +94,9 @@ class Igniter(object):
     ) -> tf.Tensor:
       """Initializes the ignition sequence tensor."""
 
-      distance = tf.sqrt((xx - self._origin[0])**2 + (yy - self._origin[1])**2 +
-                         (zz - self._origin[2])**2)
+      distance = tf.math.sqrt((xx - self._origin[0])**2 +
+                              (yy - self._origin[1])**2 +
+                              (zz - self._origin[2])**2)
 
       ignition_time = distance / self._speed + self._start_time
 
@@ -133,7 +134,7 @@ class Igniter(object):
     def local_ignition_kernel_fn(schedule: tf.Tensor) -> tf.Tensor:
       """Generates an ignition kernel local to current the time and space."""
       return tf.compat.v1.where(
-          tf.logical_and(
+          tf.math.logical_and(
               tf.greater_equal(schedule, t - self._igniter_radius_in_time),
               tf.less_equal(schedule, t + self._igniter_radius_in_time)),
           tf.ones_like(schedule), tf.zeros_like(schedule))
@@ -145,7 +146,7 @@ class Igniter(object):
     def trim_time_interval(kernel: tf.Tensor) -> tf.Tensor:
       """Limits ignition only in the time interval specified."""
       return tf.cond(
-          tf.logical_and(
+          tf.math.logical_and(
               tf.greater_equal(t, self._start_time),
               tf.less_equal(t, self._end_time)), lambda: kernel,
           lambda: tf.zeros_like(kernel))

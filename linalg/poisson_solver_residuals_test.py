@@ -75,9 +75,9 @@ class PoissonSolverResidualsTest(tf.test.TestCase, parameterized.TestCase):
       """Defines the right hand side tensor."""
       del lx, ly, lz, coord  # Not used.
       if neumann:
-        return -3. * tf.cos(xx) * tf.cos(yy) * tf.cos(zz)
+        return -3. * tf.math.cos(xx) * tf.math.cos(yy) * tf.math.cos(zz)
       else:
-        return -3. * tf.sin(xx) * tf.sin(yy) * tf.sin(zz)
+        return -3. * tf.math.sin(xx) * tf.math.sin(yy) * tf.math.sin(zz)
 
     solver_option = poisson_solver_pb2.PoissonSolver()
 

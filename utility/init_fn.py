@@ -161,7 +161,7 @@ def blasius_boundary_layer(
     dh_dy = tf.concat([dh_dy_0[:, 0:1], dh_dy_c[:, 1:-1], dh_dy_e[:, -2:-1]],
                       axis=1)
 
-    theta = tf.math.asin((u_inf * dh_dx + v_inf * dh_dy) / tf.sqrt(
+    theta = tf.math.asin((u_inf * dh_dx + v_inf * dh_dy) / tf.math.sqrt(
         (1.0 + dh_dx**2 + dh_dy**2)) / u_mag)
 
     elevation = tf.expand_dims(elevation, 2)
@@ -206,7 +206,7 @@ def blasius_boundary_layer(
     z_transition = transition_fraction * lz
     slope_correction = tf.compat.v1.where(
         tf.less(z, z_transition),
-        tf.cos(z / z_transition * np.pi / 2)**2,
+        tf.math.cos(z / z_transition * np.pi / 2)**2,
         tf.zeros_like(z, dtype=_TF_DTYPE))
 
   def get_values(data: tf.Tensor, zz: tf.Tensor,) -> tf.Tensor:
@@ -230,8 +230,8 @@ def blasius_boundary_layer(
     w_n = 0.5 * np.sqrt(nu * u_mag / x) * (
         get_values(eta, zz) * get_values(f[:, 1], zz) - get_values(f[:, 0], zz))
     corr = get_values(slope_correction, zz)
-    return (u_n * tf.cos(theta) - w_n * tf.sin(theta)) * corr + u_n * (1.0 -
-                                                                       corr)
+    return (u_n * tf.math.cos(theta) -
+            w_n * tf.math.sin(theta)) * corr + u_n * (1.0 - corr)
 
   def v_init_fn(
       xx: tf.Tensor,
@@ -248,8 +248,8 @@ def blasius_boundary_layer(
     w_n = 0.5 * np.sqrt(nu * u_mag / x) * (
         get_values(eta, zz) * get_values(f[:, 1], zz) - get_values(f[:, 0], zz))
     corr = get_values(slope_correction, zz)
-    return (v_n * tf.cos(theta) - w_n * tf.sin(theta)) * corr + v_n * (1.0 -
-                                                                       corr)
+    return (v_n * tf.math.cos(theta) -
+            w_n * tf.math.sin(theta)) * corr + v_n * (1.0 - corr)
 
   def w_init_fn(
       xx: tf.Tensor,
@@ -266,8 +266,8 @@ def blasius_boundary_layer(
     w_n = 0.5 * np.sqrt(nu * u_mag / x) * (
         get_values(eta, zz) * get_values(f[:, 1], zz) - get_values(f[:, 0], zz))
     corr = get_values(slope_correction, zz)
-    return (u_n * tf.sin(theta) + w_n * tf.cos(theta)) * corr + w_n * (1.0 -
-                                                                       corr)
+    return (u_n * tf.math.sin(theta) +
+            w_n * tf.math.cos(theta)) * corr + w_n * (1.0 - corr)
 
   return {'u': u_init_fn, 'v': v_init_fn, 'w': w_init_fn}
 

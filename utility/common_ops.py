@@ -716,8 +716,8 @@ def local_dot(
   if isinstance(vec2, tf.Tensor):
     vec2 = [vec2]
 
-  buf = [tf.multiply(vec1_, vec2_) for vec1_, vec2_ in zip(vec1, vec2)]
-  return tf.reduce_sum([tf.reduce_sum(buf_) for buf_ in buf])
+  buf = [tf.math.multiply(vec1_, vec2_) for vec1_, vec2_ in zip(vec1, vec2)]
+  return tf.math.reduce_sum([tf.math.reduce_sum(buf_) for buf_ in buf])
 
 
 def local_vdot(
@@ -810,7 +810,7 @@ def global_mean(
       x = [tf.math.add_n(x)]
       dims.remove(2)
     if dims:
-      x = [tf.reduce_sum(x_i, axis=dims, keepdims=keep_dims) for x_i in x]
+      x = [tf.math.reduce_sum(x_i, axis=dims, keepdims=keep_dims) for x_i in x]
     return x
 
   if axis is None:  # Returns a scalar.
@@ -922,12 +922,13 @@ def compute_norm(
       continue
 
     if norm_type == NormType.L1:
-      l1_norm_op = lambda u: tf.reduce_sum(tf.abs(u))
+      l1_norm_op = lambda u: tf.math.reduce_sum(tf.abs(u))
       norm = global_reduce(v, l1_norm_op, group_assignment)
     elif norm_type == NormType.L2:
-      norm = tf.sqrt(global_reduce(v * v, tf.reduce_sum, group_assignment))
+      norm = tf.math.sqrt(
+          global_reduce(v * v, tf.math.reduce_sum, group_assignment))
     elif norm_type == NormType.L_INF:
-      l_inf_norm_op = lambda u: tf.reduce_max(tf.abs(u))
+      l_inf_norm_op = lambda u: tf.math.reduce_max(tf.abs(u))
       norm = global_reduce(v, l_inf_norm_op, group_assignment)
     else:
       raise NotImplementedError('{} is not a valid norm type.'.format(
@@ -957,12 +958,12 @@ def get_core_coordinate(
   coordinate = tf1.where(
       tf.equal(tf.cast(replicas, dtype), tf.cast(replica_id, dtype)))
 
-  # Using tf.reduce_mean to declare/clarify the shape so it is clear to be a
-  # scalar. Otherwise, due to the use of `tf.where`, in some applications the
-  # shape could not be inferred during the XLA compilation.
-  x = tf.cast(tf.reduce_mean(coordinate[0, 0]), dtype=dtype)
-  y = tf.cast(tf.reduce_mean(coordinate[0, 1]), dtype=dtype)
-  z = tf.cast(tf.reduce_mean(coordinate[0, 2]), dtype=dtype)
+  # Using tf.math.reduce_mean to declare/clarify the shape so it is clear to
+  # be a scalar. Otherwise, due to the use of `tf.where`, in some applications
+  # the shape could not be inferred during the XLA compilation.
+  x = tf.cast(tf.math.reduce_mean(coordinate[0, 0]), dtype=dtype)
+  y = tf.cast(tf.math.reduce_mean(coordinate[0, 1]), dtype=dtype)
+  z = tf.cast(tf.math.reduce_mean(coordinate[0, 2]), dtype=dtype)
   return x, y, z
 
 
@@ -1325,8 +1326,8 @@ def cross_replica_gather(x: tf.Tensor, num_replicas: int) -> List[tf.Tensor]:
   """
   enlarged_shape = [num_replicas] + x.shape.as_list()
   group_assignment = [list(range(num_replicas))]
-  broadcasted_tensor = tf.broadcast_to(tf.expand_dims(x, 0),
-                                       shape=enlarged_shape)
+  broadcasted_tensor = tf.broadcast_to(
+      tf.expand_dims(x, 0), shape=enlarged_shape)
   gathered = tf.raw_ops.AllToAll(
       input=broadcasted_tensor,
       group_assignment=group_assignment,

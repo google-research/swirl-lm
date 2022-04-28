@@ -968,7 +968,7 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
     global_grid = generate_init_field(xx, yy, zz, lx, ly, lz, None)
 
     # Computes the mean of the physical full grid along the axis.
-    reduced_physical_grid = tf.reduce_mean(
+    reduced_physical_grid = tf.math.reduce_mean(
         global_grid, axis=axis, keepdims=True)
     # Convert to z-list of tensor slices
     reduced_physical_grid = tf.unstack(reduced_physical_grid, axis=2)

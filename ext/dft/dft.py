@@ -211,7 +211,7 @@ def _all_to_all_matmul(a: tf.Tensor,
       all_to_all(tf.real, ab_expand),
       all_to_all(tf.imag, ab_expand))
 
-  return tf.reduce_sum(ab_sum, keepdims=None, axis=concat_dimension)
+  return tf.math.reduce_sum(ab_sum, keepdims=None, axis=concat_dimension)
 
 
 def dft_2d(a: tf.Tensor,

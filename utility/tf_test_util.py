@@ -43,16 +43,16 @@ def run_in_graph_and_eager_modes(func=None):
     def test_foo(self):
       x = tf.constant([1, 2])
       y = tf.constant([3, 4])
-      z = tf.add(x, y)
+      z = tf.math.add(x, y)
       self.assertAllEqual([4, 6], self.evaluate(z))
 
   if __name__ == "__main__":
     tf.test.main()
   ```
 
-  This test validates that `tf.add()` has the same behavior when computed with
-  eager execution enabled as it does when constructing a TensorFlow graph and
-  executing the `z` tensor in a session.
+  This test validates that `tf.math.add()` has the same behavior when computed
+  with eager execution enabled as it does when constructing a TensorFlow graph
+  and executing the `z` tensor in a session.
 
   See go/tf-test-decorator-cheatsheet for the decorators to use in different
   v1/v2/eager/graph combinations.

@@ -195,7 +195,7 @@ def conjugate_gradient_solver(
     if is_initial_step:
       d = q
     else:
-      beta = tf.divide(gamma, gamma_previous)
+      beta = tf.math.divide(gamma, gamma_previous)
       d = [q_ + beta * d_ for q_, d_ in zip(q, d_previous)]
 
     # Computes the squared norm of the residual.
@@ -242,7 +242,7 @@ def conjugate_gradient_solver(
     gamma = state.gamma
 
     a_d = linear_operator(d)
-    alpha = tf.divide(gamma, dot(d, a_d))
+    alpha = tf.math.divide(gamma, dot(d, a_d))
 
     x_next = [x_ + alpha * d_ for x_, d_ in zip(x, d)]
     r_next = [r_ - alpha * a_d_ for r_, a_d_ in zip(r, a_d)]
@@ -270,10 +270,10 @@ def conjugate_gradient_solver(
     tol_sq *= dot(b, b)
 
   def condition(i, state):
-    cond = tf.logical_and(i < max_iterations,
-                          tf.math.real(state.sq_norm_res) > tol_sq)
+    cond = tf.math.logical_and(i < max_iterations,
+                               tf.math.real(state.sq_norm_res) > tol_sq)
 
-    return (cond if component_wise_distance_fn is None else tf.logical_and(
+    return (cond if component_wise_distance_fn is None else tf.math.logical_and(
         cond, state.component_wise_distance > 0))
 
   def body(i, state):
@@ -282,7 +282,7 @@ def conjugate_gradient_solver(
   iterations, output_state = tf.while_loop(
       cond=condition, body=body, loop_vars=(i0, state0), back_prop=False)
 
-  residual_l2_norm = tf.sqrt(output_state.sq_norm_res)
+  residual_l2_norm = tf.math.sqrt(output_state.sq_norm_res)
   component_wise_distance = output_state.component_wise_distance
   if input_dtype is not None:
     residual_l2_norm = tf.cast(residual_l2_norm, input_dtype)

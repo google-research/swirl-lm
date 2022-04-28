@@ -353,8 +353,10 @@ class SyntheticTurbulentInflow(object):
               r_halo_updated[i][1:, ...],
               tf.expand_dims(
                   tf.random.stateless_normal(
-                      shape=[self.n_pad[1] * 2 + self.m[0],
-                             self.n_pad[2] * 2 + self.m[1]],
+                      shape=[
+                          self.n_pad[1] * 2 + self.m[0],
+                          self.n_pad[2] * 2 + self.m[1]
+                      ],
                       dtype=_TF_DTYPE,
                       seed=seed if seed is not None else _gen_stateless_seed()),
                   axis=0,

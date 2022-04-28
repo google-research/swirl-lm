@@ -125,24 +125,22 @@ def diffusion_scalar(
     ]
 
     # Add the closure from Monin-Obukhov similarity theory if requested.
-    if most is not None and scalar_name in ('T', 'theta', 'e_t'):
+    if most is not None and scalar_name in ('T', 'theta', 'e_t', 'q_t'):
       required_variables = ('u', 'v', 'w', 'theta')
       for varname in required_variables:
         if varname not in helper_variables:
           raise ValueError(f'{varname} is missing for the MOS model.')
 
-      if scalar_name == 'e_t':
-        energy_flux_helper_variables = {'rho': rho, 'h_t': phi}
-        energy_flux_helper_variables.update(helper_variables)
-        q_3 = most.surface_energy_flux_update_fn(energy_flux_helper_variables)
-      else:
+      if scalar_name in ('T', 'theta'):
         # Get the surface heat flux and convert it to the diffusion flux with
         # correct unit.
         _, _, q_3 = most.surface_shear_stress_and_heat_flux_update_fn(
             helper_variables)
-
-        if scalar_name in ('T', 'theta'):
-          q_3 = tf.nest.map_structure(lambda q: q / constants.CP, q_3)
+        q_3 = tf.nest.map_structure(lambda q: q / constants.CP, q_3)
+      else:
+        scalar_flux_helper_variables = {'rho': rho, 'phi': phi}
+        scalar_flux_helper_variables.update(helper_variables)
+        q_3 = most.surface_scalar_flux_update_fn(scalar_flux_helper_variables)
 
       # The sign of the heat flux needs to be reversed to be consistent with
       # the diffusion scheme. In the MOS formulation, the heat flux is positive
@@ -162,6 +160,20 @@ def diffusion_scalar(
       f_diff[most.vertical_dim] = common_ops.tensor_scatter_1d_update_global(
           replica_id, replicas, f_diff[most.vertical_dim], most.vertical_dim,
           core_index, plane_index, q_3)
+
+    # Assign the diffusive flux specified in the simulation configuration. This
+    # prescribed flux will override values computed from other models.
+    if scalar_name in params.scalar_lib:
+      for flux_info in params.scalar_lib[scalar_name].diffusive_flux:
+        core_index = (0 if flux_info.face == 0 else
+                      replicas.shape[flux_info.dim] - 1)
+        plane_index = (
+            params.halo_width if flux_info.face == 0 else
+            (params.nx, params.ny, params.nz)[flux_info.dim] -
+            params.halo_width - 1)
+        f_diff[flux_info.dim] = common_ops.tensor_scatter_1d_update_global(
+            replica_id, replicas, f_diff[flux_info.dim], flux_info.dim,
+            core_index, plane_index, flux_info.value)
 
     return [[
         d_f_diff / grid_spacing[i] for d_f_diff in grad_forward_fn[i](f_diff[i])
@@ -277,7 +289,7 @@ def _diffusion_momentum_stencil_3(
         for grad in grad_central_fn[dim_n](common_ops.multiply(
             mu, grad_central_u[common.KEYS_VELOCITY[dim_n]][dim]))
     ]
-    return tf.nest.map_structure(tf.add, term_0, term_1)
+    return tf.nest.map_structure(tf.math.add, term_0, term_1)
 
   def diffusion_fn(vel):
     """Computes the diffusion terms of velocity component `vel`."""

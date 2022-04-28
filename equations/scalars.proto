@@ -5,7 +5,7 @@ package research.simulation;
 import "third_party/py/swirl_lm/numerics/numerics.proto";
 
 // Defines the properties of a scalar to be included in the flow field.
-// Next id: 11
+// Next id: 13
 message Scalar {
   // The name of the scalar.
   optional string name = 1;
@@ -32,10 +32,28 @@ message Scalar {
 
   // A reference value for the scalar.
   optional float reference_value = 7 [deprecated = true];
+
+  // Specifies a constant diffusive flux for the scalar if required.
+  message DiffusiveFlux {
+    // The dimension of the diffusive flux. Allowed values are 0, 1, and 2,
+    // which corresponds to the x, y, and z directions, respectively.
+    optional int32 dim = 1;
+    // The face index of the diffusive flux. Should be one of 0 and 1, where 0
+    // suggests the flux is on the lower end of `dim`, and 1 is on the higher
+    // end of `dim`.
+    optional int32 face = 3;
+    // The value of the diffusive flux.
+    optional float value = 2;
+  }
+
+  // The diffusive flux to be applied at specific boundaries.
+  repeated DiffusiveFlux diffusive_flux = 11;
+
   // Configurations for specific scalars.
   oneof scalar_config {
     GenericScalar generic_scalar = 8;
     TotalEnergy total_energy = 9;
+    TotalHumidity total_humidity = 12;
   }
 }
 
@@ -50,4 +68,12 @@ message TotalEnergy {
   // An option of whether the effect of subsidence velocity is included in the
   // total energy equation.
   optional bool include_subsidence = 2;
+}
+
+// Defines configurations for total humidity.
+// Next id: 2
+message TotalHumidity {
+  // An option of whether the effect of subsidence velocity is included in the
+  // total humidity equation.
+  optional bool include_subsidence = 1;
 }

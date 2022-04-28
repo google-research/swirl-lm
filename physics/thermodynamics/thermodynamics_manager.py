@@ -116,7 +116,7 @@ class ThermodynamicsManager(object):
             [[(halo_exchange.BCType.NEUMANN, 0.0),] * 2] * 3,
             width=self._params.halo_width)
 
-        rho = tf.nest.map_structure(tf.add, states_0['rho'], drho)
+        rho = tf.nest.map_structure(tf.math.add, states_0['rho'], drho)
       else:
         drho = [tf.zeros_like(rho_i) for rho_i in states['rho']]
 

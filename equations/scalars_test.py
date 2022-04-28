@@ -18,6 +18,39 @@ FLAGS = flags.FLAGS
 @test_util.run_all_in_graph_and_eager_modes
 class ScalarsTest(tf.test.TestCase):
 
+  _GRAVITY_AND_THERMODYNAMICS_PBTXT = (R'gravity_direction { '
+                                       R'  dim_0: 0.0 dim_1: 0.0 dim_2: -1.0 '
+                                       R'}  '
+                                       R'thermodynamics {  '
+                                       R'  water {  '
+                                       R'    r_v: 461.89  '
+                                       R'    t_0: 273.0  '
+                                       R'    t_min: 250.0  '
+                                       R'    t_freeze: 273.15  '
+                                       R'    t_triple: 273.16  '
+                                       R'    p_triple: 611.7  '
+                                       R'    e_int_v0: 2.132e6  '
+                                       R'    e_int_i0: 3.34e5  '
+                                       R'    lh_v0: 2.258e6  '
+                                       R'    lh_s0: 2.592e6  '
+                                       R'    cv_d: 716.9  '
+                                       R'    cv_v: 1397.11  '
+                                       R'    cv_l: 4217.4  '
+                                       R'    cv_i: 2050.0  '
+                                       R'    cp_v: 1859.0  '
+                                       R'    cp_l: 4219.9  '
+                                       R'    cp_i: 2050.0  '
+                                       R'    max_temperature_iterations: 100  '
+                                       R'    temperature_tolerance: 1e-3  '
+                                       R'    num_density_iterations: 10  '
+                                       R'    geo_static_reference_state {  '
+                                       R'      t_s: 290.4 '
+                                       R'      height: 8000.0  '
+                                       R'      delta_t: 60.0  '
+                                       R'    }'
+                                       R'  } '
+                                       R'}  ')
+
   def setUp(self):
     super(ScalarsTest, self).setUp()
 
@@ -215,181 +248,125 @@ class ScalarsTest(tf.test.TestCase):
 
   def testEtUpdatesOutputsCorrectTensor(self):
     """Total energy RHS value at [4, 4, 4] is correct."""
-    pbtxt = (R'gravity_direction { '
-             R'  dim_0: 0.0 dim_1: 0.0 dim_2: -1.0 '
-             R'}  '
-             R'thermodynamics {  '
-             R'  water {  '
-             R'    r_v: 461.89  '
-             R'    t_0: 273.0  '
-             R'    t_min: 250.0  '
-             R'    t_freeze: 273.15  '
-             R'    t_triple: 273.16  '
-             R'    p_triple: 611.7  '
-             R'    e_int_v0: 2.132e6  '
-             R'    e_int_i0: 3.34e5  '
-             R'    lh_v0: 2.258e6  '
-             R'    lh_s0: 2.592e6  '
-             R'    cv_d: 716.9  '
-             R'    cv_v: 1397.11  '
-             R'    cv_l: 4217.4  '
-             R'    cv_i: 2050.0  '
-             R'    cp_v: 1859.0  '
-             R'    cp_l: 4219.9  '
-             R'    cp_i: 2050.0  '
-             R'    max_temperature_iterations: 100  '
-             R'    temperature_tolerance: 1e-3  '
-             R'    num_density_iterations: 10  '
-             R'    geo_static_reference_state {  '
-             R'      t_s: 290.4 '
-             R'      height: 8000.0  '
-             R'      delta_t: 60.0  '
-             R'    }'
-             R'  } '
-             R'}  '
-             R'scalars {  '
-             R'  name: "e_t"  '
-             R'  total_energy{  '
-             R'    include_radiation: true  '
-             R'    include_subsidence: true  '
-             R'  }'
-             R'}')
-    model = self.set_up_scalars(False, pbtxt)
+    for include_subsidence in [False, True]:
+      pbtxt = (
+          self._GRAVITY_AND_THERMODYNAMICS_PBTXT + R'scalars {  '
+          R'  name: "e_t"  '
+          R'  total_energy{  '
+          R'    include_radiation: true  '
+          R'    include_subsidence: ' +
+          (R'true ' if include_subsidence else R'false ') + R'  }'
+          R'}')
+      model = self.set_up_scalars(False, pbtxt)
 
-    ones = tf.ones((int(4), 8, 8), dtype=tf.float32)
-    buf = np.zeros((8, 8, 8), dtype=np.float32)
-    buf[4, 4, 4] = 2
-    u = tf.unstack(tf.convert_to_tensor(buf))
+      ones = tf.ones((int(4), 8, 8), dtype=tf.float32)
+      buf = np.zeros((8, 8, 8), dtype=np.float32)
+      buf[4, 4, 4] = 2
+      u = tf.unstack(tf.convert_to_tensor(buf))
 
-    buf = np.zeros((8, 8, 8), dtype=np.float32)
-    buf[4, 4, 4] = -3
-    v = tf.unstack(tf.convert_to_tensor(buf))
+      buf = np.zeros((8, 8, 8), dtype=np.float32)
+      buf[4, 4, 4] = -3
+      v = tf.unstack(tf.convert_to_tensor(buf))
 
-    buf = np.zeros((8, 8, 8), dtype=np.float32)
-    buf[4, 4, 4] = 4
-    w = tf.unstack(tf.convert_to_tensor(buf))
-    states = {
-        'u': u,
-        'v': v,
-        'w': w,
-        'rho_u': u,
-        'rho_v': v,
-        'rho_w': w,
-        'p': self.p,
-        'rho': [tf.ones_like(u, dtype=tf.float32) for u in self.u],
-        'q_t': tf.unstack(tf.concat([0.009 * ones, 0.0015 * ones], axis=0)),
-    }
-    zz = np.transpose(
-        np.tile(np.linspace(600.0, 1000.0, 8, dtype=np.float32), (8, 8, 1)),
-        (2, 0, 1))
-    additional_states = {
-        'diffusivity': [
-            1e-2 * tf.ones_like(u, dtype=tf.float32) for u in self.u
-        ],
-        'nu_t': [1e-2 * tf.ones_like(u, dtype=tf.float32) for u in self.u],
-        'zz': tf.unstack(tf.convert_to_tensor(zz)),
-    }
-    sc = tf.unstack(tf.concat([1.5e4 * ones, 1.8e4 * ones], axis=0))
+      buf = np.zeros((8, 8, 8), dtype=np.float32)
+      buf[4, 4, 4] = 4
+      w = tf.unstack(tf.convert_to_tensor(buf))
+      states = {
+          'u': u,
+          'v': v,
+          'w': w,
+          'rho_u': u,
+          'rho_v': v,
+          'rho_w': w,
+          'p': self.p,
+          'rho': [tf.ones_like(u, dtype=tf.float32) for u in self.u],
+          'q_t': tf.unstack(tf.concat([0.009 * ones, 0.0015 * ones], axis=0)),
+      }
+      zz = np.transpose(
+          np.tile(np.linspace(600.0, 1000.0, 8, dtype=np.float32), (8, 8, 1)),
+          (2, 0, 1))
+      additional_states = {
+          'diffusivity': [
+              1e-2 * tf.ones_like(u, dtype=tf.float32) for u in self.u
+          ],
+          'nu_t': [1e-2 * tf.ones_like(u, dtype=tf.float32) for u in self.u],
+          'zz': tf.unstack(tf.convert_to_tensor(zz)),
+      }
+      sc = tf.unstack(tf.concat([1.5e4 * ones, 1.8e4 * ones], axis=0))
 
-    replica_id = tf.constant(0)
-    replicas = np.array([[[0]]])
-    scalar_rhs = model._e_t_update(replica_id, replicas, states,
-                                   additional_states)
+      replica_id = tf.constant(0)
+      replicas = np.array([[[0]]])
+      scalar_rhs = model._e_t_update(replica_id, replicas, states,
+                                     additional_states)
 
-    rhs_e_t = self.evaluate(scalar_rhs(sc))
+      rhs_e_t = self.evaluate(scalar_rhs(sc))
 
-    self.assertLen(rhs_e_t, 8)
-
-    self.assertAlmostEqual(rhs_e_t[4][4, 4], np.float32(-18340.791), 5)
+      self.assertLen(rhs_e_t, 8)
+      expected = -18340.791 if include_subsidence else -18359.148
+      self.assertAlmostEqual(rhs_e_t[4][4, 4], np.float32(expected), 5)
 
   def testQtUpdatesOutputsCorrectTensor(self):
     """Total humidity RHS value at [1, 1, 1] is correct."""
-    pbtxt = (R'gravity_direction { '
-             R'  dim_0: 0.0 dim_1: 0.0 dim_2: -1.0 '
-             R'}  '
-             R'thermodynamics {  '
-             R'  water {  '
-             R'    r_v: 461.89  '
-             R'    t_0: 273.0  '
-             R'    t_min: 250.0  '
-             R'    t_freeze: 273.15  '
-             R'    t_triple: 273.16  '
-             R'    p_triple: 611.7  '
-             R'    e_int_v0: 2.132e6  '
-             R'    e_int_i0: 3.34e5  '
-             R'    lh_v0: 2.258e6  '
-             R'    lh_s0: 2.592e6  '
-             R'    cv_d: 716.9  '
-             R'    cv_v: 1397.11  '
-             R'    cv_l: 4217.4  '
-             R'    cv_i: 2050.0  '
-             R'    cp_v: 1859.0  '
-             R'    cp_l: 4219.9  '
-             R'    cp_i: 2050.0  '
-             R'    max_temperature_iterations: 100  '
-             R'    temperature_tolerance: 1e-3  '
-             R'    num_density_iterations: 10  '
-             R'    geo_static_reference_state {  '
-             R'      t_s: 290.4 '
-             R'      height: 8000.0  '
-             R'      delta_t: 60.0  '
-             R'    }'
-             R'  } '
-             R'}  '
-             R'scalars {  '
-             R'  name: "q_t"  '
-             R'  diffusivity: 1e-5  '
-             R'  density: 1.0   '
-             R'  molecular_weight: 0.018  '
-             R'  solve_scalar: true  '
-             R'}  ')
+    for include_subsidence in [False, True]:
+      pbtxt = (
+          self._GRAVITY_AND_THERMODYNAMICS_PBTXT + R'scalars {  '
+          R'  name: "q_t"  '
+          R'  diffusivity: 1e-5  '
+          R'  density: 1.0   '
+          R'  molecular_weight: 0.018  '
+          R'  solve_scalar: true  '
+          R'  total_humidity{  '
+          R'    include_subsidence:  ' +
+          (R'true' if include_subsidence else R'false') + R'  }'
+          R'}  ')
 
-    model = self.set_up_scalars(False, pbtxt)
+      model = self.set_up_scalars(False, pbtxt)
 
-    ones = tf.ones((int(4), 8, 8), dtype=tf.float32)
-    buf = np.zeros((8, 8, 8), dtype=np.float32)
-    buf[4, 4, 4] = 2
-    u = tf.unstack(tf.convert_to_tensor(buf))
+      ones = tf.ones((int(4), 8, 8), dtype=tf.float32)
+      buf = np.zeros((8, 8, 8), dtype=np.float32)
+      buf[4, 4, 4] = 2
+      u = tf.unstack(tf.convert_to_tensor(buf))
 
-    buf = np.zeros((8, 8, 8), dtype=np.float32)
-    buf[4, 4, 4] = -3
-    v = tf.unstack(tf.convert_to_tensor(buf))
+      buf = np.zeros((8, 8, 8), dtype=np.float32)
+      buf[4, 4, 4] = -3
+      v = tf.unstack(tf.convert_to_tensor(buf))
 
-    buf = np.zeros((8, 8, 8), dtype=np.float32)
-    buf[4, 4, 4] = 4
-    w = tf.unstack(tf.convert_to_tensor(buf))
-    # Internal energy of ~41000 J/(kg/m^3) at the sea surface of
-    # temperature 292.5K with a humidity 0.011 kg/kg.
-    e = 41e3
-    states = {
-        'u': u,
-        'v': v,
-        'w': w,
-        'rho_u': self.u,
-        'rho_v': self.v,
-        'rho_w': self.w,
-        'p': self.p,
-        'rho': [tf.ones_like(u, dtype=tf.float32) for u in self.u],
-        'e_t': [e * tf.ones_like(u, dtype=tf.float32) for u in self.u],
-    }
-    additional_states = {
-        'diffusivity': [
-            1e-2 * tf.ones_like(u, dtype=tf.float32) for u in self.u
-        ],
-        'zz': tf.unstack(tf.linspace(600.0, 1000.0, 8)),
-    }
-    sc = tf.unstack(tf.concat([0.08 * ones, 0.1 * ones], axis=0))
+      buf = np.zeros((8, 8, 8), dtype=np.float32)
+      buf[4, 4, 4] = 4
+      w = tf.unstack(tf.convert_to_tensor(buf))
+      # Internal energy of ~41000 J/(kg/m^3) at the sea surface of
+      # temperature 292.5K with a humidity 0.011 kg/kg.
+      e = 41e3
+      states = {
+          'u': u,
+          'v': v,
+          'w': w,
+          'rho_u': self.u,
+          'rho_v': self.v,
+          'rho_w': self.w,
+          'p': self.p,
+          'rho': [tf.ones_like(u, dtype=tf.float32) for u in self.u],
+          'e_t': [e * tf.ones_like(u, dtype=tf.float32) for u in self.u],
+      }
+      additional_states = {
+          'diffusivity': [
+              1e-2 * tf.ones_like(u, dtype=tf.float32) for u in self.u
+          ],
+          'zz': tf.unstack(tf.linspace(600.0, 1000.0, 8)),
+      }
+      sc = tf.unstack(tf.concat([0.08 * ones, 0.1 * ones], axis=0))
 
-    replica_id = tf.constant(0)
-    replicas = np.array([[[0]]])
-    scalar_rhs = model._q_t_update(replica_id, replicas, states,
-                                   additional_states)
+      replica_id = tf.constant(0)
+      replicas = np.array([[[0]]])
+      scalar_rhs = model._q_t_update(replica_id, replicas, states,
+                                     additional_states)
 
-    rhs_q_t = self.evaluate(scalar_rhs(sc))
+      rhs_q_t = self.evaluate(scalar_rhs(sc))
 
-    self.assertLen(rhs_q_t, 8)
+      self.assertLen(rhs_q_t, 8)
 
-    self.assertAlmostEqual(rhs_q_t[1][1, 1], np.float32(0.0100007), 6)
+      expected = 0.0100007 if include_subsidence else 0.009999998
+      self.assertAlmostEqual(rhs_q_t[1][1, 1], np.float32(expected), 6)
 
 
 if __name__ == '__main__':

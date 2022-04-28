@@ -86,6 +86,11 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     """
     return self._cv_d + _R_D
 
+  @property
+  def r_v(self):
+    """The gas constant of water vapor."""
+    return self._r_v
+
   def cv_m(
       self,
       q_tot: FlowFieldVar,
@@ -212,11 +217,12 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       # Compute the density scale height at the surface.
       h_sfc = _R_D * self._ref_state.t_s / _G
 
-      return self._p_thermal * tf.exp(-(
-          z + self._ref_state.height * delta_t_frac *
-          (tf.math.log(1.0 - delta_t_frac * tf.tanh(z / self._ref_state.height))
-           - tf.math.log(1.0 + tf.tanh(z / self._ref_state.height)) +
-           z / self._ref_state.height)) / h_sfc / (1.0 - delta_t_frac**2))
+      return self._p_thermal * tf.math.exp(
+          -(z + self._ref_state.height * delta_t_frac *
+            (tf.math.log(1.0 - delta_t_frac *
+                         tf.math.tanh(z / self._ref_state.height)) -
+             tf.math.log(1.0 + tf.math.tanh(z / self._ref_state.height)) +
+             z / self._ref_state.height)) / h_sfc / (1.0 - delta_t_frac**2))
 
     def pressure_with_const_theta(z: tf.Tensor) -> tf.Tensor:
       """Computes the reference pressure for constant potential temperature."""
@@ -259,7 +265,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       """Computes the reference temperature following the presumed profile."""
       return [
           self._ref_state.t_s -
-          self._ref_state.delta_t * tf.tanh(z / self._ref_state.height)
+          self._ref_state.delta_t * tf.math.tanh(z / self._ref_state.height)
           for z in zz
       ]
 
@@ -352,8 +358,8 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     Returns:
       The vapor pressure at saturation condition.
     """
-    return self._p_triple * tf.pow(
-        temperature / self._t_triple, d_cp / self._r_v) * tf.exp(
+    return self._p_triple * tf.math.pow(
+        temperature / self._t_triple, d_cp / self._r_v) * tf.math.exp(
             (lh_0 - d_cp * self._t_0) / self._r_v *
             (1.0 / self._t_triple - 1.0 / temperature))
 
@@ -774,7 +780,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
         t_1_i: tf.Tensor,
     ) -> tf.Tensor:
       """Determines if the fluid is unsaturated."""
-      return tf.logical_and(
+      return tf.math.logical_and(
           tf.less_equal(q_tot_i, q_v_sat_i), tf.greater(t_1_i, self._t_min))
 
     t = [

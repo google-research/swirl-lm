@@ -144,7 +144,7 @@ def _reaction_rate(
 
   def sigma_cm():
     """Computes the turbulent diffusivity sigma_cm = 0.09 ϱg sB √K."""
-    return 0.09 * rho_g * s_b * tf.sqrt(tke)
+    return 0.09 * rho_g * s_b * tf.math.sqrt(tke)
 
   def psi_s():
     """Computes the ignition volume fraction."""

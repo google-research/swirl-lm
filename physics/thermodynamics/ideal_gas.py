@@ -160,11 +160,11 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
 
     def pressure(z: tf.Tensor) -> tf.Tensor:
       """Computes the reference pressure."""
-      return self._p_thermal * tf.exp(
+      return self._p_thermal * tf.math.exp(
           -(z + self._height * delta_t_frac *
-            (tf.math.log(1.0 - delta_t_frac * tf.tanh(z / self._height)) -
-             tf.math.log(1.0 + tf.tanh(z / self._height)) + z / self._height)) /
-          h_sfc / (1.0 - delta_t_frac**2))
+            (tf.math.log(1.0 - delta_t_frac * tf.math.tanh(z / self._height)) -
+             tf.math.log(1.0 + tf.math.tanh(z / self._height)) +
+             z / self._height)) / h_sfc / (1.0 - delta_t_frac**2))
 
     def pressure_const_theta(z: tf.Tensor) -> tf.Tensor:
       """Computes the reference pressure for constant potential temperature."""
@@ -195,7 +195,9 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
 
     def temperature() -> FlowFieldVar:
       """Computes the reference temperature following the presumed profile."""
-      return [self._t_s - self._delta_t * tf.tanh(z / self._height) for z in zz]
+      return [
+          self._t_s - self._delta_t * tf.math.tanh(z / self._height) for z in zz
+      ]
 
     def temperature_const_theta() -> FlowFieldVar:
       """Computes reference temperature for constant potential temperature."""

@@ -153,8 +153,9 @@ def get_apply_one_core_boundary_conditions_fn(
              x, boundary_conditions))
     inner = (slice(1, -1),) * rank
     if subtract_mean:
-      x -= (tf.reduce_mean(x[inner]) if isinstance(x, tf.Tensor)
-            else np.mean(x[inner]))
+      x -= (
+          tf.math.reduce_mean(x[inner])
+          if isinstance(x, tf.Tensor) else np.mean(x[inner]))
 
     return tf.cast(x, dtype) if isinstance(x, tf.Tensor) else x.astype(dtype)
 
@@ -1156,7 +1157,7 @@ def halo_exchange_step_fn(
       full_grid_shape = get_full_grid_shape(shape, replicas.shape, halo_width)
       num_dof = np.prod([s - halo_width * 2 for s in full_grid_shape])
       single_tensor = tf.stack(tiles)[inner]
-      avg = tf.reduce_sum(
+      avg = tf.math.reduce_sum(
           tf.compat.v1.tpu.cross_replica_sum(single_tensor)) / num_dof
       tiles = [t - avg for t in tiles]
 

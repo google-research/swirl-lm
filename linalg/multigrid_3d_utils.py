@@ -402,8 +402,10 @@ def get_apply_one_core_boundary_conditions_fn(
          apply_one_core_boundary_conditions(x, boundary_conditions))
     if subtract_mean:
       inner = (slice(1, -1), slice(1, -1))
-      inner_total = sum([tf.reduce_sum(x_2d[inner]) if use_tf
-                         else np.sum(x_2d[inner]) for x_2d in x[1:-1]])
+      inner_total = sum([
+          tf.math.reduce_sum(x_2d[inner]) if use_tf else np.sum(x_2d[inner])
+          for x_2d in x[1:-1]
+      ])
       inner_dof = np.prod([s - 2 for s in get_shape(x)])
       avg = inner_total / inner_dof
       x = [x_2d - avg for x_2d in x]

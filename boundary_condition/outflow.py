@@ -44,7 +44,7 @@ def outflow_boundary_condition() -> step_updater.StatesUpdateFn:
 
     u_max = common_ops.global_reduce(
         tf.concat([u_i[-params.halo_width - 1, :] for u_i in states['u']],
-                  axis=0), tf.reduce_max, group_assignment)
+                  axis=0), tf.math.reduce_max, group_assignment)
 
     cfl = params.dt * u_max / params.dx
     coeff = 1.0 - cfl
@@ -56,7 +56,7 @@ def outflow_boundary_condition() -> step_updater.StatesUpdateFn:
               rho_i[face_index, :] * u_i[face_index, :]
               for rho_i, u_i in zip(states['rho'], states['u'])
           ],
-                    axis=0), tf.reduce_sum, group_assignment)
+                    axis=0), tf.math.reduce_sum, group_assignment)
 
     mass_exit = mass_flux_x_face(-params.halo_width - 1)
     mass_inlet = mass_flux_x_face(params.halo_width)

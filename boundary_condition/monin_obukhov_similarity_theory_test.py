@@ -1,4 +1,4 @@
-"""Tests for swirl_lm.boundary_condition.monin_obukhov_similarity_theory."""
+"""Tests for google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh.boundary_conditions.monin_obukhov_similarity_theory."""
 
 import itertools
 import os
@@ -460,10 +460,10 @@ class MoninObukhovSimilarityTheoryTest(tf.test.TestCase,
         'v': tf.unstack(tf.convert_to_tensor(v_val, dtype=tf.float32)),
         'w': tf.unstack(tf.convert_to_tensor(w_val, dtype=tf.float32)),
         'rho': tf.unstack(tf.convert_to_tensor(rho_val, dtype=tf.float32)),
-        'h_t': tf.unstack(tf.convert_to_tensor(h_t_val, dtype=tf.float32)),
+        'phi': tf.unstack(tf.convert_to_tensor(h_t_val, dtype=tf.float32)),
     }
 
-    q_e = self.evaluate(self.model.surface_energy_flux_update_fn(states))
+    q_e = self.evaluate(self.model.surface_scalar_flux_update_fn(states))
 
     with self.subTest(name='SliceShape'):
       if vertical_dim == 0:
@@ -489,7 +489,7 @@ class MoninObukhovSimilarityTheoryTest(tf.test.TestCase,
 
     u = tf.constant(7.0, dtype=tf.float32)
     v = tf.constant(-5.5, dtype=tf.float32)
-    m = tf.sqrt(u**2 + v**2)
+    m = tf.math.sqrt(u**2 + v**2)
     temperature = tf.constant(273.0, dtype=tf.float32)
     z_m = tf.constant(1.5, dtype=tf.float32)
 

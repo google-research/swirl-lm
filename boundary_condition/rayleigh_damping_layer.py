@@ -194,12 +194,14 @@ def klemp_lilly_relaxation_coeff_fn(
         h_d = (1.0 - sponge.fraction) * h_t
         buf = tf.compat.v1.where(
             tf.less_equal(grid, h_d), tf.zeros_like(grid),
-            a_max * tf.pow(tf.sin(np.pi / 2.0 * (grid - h_d) / (h_t - h_d)), 2))
+            a_max * tf.math.pow(
+                tf.math.sin(np.pi / 2.0 * (grid - h_d) / (h_t - h_d)), 2))
       elif face == 0:
         h_d = sponge.fraction * h_t
         buf = tf.compat.v1.where(
             tf.greater_equal(grid, h_d), tf.zeros_like(grid),
-            a_max * tf.pow(tf.sin(np.pi / 2.0 * tf.abs(grid - h_d) / h_d), 2))
+            a_max *
+            tf.math.pow(tf.math.sin(np.pi / 2.0 * tf.abs(grid - h_d) / h_d), 2))
       else:
         raise ValueError(
             'Face index has to be one of 0 and 1. {} is provided.'.format(face))

@@ -1,5 +1,6 @@
 """Tests for diffusion."""
 
+import itertools
 import os
 
 import numpy as np
@@ -348,6 +349,72 @@ class DiffusionTest(tf.test.TestCase, parameterized.TestCase):
           else:  # dim == 2
             expected[0, ...] = 0.005672
             expected[1, ...] = -0.005672
+
+        self.assertAllClose(expected, np.array(result[i])[1:-1, 1:-1, 1:-1])
+
+  _DIMS = (0, 1, 2)
+  _FACES = (0, 1)
+
+  @parameterized.parameters(*itertools.product(_DIMS, _FACES))
+  def testDiffusionScalarProvidesCorrectDiffusionWithPrescribedFlux(
+      self, dim, face):
+    """Checks if scalar diffusion term is correct with prescribed flux."""
+    pbtxt = (R'scalars { '
+             R'  name: "phi" '
+             R'  diffusive_flux { ')
+    pbtxt += f'dim: {dim} face: {face} value: 1.0'
+    pbtxt += R'}} '
+
+    params = self._set_up_params(pbtxt)
+    params.cx = 1
+    params.cy = 1
+    params.cz = 1
+    params.nx = 8
+    params.ny = 8
+    params.nz = 8
+    params.lx = 6.0
+    params.ly = 6.0
+    params.lz = 6.0
+    params.halo_width = 2
+
+    replica_id = tf.constant(0)
+    replicas = np.array([[[0]]])
+
+    phi = tf.unstack(tf.zeros((9, 8, 8), dtype=tf.float32))
+    rho = tf.unstack(1.2 * tf.ones((8, 8, 8), dtype=tf.float32))
+    d = tf.unstack(0.1 * tf.ones((8, 8, 8), dtype=tf.float32))
+
+    diffusion_fn = diffusion.diffusion_scalar(params)
+
+    result = self.evaluate(
+        diffusion_fn(self.kernel_op, replica_id, replicas, phi, rho, d,
+                     (params.dx, params.dy, params.dz), 'phi'))
+
+    for i in range(3):
+      with self.subTest(name='Dim{}'.format(i)):
+        expected = np.zeros((6, 6, 6), dtype=np.float32)
+        if i == dim:
+          if dim == 0:
+            if face == 0:
+              expected[:, 0, :] = 0.5
+              expected[:, 1, :] = -0.5
+            else:  # face == 1
+              expected[:, -3, :] = 0.5
+              expected[:, -2, :] = -0.5
+          elif dim == 1:
+            if face == 0:
+              expected[..., 0] = 0.5
+              expected[..., 1] = -0.5
+            else:  # face == 1
+              expected[..., -3] = 0.5
+              expected[..., -2] = -0.5
+          else:  # dim == 2
+            if face == 0:
+              expected[0, ...] = 0.5
+              expected[1, ...] = -0.5
+            else:  # face == 1
+              expected[-3, ...] = 0.5
+              expected[-2, ...] = -0.5
 
         self.assertAllClose(expected, np.array(result[i])[1:-1, 1:-1, 1:-1])
 

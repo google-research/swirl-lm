@@ -118,7 +118,7 @@ class FastDiagonalizationSolverTest(tf.test.TestCase, parameterized.TestCase):
     def rhs_fn(xx, yy, zz, lx, ly, lz, coord):
       """Defines the right hand side tensor."""
       del lx, ly, lz, coord
-      return tf.cos(xx) * tf.sin(yy) * tf.sin(zz)
+      return tf.math.cos(xx) * tf.math.sin(yy) * tf.math.sin(zz)
 
     # Initializes the solver.
     grid_lengths = (l, l, l)

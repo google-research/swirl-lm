@@ -355,7 +355,7 @@ class Velocity(object):
                              additional_states,
                              self._params)[self._src_manager.generate_src_key(
                                  velocity_key[dim])]
-          force = tf.nest.map_structure(tf.add, force, source)
+          force = tf.nest.map_structure(tf.math.add, force, source)
 
         if dbg:
           return {

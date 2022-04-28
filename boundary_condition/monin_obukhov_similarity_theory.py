@@ -184,12 +184,12 @@ class MoninObukhovSimilarityTheory(object):
       alpha = 1.0
 
       if option == 'M':
-        x = tf.pow(tf.maximum(1.0 - self.gamma_m * z, 0.0), 0.25)
+        x = tf.math.pow(tf.maximum(1.0 - self.gamma_m * z, 0.0), 0.25)
 
         psi = 2.0 * tf.math.log(0.5 * (1.0 + x)) + tf.math.log(
             0.5 * (1.0 + x**2)) - 2.0 * tf.math.atan(x) + 0.5 * np.pi
       else:
-        y = tf.pow(tf.maximum(1.0 - self.gamma_h * z, 0.0), 0.5)
+        y = tf.math.pow(tf.maximum(1.0 - self.gamma_h * z, 0.0), 0.5)
         psi = 2.0 * alpha * tf.math.log(0.5 * (1.0 + y))
 
       return psi
@@ -346,7 +346,8 @@ class MoninObukhovSimilarityTheory(object):
     zeta = self._normalized_height(theta, u1, u2, height)
     phi_m, phi_h = self._stability_correction_function(zeta, theta)
 
-    u_mag = tf.nest.map_structure(lambda u, v: tf.sqrt(u**2 + v**2), u1, u2)
+    u_mag = tf.nest.map_structure(lambda u, v: tf.math.sqrt(u**2 + v**2), u1,
+                                  u2)
 
     def surface_shear_stress(
         u_i: tf.Tensor,
@@ -443,21 +444,21 @@ class MoninObukhovSimilarityTheory(object):
         lambda p_m, p_h: tf.math.divide_no_nan(_KAPPA**2, (ln_z - p_h) *  # pylint: disable=g-long-lambda
                                                (ln_z - p_m)), phi_m, phi_h)
 
-  def surface_energy_flux_update_fn(
+  def surface_scalar_flux_update_fn(
       self,
       states: model_function.StatesMap,
   ) -> StateVariableType:
-    """Computes the energy flux at the surface.
+    """Computes the scalar flux at the surface.
 
     Reference:
     Schneider, T. (n.d.). CLIMA Atmosphere Model. Caltech. (Eq. 5.7)
 
     Args:
       states: A keyed dictionary of states. Must include 'u', 'v', 'w', 'theta',
-      'rho', 'h_t'.
+      'rho', 'phi'.
 
     Returns:
-      The energy flux at the surface.
+      The flux of `phi` at the surface.
     """
     # Get the velocity components that are tangential to the ground.
     velocity_keys = list(common.KEYS_VELOCITY)
@@ -475,28 +476,29 @@ class MoninObukhovSimilarityTheory(object):
                        self.halo_width)[0])
     rho = util.get_slice(states['rho'], self.vertical_dim, 0,
                          self.halo_width)[0]
-    ht_zm = util.get_slice(states['h_t'], self.vertical_dim, 0,
-                           self.halo_width)[0]
-    ht_z0 = util.get_slice(states['h_t'], self.vertical_dim, 0,
-                           self.halo_width - 1)[0]
+    phi_zm = util.get_slice(states['phi'], self.vertical_dim, 0,
+                            self.halo_width)[0]
+    phi_z0 = util.get_slice(states['phi'], self.vertical_dim, 0,
+                            self.halo_width - 1)[0]
 
     # Because the wall is at the mid-point face between the first fluid layer
     # and the halo layers, the height of the first fluid layer above the ground
     # is half of the grid spacing.
     c_h = self._exchange_coefficient(theta, u1, u2, self.height / 2.0)
 
-    def energy_flux(
+    def scalar_flux(
         rho_i: tf.Tensor,
         c_h_i: tf.Tensor,
         u1_i: tf.Tensor,
         u2_i: tf.Tensor,
-        ht_zm_i: tf.Tensor,
-        ht_z0_i: tf.Tensor,
+        phi_zm_i: tf.Tensor,
+        phi_z0_i: tf.Tensor,
     ) -> tf.Tensor:
       """Computes the energy flux."""
-      return -rho_i * c_h_i * tf.sqrt(u1_i**2 + u2_i**2) * (ht_zm_i - ht_z0_i)
+      return -rho_i * c_h_i * tf.math.sqrt(u1_i**2 + u2_i**2) * (
+          phi_zm_i - phi_z0_i)
 
-    return tf.nest.map_structure(energy_flux, rho, c_h, u1, u2, ht_zm, ht_z0)
+    return tf.nest.map_structure(scalar_flux, rho, c_h, u1, u2, phi_zm, phi_z0)
 
   def _compute_obukhov_length(
       self,
@@ -544,7 +546,7 @@ class MoninObukhovSimilarityTheory(object):
         self.alpha * param * tf.math.log(z_m / self.z_t), z_m)
     c = tf.math.log(z_m / self.z_0)**2
 
-    delta = tf.sqrt(tf.maximum(b**2 - 4.0 * a * c, 0.0))
+    delta = tf.math.sqrt(tf.maximum(b**2 - 4.0 * a * c, 0.0))
     l_inv_1 = tf.math.divide_no_nan(-b - delta, 2.0 * a)
     l_inv_2 = tf.math.divide_no_nan(-b + delta, 2.0 * a)
     l_inv = tf.cond(
@@ -567,7 +569,7 @@ class MoninObukhovSimilarityTheory(object):
 
   def _compute_shear_stresses(self, u, v, z, replicas):
     """Computes the shear stresses 𝛕₀₂ and 𝛕₁₂."""
-    u_norm = [tf.sqrt(u_i**2 + v_i**2) for u_i, v_i in zip(u, v)]
+    u_norm = [tf.math.sqrt(u_i**2 + v_i**2) for u_i, v_i in zip(u, v)]
     u_mean = tf.squeeze(common_ops.global_mean(u_norm, replicas))
     u_star = tf.math.divide_no_nan(u_mean * _KAPPA,
                                    tf.math.log(z / self.z_0) - _PHI_M)
@@ -837,7 +839,7 @@ class MoninObukhovSimilarityTheory(object):
     nu = [nu_slice_i + self.nu for nu_slice_i in nu_slice]
     v_0_sq = [v_i**2 for v_i in horizontal_velocity_fields[0]]
     v_1_sq = [v_i**2 for v_i in horizontal_velocity_fields[1]]
-    m = [tf.sqrt(v_0_i + v_1_i) for v_0_i, v_1_i in zip(v_0_sq, v_1_sq)]
+    m = [tf.math.sqrt(v_0_i + v_1_i) for v_0_i, v_1_i in zip(v_0_sq, v_1_sq)]
 
     m_avg = tf.squeeze(
         common_ops.global_mean(m, replicas, axis=self.horizontal_dims)[0])

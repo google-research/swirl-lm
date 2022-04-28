@@ -142,7 +142,7 @@ class PoissonSolverTest(tf.test.TestCase, parameterized.TestCase):
     def rhs_fn(xx, yy, zz, lx, ly, lz, coord):
       """Defines the right hand side tensor."""
       del lx, ly, lz, coord  # Not used.
-      return -3. * tf.sin(xx) * tf.sin(yy) * tf.sin(zz)
+      return -3. * tf.math.sin(xx) * tf.math.sin(yy) * tf.math.sin(zz)
 
     replicas, halo_width, xyz = replicas_and_partitions
     computation_shape = np.array(replicas.shape)

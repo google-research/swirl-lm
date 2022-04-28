@@ -60,8 +60,8 @@ def _arrhenius_law(
     e_a: float,
 ) -> tf.Tensor:
   """Computes the Arrhenius law."""
-  return a_cst * tf.pow(c_f, coeff_f) * tf.pow(c_o, coeff_o) * tf.exp(
-      -e_a / R_UNIVERSAL / temperature)
+  return a_cst * tf.math.pow(c_f, coeff_f) * tf.math.pow(
+      c_o, coeff_o) * tf.math.exp(-e_a / R_UNIVERSAL / temperature)
 
 
 def _concentration(

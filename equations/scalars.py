@@ -452,10 +452,11 @@ class Scalars(object):
       Returns:
         The radiation source term.
       """
-      return (_F0 * tf.exp(-_KAPPA * q_h) + _F1 * tf.exp(-_KAPPA * q_l) +
+      return (_F0 * tf.math.exp(-_KAPPA * q_h) +
+              _F1 * tf.math.exp(-_KAPPA * q_l) +
               rho * self.thermodynamics.model.cp_d * _D * _ALPHA_Z *
-              (0.25 * tf.pow(tf.maximum(z - _ZI, 0.0), 4.0 / 3.0) +
-               _ZI * tf.pow(tf.maximum(z - _ZI, 0.0), 1.0 / 3.0)))
+              (0.25 * tf.math.pow(tf.maximum(z - _ZI, 0.0), 4.0 / 3.0) +
+               _ZI * tf.math.pow(tf.maximum(z - _ZI, 0.0), 1.0 / 3.0)))
 
     def source_by_radiation(
         q_l: Sequence[tf.Tensor],
@@ -546,10 +547,10 @@ class Scalars(object):
         src_subsidence = eq_utils.source_by_subsidence_velocity(
             self._kernel_op, states[_KEY_RHO], zz, h[self._g_dim], h_t,
             self._g_dim)
-        source = tf.nest.map_structure(tf.add, source, src_subsidence)
+        source = tf.nest.map_structure(tf.math.add, source, src_subsidence)
 
       # Add external source, e.g. sponge forcing.
-      source = tf.nest.map_structure(tf.add, source, source_ext)
+      source = tf.nest.map_structure(tf.math.add, source, source_ext)
 
       # Compute the convection and diffusion terms.
       conv = [
@@ -624,8 +625,8 @@ class Scalars(object):
       replicas: A numpy array that maps grid coordinates to replica id numbers.
       states: A dictionary that holds field variables that are essential to
         compute the right hand side function of the scalar transport equation.
-        Must include the following fields: 'rho_u', 'rho_v', 'rho_w', 'p',
-        'rho', and 'e_t'.
+        Must include the following fields: 'rho_u', 'rho_v', 'rho_w', 'u', 'v',
+        'w', 'p', 'rho', and 'e_t'.
       additional_states: Helper states that are required by the scalar transport
         equation. Must contain 'diffusivity'. If 'zz' is not in
         `additional_states`, assumes the flow field is independent of height.
@@ -643,10 +644,11 @@ class Scalars(object):
     """
     if not isinstance(self.thermodynamics.model, water.Water):
       raise ValueError('The thermodynamics model has to be `Water` for the '
-                       'total energy equation. Current model is {}'.format(
+                       'total humidity equation. Current model is {}'.format(
                            self.thermodynamics.model))
     if 'e_t' not in states.keys():
-      raise ValueError('Expected e_t in states, got: {}'.format(states.keys()))
+      raise ValueError('Expected e_t in states used for total humidty '
+                       'equation, got: {}'.format(states.keys()))
 
     h = (self._params.dx, self._params.dy, self._params.dz)
     dt = self._params.dt
@@ -660,6 +662,16 @@ class Scalars(object):
     source_ext = self._source['q_t'] if self._source['q_t'] else [
         tf.zeros_like(rho_i) for rho_i in states[_KEY_RHO]
     ]
+
+    # Helper variables required by the Monin-Obukhov similarity theory.
+    helper_variables_most = {
+        'u': states[_KEY_U],
+        'v': states[_KEY_V],
+        'w': states[_KEY_W],
+    }
+    include_subsidence = (
+        self._scalars['q_t'].HasField('total_humidity') and
+        self._scalars['q_t'].total_humidity.include_subsidence)
 
     def scalar_function(q_t: Sequence[tf.Tensor]):
       """Computes the functional RHS for the three momentum equations.
@@ -677,6 +689,40 @@ class Scalars(object):
                                                'q_t', zz) for i in range(3)
       ]
 
+      # Compute the temperature if needed.
+      if include_subsidence or 'theta' not in additional_states:
+        if 'T' in additional_states.keys():
+          temperature = additional_states['T']
+        else:
+          e = self.thermodynamics.model.internal_energy_from_total_energy(
+              states['e_t'], states[_KEY_U], states[_KEY_V], states[_KEY_W], zz)
+          temperature = self.thermodynamics.model.saturation_adjustment(
+              e, states[_KEY_RHO], q_t)
+
+      if include_subsidence:
+        # Compute condensate mass fraction.
+        q_c = self.thermodynamics.model.saturation_excess(
+            temperature, states[_KEY_RHO], q_t)
+
+        # Source term from falling water (subsidence).
+        source = eq_utils.source_by_subsidence_velocity(self._kernel_op,
+                                                        states[_KEY_RHO], zz,
+                                                        h[self._g_dim], q_c,
+                                                        self._g_dim)
+        # Add external source, e.g. sponge forcing and subsidence.
+        source = tf.nest.map_structure(tf.math.add, source, source_ext)
+      else:
+        source = source_ext
+
+      # Compute the potential temperature.
+      if 'theta' in additional_states:
+        theta = additional_states['theta']
+      else:
+        buf = self.thermodynamics.model.potential_temperatures(
+            temperature, q_t, states[_KEY_RHO], zz)
+        theta = buf['theta_v']
+      helper_variables_most.update({'theta': theta})
+
       diff = self.diffusion_fn(
           self._kernel_op,
           replica_id,
@@ -685,27 +731,8 @@ class Scalars(object):
           states[_KEY_RHO],
           additional_states['diffusivity'],
           h,
-          scalar_name='q_t')
-
-      # Compute the temperature.
-      if 'T' in additional_states.keys():
-        temperature = additional_states['T']
-      else:
-        e = self.thermodynamics.model.internal_energy_from_total_energy(
-            states['e_t'], states[_KEY_U], states[_KEY_V], states[_KEY_W], zz)
-        temperature = self.thermodynamics.model.saturation_adjustment(
-            e, states[_KEY_RHO], q_t)
-      # Compute condensate mass fraction.
-      q_c = self.thermodynamics.model.saturation_excess(temperature,
-                                                        states[_KEY_RHO], q_t)
-      # Source term from falling water (subsidence).
-      source = eq_utils.source_by_subsidence_velocity(self._kernel_op,
-                                                      states[_KEY_RHO], zz,
-                                                      h[self._g_dim], q_c,
-                                                      self._g_dim)
-
-      # Add external source, e.g. sponge forcing.
-      source = tf.nest.map_structure(tf.add, source, source_ext)
+          scalar_name='q_t',
+          helper_variables=helper_variables_most)
 
       if dbg:
         return {

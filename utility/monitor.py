@@ -193,7 +193,7 @@ class Monitor(object):
       check_lower_bound = step > self._averaging_start_step
       check_upper_bound = (
           self._averaging_end_step is None or step <= self._averaging_end_step)
-      return tf.logical_and(check_lower_bound, check_upper_bound)
+      return tf.math.logical_and(check_lower_bound, check_upper_bound)
 
     def apply_time_filter(
         statistic: tf.Tensor,

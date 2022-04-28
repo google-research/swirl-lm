@@ -196,7 +196,7 @@ def newton_method_multi_dim(
                                          replicas)[norm_type.name]
 
       best_residual, best_x = tf.cond(
-          pred=tf.logical_or(
+          pred=tf.math.logical_or(
               tf.less_equal(i, 0), residual <= states.best_residual),
           # New best.
           true_fn=lambda: (residual, x),
@@ -233,7 +233,7 @@ def newton_method_multi_dim(
       # pylint: enable=g-complex-comprehension
 
     cond_max_iter = tf.less(i, max_iterations)
-    return tf.reduce_all(
+    return tf.math.reduce_all(
         input_tensor=(cond_max_iter, cond_value_not_converge,
                       cond_position_not_converge))
 
@@ -331,7 +331,7 @@ def newton_method(
               states['x0'], states['x']))
 
     cond_max_iter = tf.less(i, max_iterations)
-    return tf.reduce_all(
+    return tf.math.reduce_all(
         [cond_max_iter, cond_value_not_converge, cond_position_not_converge])
 
   i0 = tf.constant(0)

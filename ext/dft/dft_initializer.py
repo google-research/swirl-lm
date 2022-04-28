@@ -198,7 +198,7 @@ def gen_vandermonde_mat(
   """
   def vandermonde_fn(mat_dim0, mat_dim1, num_pts):
     coeff = -2.0 * _PI * _J / tf.cast(num_pts, dtype=_CTYPE)
-    return tf.exp(coeff * tf.multiply(mat_dim0, mat_dim1))
+    return tf.math.exp(coeff * tf.math.multiply(mat_dim0, mat_dim1))
 
   return _dft_partial_mesh_for_core(params, coordinate, vandermonde_fn,
                                     partition_dimension, partition_domain)

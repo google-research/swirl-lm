@@ -186,7 +186,7 @@ def get_fluid_solid_interface_value_z(
   cx, cy, _ = replicas.shape
   group_assignment = np.array(
       [replicas[i, j, :] for i, j in itertools.product(range(cx), range(cy))])
-  sum_op = lambda f: tf.reduce_sum(f, axis=0)
+  sum_op = lambda f: tf.math.reduce_sum(f, axis=0)
 
   return common_ops.global_reduce(
       tf.expand_dims(interface_val, 0), sum_op, group_assignment)
@@ -415,7 +415,7 @@ class ImmersedBoundaryMethod(object):
 
       def updated_mask(mask_i: tf.Tensor, boundary_i: tf.Tensor):
         """Generates a mask for points in the boundary and fluid."""
-        return tf.logical_or(
+        return tf.math.logical_or(
             tf.greater(mask_i, 0.0), tf.greater(boundary_i, 0.0))
 
       f = [

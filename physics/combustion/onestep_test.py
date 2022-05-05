@@ -187,9 +187,9 @@ class OnestepTest(tf.test.TestCase):
     for i in range(int(t_end / delta_t)):
       y_f, y_o, temperature = self.evaluate(states_new(y_f, y_o, temperature))
 
-      self.assertAlmostEqual(y_f[0][0, 0], expected[0][i], 3)
-      self.assertAlmostEqual(y_o[0][0, 0], expected[1][i], 3)
-      self.assertAlmostEqual(temperature[0][0, 0], expected[2][i], 3)
+      self.assertAllClose(y_f[0][0, 0], expected[0][i])
+      self.assertAllClose(y_o[0][0, 0], expected[1][i])
+      self.assertAllClose(temperature[0][0, 0], expected[2][i])
 
 
 if __name__ == '__main__':

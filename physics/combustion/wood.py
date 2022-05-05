@@ -48,15 +48,15 @@ import functools
 from typing import List, Optional, Sequence, Union
 
 import numpy as np
+from swirl_lm.numerics import time_integration
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.utility import get_kernel_fn
-from swirl_lm.utility import grid_parametrization  # pylint: disable=line-too-long
+from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import types
 import tensorflow as tf
 from google3.research.simulation.tensorflow.fluid.framework.tf1 import model_function  # pylint: disable=line-too-long
 from google3.research.simulation.tensorflow.fluid.framework.tf1 import step_updater
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_numerics  # pylint: disable=line-too-long
 
 # The Stefan-Boltzman constant, in unit of W/m^2/K^4.
 _SIGMA = 5.67e-8
@@ -552,14 +552,13 @@ class Wood(object):
 
       def substep_integration(scalars):
         """Integrates all fueld scalars by one substep."""
-        return (
-            incompressible_structured_mesh_numerics.time_advancement_explicit(
-                rhs_solid_phase,
-                dt,
-                self.reaction_integration_scheme,
-                scalars,
-                scalars,
-            ))
+        return time_integration.time_advancement_explicit(
+            rhs_solid_phase,
+            dt,
+            self.reaction_integration_scheme,
+            scalars,
+            scalars,
+        )
 
       dt = params.dt / self.n_step
       i_0 = tf.constant(0)
@@ -720,14 +719,13 @@ class Wood(object):
 
       def substep_integration(scalars):
         """Integrates all fueld scalars by one substep."""
-        return (
-            incompressible_structured_mesh_numerics.time_advancement_explicit(
-                rhs_solid_phase,
-                dt,
-                self.reaction_integration_scheme,
-                scalars,
-                scalars,
-            ))
+        return time_integration.time_advancement_explicit(
+            rhs_solid_phase,
+            dt,
+            self.reaction_integration_scheme,
+            scalars,
+            scalars,
+        )
 
       dt = params.dt / self.n_step
       i_0 = tf.constant(0)

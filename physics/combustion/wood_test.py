@@ -75,7 +75,7 @@ class WoodTest(tf.test.TestCase, parameterized.TestCase):
         wood._reaction_rate(rho_f, rho_g, y_o, tke, temperature, s_b, s_x,
                             c_f))
 
-    self.assertAlmostEqual(f_f, 1.8297792501, 6)
+    self.assertAllClose(f_f, 1.8297792501)
 
   @parameterized.named_parameters(
       ('BelowThreshold', 289.0, 0.0, 0.0),
@@ -93,10 +93,10 @@ class WoodTest(tf.test.TestCase, parameterized.TestCase):
     f_w, phi = self.evaluate(wood._evaporation(t, phi_max, rho_m, dt, c_w))
 
     with self.subTest(name='EvaporationRate'):
-      self.assertAlmostEqual(expected_f_w, f_w)
+      self.assertAllClose(expected_f_w, f_w)
 
     with self.subTest(name='WaterCDF'):
-      self.assertAlmostEqual(expected_phi, phi)
+      self.assertAllClose(expected_phi, phi)
 
   def testDryWoodUpdateFnProducesCorrectUpdatesForDryWoodCombustion(self):
     """Checks if all relevant states are updated correctly."""

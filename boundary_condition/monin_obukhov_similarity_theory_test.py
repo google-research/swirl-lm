@@ -496,7 +496,7 @@ class MoninObukhovSimilarityTheoryTest(tf.test.TestCase,
     l = self.evaluate(self.model._compute_obukhov_length(m, temperature, z_m))
 
     expected = -101.02896973586881
-    self.assertAlmostEqual(expected, l, 4)
+    self.assertAllClose(expected, l, atol=1e-4)
 
   @parameterized.named_parameters(
       ('Case00', True, ('bc_u_2_0', 'bc_v_2_0', 'bc_T_2_0')),

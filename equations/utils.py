@@ -3,11 +3,11 @@
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Text, Union
 import numpy as np
 from swirl_lm.boundary_condition import monin_obukhov_similarity_theory
+from swirl_lm.numerics import calculus
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 import tensorflow as tf
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_numerics
 
 # Parameters required by source terms due to subsidence velocity. Reference:
 # Siebesma, A. Pier, A. Pier Siebesma, Christopher S. Bretherton, Andrew Brown,
@@ -65,10 +65,7 @@ def shear_stress(
     The 9 component stress stress tensor for each grid point. Values in the halo
     with width 1 is invalid.
   """
-  # TODO(b/150696474): Fold this into a utility library and call it when
-  # gradient is computed.
-  du_dx = incompressible_structured_mesh_numerics.grad(kernel_op, [u, v, w],
-                                                       [dx, dy, dz])
+  du_dx = calculus.grad(kernel_op, [u, v, w], [dx, dy, dz])
 
   du_11 = du_dx[0][0]
   du_12 = du_dx[0][1]
@@ -210,8 +207,10 @@ def shear_flux(params: incompressible_structured_mesh_config
         df = kernel_op.apply_kernel_op_x(f, 'ksx')
       elif dim == 1:
         df = kernel_op.apply_kernel_op_y(f, 'ksy')
-      else:  # dim == 2
+      elif dim == 2:
         df = kernel_op.apply_kernel_op_z(f, 'ksz', 'kszsh')
+      else:
+        raise ValueError('Unsupport dimension: {}'.format(dim))
 
       return [df_i / 2.0 for df_i in df]
 
@@ -221,8 +220,10 @@ def shear_flux(params: incompressible_structured_mesh_config
         df = kernel_op.apply_kernel_op_x(f, 'kDx')
       elif dim == 1:
         df = kernel_op.apply_kernel_op_y(f, 'kDy')
-      else:  # dim == 2
+      elif dim == 2:
         df = kernel_op.apply_kernel_op_z(f, 'kDz', 'kDzsh')
+      else:
+        raise ValueError('Unsupport dimension: {}'.format(dim))
 
       return [df_i / (2.0 * h) for df_i in df]
 
@@ -232,8 +233,10 @@ def shear_flux(params: incompressible_structured_mesh_config
         df = kernel_op.apply_kernel_op_x(f, 'kdx')
       elif dim == 1:
         df = kernel_op.apply_kernel_op_y(f, 'kdy')
-      else:  # dim == 2
+      elif dim == 2:
         df = kernel_op.apply_kernel_op_z(f, 'kdz', 'kdzsh')
+      else:
+        raise ValueError('Unsupport dimension: {}'.format(dim))
 
       return [df_i / h for df_i in df]
 
@@ -352,7 +355,7 @@ def shear_flux(params: incompressible_structured_mesh_config
         tau32 = common_ops.tensor_scatter_1d_update_global(
             replica_id, replicas, tau32, most.vertical_dim, core_index,
             plane_index, tau_s2)
-      else:  # most.vertical_dim == 2
+      elif most.vertical_dim == 2:
         # `tau_s1` corresponds to the third shear stress component for the u
         # velocity, and `tau_s2` corresponds to the third shear stress component
         # for the v velocity.
@@ -362,6 +365,8 @@ def shear_flux(params: incompressible_structured_mesh_config
         tau23 = common_ops.tensor_scatter_1d_update_global(
             replica_id, replicas, tau23, most.vertical_dim, core_index,
             plane_index, tau_s2)
+      else:
+        raise ValueError('Unsupport dimension: {}'.format(most.vertical_dim))
 
     return {
         'xx': tau11,

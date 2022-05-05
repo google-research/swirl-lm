@@ -37,6 +37,7 @@ from swirl_lm.numerics import convection
 from swirl_lm.numerics import diffusion
 from swirl_lm.numerics import filters
 from swirl_lm.numerics import numerics_pb2
+from swirl_lm.numerics import time_integration
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import water
 from swirl_lm.utility import common_ops
@@ -46,7 +47,6 @@ from swirl_lm.utility import monitor
 import tensorflow as tf
 from google3.research.simulation.tensorflow.fluid.framework import util
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_numerics
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import physical_variable_keys_manager
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import sgs_model
 
@@ -611,8 +611,8 @@ class Velocity(object):
     v_mid = common_ops.average(states[_KEY_V], states_0[_KEY_V])
     w_mid = common_ops.average(states[_KEY_W], states_0[_KEY_W])
 
-    states_mid = {_KEY_U: u_mid, _KEY_V: v_mid, _KEY_W: w_mid}
-    states_mid.update(states_0)
+    states_mid = {key: val for key, val in states_0.items()}
+    states_mid.update({_KEY_U: u_mid, _KEY_V: v_mid, _KEY_W: w_mid})
     helper_variables = self._update_helper_variables(states_mid,
                                                      additional_states)
 
@@ -632,12 +632,11 @@ class Velocity(object):
                                          mu, states[_KEY_P],
                                          states_0['rho_thermal'], forces)
 
-    rho_u, rho_v, rho_w = (
-        incompressible_structured_mesh_numerics.time_advancement_explicit(
-            functools.partial(momentum_rhs, u=u_mid, v=v_mid, w=w_mid),
-            self._params.dt, self._params.time_integration_scheme,
-            (states_0[_KEY_RHO_U], states_0[_KEY_RHO_V], states_0[_KEY_RHO_W]),
-            (states[_KEY_RHO_U], states[_KEY_RHO_V], states[_KEY_RHO_W])))
+    rho_u, rho_v, rho_w = time_integration.time_advancement_explicit(
+        functools.partial(momentum_rhs, u=u_mid, v=v_mid, w=w_mid),
+        self._params.dt, self._params.time_integration_scheme,
+        (states_0[_KEY_RHO_U], states_0[_KEY_RHO_V], states_0[_KEY_RHO_W]),
+        (states[_KEY_RHO_U], states[_KEY_RHO_V], states[_KEY_RHO_W]))
 
     if self._dbg is not None:
       rho_u_m = common_ops.average(states_0[_KEY_RHO_U], rho_u)

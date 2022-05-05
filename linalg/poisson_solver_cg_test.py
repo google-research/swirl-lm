@@ -343,7 +343,7 @@ class PoissonSolverCGTest(tf.test.TestCase, parameterized.TestCase):
       # Actual convergence criterion: l2 norm.
       self.assertGreaterEqual(1e-10, l2_norm)
 
-      self.assertAlmostEqual(1, component_wise_distance, places=6)
+      self.assertAllClose(1, component_wise_distance)
 
     # Nondeterministic with `step_fn_zeromean_random_initial_values`.
     self.assertGreaterEqual(2000, iterations)

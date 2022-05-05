@@ -325,40 +325,35 @@ class PressureTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllClose(monitor_vars['MONITOR_pressure_raw_dp'], np.stack(dp))
 
     if isinstance(rho_info, pressure.ConstantDensityInfo):
-      self.assertAlmostEqual(dp[1][1, 1], np.float32(-7.2041254), 6)
-      self.assertAlmostEqual(dp[1][2, 1], np.float32(-6.099423), 6)
-      self.assertAlmostEqual(dp[1][1, 2], np.float32(-10.6219225), 6)
-      self.assertAlmostEqual(dp[2][1, 1], np.float32(1.1349825), 6)
+      self.assertAllClose(dp[1][1, 1], np.float32(-7.2041254))
+      self.assertAllClose(dp[1][2, 1], np.float32(-6.099423))
+      self.assertAllClose(dp[1][1, 2], np.float32(-10.6219225))
+      self.assertAllClose(dp[2][1, 1], np.float32(1.1349825))
 
-      self.assertAlmostEqual(
-          monitor_vars['MONITOR_pressure_convergence_l-1'], 32439.387, 3)
-      self.assertAlmostEqual(
-          monitor_vars['MONITOR_pressure_convergence_l-inf'], 471.82547, 5)
+      self.assertAllClose(monitor_vars['MONITOR_pressure_convergence_l-1'],
+                          32439.387)
+      self.assertAllClose(monitor_vars['MONITOR_pressure_convergence_l-inf'],
+                          471.82547)
 
-      self.assertAlmostEqual(monitor_vars['MONITOR_pressure_scalar_b-l-inf'],
-                             814.1482, 4)
-      self.assertAlmostEqual(
-          monitor_vars['MONITOR_pressure_scalar_b-term-div-l-1'], 92682.0, 2)
-      self.assertAlmostEqual(
-          monitor_vars['MONITOR_pressure_scalar_b-term-drho-dt-l-2'], 0.0, 6)
-      self.assertAlmostEqual(
-          monitor_vars['MONITOR_pressure_scalar_b-term-source-rho-l-inf'], 0.0,
-          6)
-      self.assertAlmostEqual(monitor_vars['MONITOR_pressure_scalar_dp-l-2'],
-                             107.47147, 5)
-      self.assertAlmostEqual(monitor_vars['MONITOR_pressure_scalar_p-l-1'],
-                             2968.0, 3)
+      self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_b-l-inf'],
+                          814.1482, 4)
+      self.assertAllClose(
+          monitor_vars['MONITOR_pressure_scalar_b-term-div-l-1'], 92682.0)
+      self.assertAllClose(
+          monitor_vars['MONITOR_pressure_scalar_b-term-drho-dt-l-2'], 0.0)
+      self.assertAllClose(
+          monitor_vars['MONITOR_pressure_scalar_b-term-source-rho-l-inf'], 0.0)
+      self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_dp-l-2'],
+                          107.47147)
+      self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-l-1'], 2968.0)
 
       # Sampling the raw convergence
-      self.assertAlmostEqual(
-          monitor_vars['MONITOR_pressure_raw_convergence'][1, 1, 3], -214.11798,
-          5)
-      self.assertAlmostEqual(
-          monitor_vars['MONITOR_pressure_raw_convergence'][3, 3, 2], -98.12996,
-          5)
-      self.assertAlmostEqual(
-          monitor_vars['MONITOR_pressure_raw_convergence'][6, 5, 5], 187.4802,
-          4)
+      self.assertAllClose(
+          monitor_vars['MONITOR_pressure_raw_convergence'][1, 1, 3], -214.11798)
+      self.assertAllClose(
+          monitor_vars['MONITOR_pressure_raw_convergence'][3, 3, 2], -98.12996)
+      self.assertAllClose(
+          monitor_vars['MONITOR_pressure_raw_convergence'][6, 5, 5], 187.4802)
 
       if subiter is not None:
         l2_expected = np.zeros(3)
@@ -374,41 +369,35 @@ class PressureTest(tf.test.TestCase, parameterized.TestCase):
             l_inf_expected)
 
     elif isinstance(rho_info, pressure.VariableDensityInfo):
-      self.assertAlmostEqual(dp[1][1, 1], np.float32(283.92685), 6)
-      self.assertAlmostEqual(dp[1][2, 1], np.float32(272.26965), 6)
-      self.assertAlmostEqual(dp[1][1, 2], np.float32(278.9138), 6)
-      self.assertAlmostEqual(dp[2][1, 1], np.float32(190.17072), 6)
+      self.assertAllClose(dp[1][1, 1], np.float32(283.92685))
+      self.assertAllClose(dp[1][2, 1], np.float32(272.26965))
+      self.assertAllClose(dp[1][1, 2], np.float32(278.9138))
+      self.assertAllClose(dp[2][1, 1], np.float32(190.17072))
 
-      self.assertAlmostEqual(
-          monitor_vars['MONITOR_pressure_convergence_l-1'], 2036889.5, 1)
-      self.assertAlmostEqual(
-          monitor_vars['MONITOR_pressure_convergence_l-inf'], 17619.986, 3)
+      self.assertAllClose(monitor_vars['MONITOR_pressure_convergence_l-1'],
+                          2036889.5)
+      self.assertAllClose(monitor_vars['MONITOR_pressure_convergence_l-inf'],
+                          17619.986)
 
-      self.assertAlmostEqual(monitor_vars['MONITOR_pressure_scalar_b-l-inf'],
-                             26064.148, 3)
-      self.assertAlmostEqual(
-          monitor_vars['MONITOR_pressure_scalar_b-term-div-l-1'], 92682.0, 2)
-      self.assertAlmostEqual(
-          monitor_vars['MONITOR_pressure_scalar_b-term-drho-dt-l-2'], 667894.1,
-          1)
-      self.assertAlmostEqual(
-          monitor_vars['MONITOR_pressure_scalar_b-term-source-rho-l-inf'], 0.0,
-          6)
-      self.assertAlmostEqual(monitor_vars['MONITOR_pressure_scalar_dp-l-2'],
-                             4485.634, 3)
-      self.assertAlmostEqual(monitor_vars['MONITOR_pressure_scalar_p-l-1'],
-                             2968.0, 3)
+      self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_b-l-inf'],
+                          26064.148)
+      self.assertAllClose(
+          monitor_vars['MONITOR_pressure_scalar_b-term-div-l-1'], 92682.0)
+      self.assertAllClose(
+          monitor_vars['MONITOR_pressure_scalar_b-term-drho-dt-l-2'], 667894.1)
+      self.assertAllClose(
+          monitor_vars['MONITOR_pressure_scalar_b-term-source-rho-l-inf'], 0.0)
+      self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_dp-l-2'],
+                          4485.634)
+      self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-l-1'], 2968.0)
 
       # Sampling the raw convergence
-      self.assertAlmostEqual(
-          monitor_vars['MONITOR_pressure_raw_convergence'][1, 1, 3], 17414.74,
-          2)
-      self.assertAlmostEqual(
-          monitor_vars['MONITOR_pressure_raw_convergence'][3, 3, 2], 3651.8704,
-          4)
-      self.assertAlmostEqual(
-          monitor_vars['MONITOR_pressure_raw_convergence'][6, 5, 5], -16754.139,
-          3)
+      self.assertAllClose(
+          monitor_vars['MONITOR_pressure_raw_convergence'][1, 1, 3], 17414.74)
+      self.assertAllClose(
+          monitor_vars['MONITOR_pressure_raw_convergence'][3, 3, 2], 3651.8704)
+      self.assertAllClose(
+          monitor_vars['MONITOR_pressure_raw_convergence'][6, 5, 5], -16754.139)
 
       if subiter is not None:
         l2_expected = np.zeros(3)
@@ -428,19 +417,17 @@ class PressureTest(tf.test.TestCase, parameterized.TestCase):
     self.assertEqual(
         monitor_vars['MONITOR_pressure_convergence_solver-iterations'], 1)
 
-    self.assertAlmostEqual(monitor_vars['MONITOR_pressure_scalar_p-rho-u-l-1'],
-                           650.0, 3)
-    self.assertAlmostEqual(monitor_vars['MONITOR_pressure_scalar_p-rho-v-l-2'],
-                           40.211937, 5)
-    self.assertAlmostEqual(
-        monitor_vars['MONITOR_pressure_scalar_p-rho-w-l-inf'], 4.0, 6)
+    self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-rho-u-l-1'],
+                        650.0)
+    self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-rho-v-l-2'],
+                        40.211937)
+    self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-rho-w-l-inf'],
+                        4.0)
 
-    self.assertAlmostEqual(monitor_vars['MONITOR_pressure_scalar_p-u-l-inf'],
-                           3.0, 6)
-    self.assertAlmostEqual(monitor_vars['MONITOR_pressure_scalar_p-v-l-2'],
-                           40.211937, 5)
-    self.assertAlmostEqual(monitor_vars['MONITOR_pressure_scalar_p-w-l-1'],
-                           564.0, 3)
+    self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-u-l-inf'], 3.0)
+    self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-v-l-2'],
+                        40.211937)
+    self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-w-l-1'], 564.0)
 
 
 if __name__ == '__main__':

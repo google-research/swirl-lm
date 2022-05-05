@@ -172,15 +172,15 @@ class GridParametrizationTest(tf.test.TestCase, parameterized.TestCase):
     actual = (grid_parametrization.GridParametrization.
               create_from_grid_lengths_and_etc_with_defaults(grid_lengths))
 
-    self.assertAlmostEqual(actual.lx, grid_lengths[0])
-    self.assertAlmostEqual(actual.ly, grid_lengths[1])
-    self.assertAlmostEqual(actual.lz, grid_lengths[2])
+    self.assertAllClose(actual.lx, grid_lengths[0])
+    self.assertAllClose(actual.ly, grid_lengths[1])
+    self.assertAllClose(actual.lz, grid_lengths[2])
 
     # If `computation_shape` and `subgrid_spacings` have default values,
     # `grid_lengths` are grid spacings.
-    self.assertAlmostEqual(actual.dx, lx)
-    self.assertAlmostEqual(actual.dy, ly)
-    self.assertAlmostEqual(actual.dz, lz)
+    self.assertAllClose(actual.dx, lx)
+    self.assertAllClose(actual.dy, ly)
+    self.assertAllClose(actual.dz, lz)
 
 
 if __name__ == '__main__':

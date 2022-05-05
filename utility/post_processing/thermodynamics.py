@@ -175,14 +175,14 @@ class Water(object):
     """
     return self._potential_temperatures('theta_v', t, q_t, rho, zz)
 
-  def liquid_potential_temperature(
+  def liquid_ice_potential_temperature(
       self,
       t: np.ndarray,
       q_t: np.ndarray,
       rho: np.ndarray,
       zz: np.ndarray,
   ) -> np.ndarray:
-    """Computes the liquid potential temperature.
+    """Computes the liquid-ice potential temperature.
 
     Args:
       t: The temperature, in units of K.
@@ -191,9 +191,9 @@ class Water(object):
       zz: The coordinates in the vertical direction, in units of m.
 
     Returns:
-      The liquid water potential temperature specified.
+      The liquid-ice potential temperature specified.
     """
-    return self._potential_temperatures('theta_l', t, q_t, rho, zz)
+    return self._potential_temperatures('theta_li', t, q_t, rho, zz)
 
   def temperature(
       self,

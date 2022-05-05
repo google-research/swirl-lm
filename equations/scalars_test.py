@@ -1,5 +1,7 @@
 """Tests for google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh.equations.scalars."""
 
+import itertools
+
 from absl import flags
 from absl.testing import parameterized
 import numpy as np
@@ -199,7 +201,7 @@ class ScalarsTest(tf.test.TestCase, parameterized.TestCase):
 
     self.assertLen(rhs_sc, 8)
 
-    self.assertAlmostEqual(rhs_sc[1][1, 1], np.float32(1.026), 5)
+    self.assertAllClose(rhs_sc[1][1, 1], np.float32(1.026))
 
   def testConservativeScalarUpdatesOutputsCorrectTensorWithDebugMode(self):
     """Function value at [1, 1, 1] is correct."""
@@ -228,84 +230,97 @@ class ScalarsTest(tf.test.TestCase, parameterized.TestCase):
     terms = self.evaluate(scalar_rhs(self.sc))
 
     with self.subTest(name='ConvectionX'):
-      self.assertAlmostEqual(terms['conv_x'][1][1, 1], 0.05, 5)
+      self.assertAllClose(terms['conv_x'][1][1, 1], 0.05)
 
     with self.subTest(name='ConvectionY'):
-      self.assertAlmostEqual(terms['conv_y'][1][1, 1], -1.2, 5)
+      self.assertAllClose(terms['conv_y'][1][1, 1], -1.2)
 
     with self.subTest(name='ConvectionZ'):
-      self.assertAlmostEqual(terms['conv_z'][1][1, 1], 0.1, 5)
+      self.assertAllClose(terms['conv_z'][1][1, 1], 0.1)
 
     with self.subTest(name='DiffusionX'):
-      self.assertAlmostEqual(terms['diff_x'][1][1, 1], 0.0, 5)
+      self.assertAllClose(terms['diff_x'][1][1, 1], 0.0)
 
     with self.subTest(name='DiffusionY'):
-      self.assertAlmostEqual(terms['diff_y'][1][1, 1], 0.0, 5)
+      self.assertAllClose(terms['diff_y'][1][1, 1], 0.0)
 
     with self.subTest(name='DiffusionZ'):
-      self.assertAlmostEqual(terms['diff_z'][1][1, 1], -0.024, 5)
+      self.assertAllClose(terms['diff_z'][1][1, 1], -0.024)
 
     with self.subTest(name='Source'):
-      self.assertAlmostEqual(terms['source'][1][1, 1], 0.0, 5)
+      self.assertAllClose(terms['source'][1][1, 1], 0.0)
 
-  def testEtUpdatesOutputsCorrectTensor(self):
+  @parameterized.parameters(*list(itertools.product([True, False], repeat=3)))
+  def testEtUpdatesOutputsCorrectTensor(self, include_radiation,
+                                        include_subsidence,
+                                        include_precipitation):
     """Total energy RHS value at [4, 4, 4] is correct."""
-    for include_subsidence in [False, True]:
-      pbtxt = (
-          self._GRAVITY_AND_THERMODYNAMICS_PBTXT + R'scalars {  '
-          R'  name: "e_t"  '
-          R'  total_energy{  '
-          R'    include_radiation: true  '
-          R'    include_subsidence: ' +
-          (R'true ' if include_subsidence else R'false ') + R'  }'
-          R'}')
-      model = self.set_up_scalars(False, pbtxt)
+    pbtxt = (
+        self._GRAVITY_AND_THERMODYNAMICS_PBTXT + R'scalars {  '
+        R'  name: "e_t"  '
+        R'  total_energy {  '
+        R'    include_radiation:  ' +
+        (R'true' if include_radiation else R'false') +
+        R'    include_subsidence:  ' +
+        (R'true' if include_subsidence else R'false') +
+        R'    include_precipitation:  ' +
+        (R'true' if include_precipitation else R'false') + R'  }'
+        R'}')
+    model = self.set_up_scalars(False, pbtxt)
 
-      ones = tf.ones((int(4), 8, 8), dtype=tf.float32)
-      buf = np.zeros((8, 8, 8), dtype=np.float32)
-      buf[4, 4, 4] = 2
-      u = tf.unstack(tf.convert_to_tensor(buf))
+    ones = tf.ones((int(4), 8, 8), dtype=tf.float32)
+    buf = np.zeros((8, 8, 8), dtype=np.float32)
+    buf[4, 4, 4] = 2
+    u = tf.unstack(tf.convert_to_tensor(buf))
 
-      buf = np.zeros((8, 8, 8), dtype=np.float32)
-      buf[4, 4, 4] = -3
-      v = tf.unstack(tf.convert_to_tensor(buf))
+    buf = np.zeros((8, 8, 8), dtype=np.float32)
+    buf[4, 4, 4] = -3
+    v = tf.unstack(tf.convert_to_tensor(buf))
 
-      buf = np.zeros((8, 8, 8), dtype=np.float32)
-      buf[4, 4, 4] = 4
-      w = tf.unstack(tf.convert_to_tensor(buf))
-      states = {
-          'u': u,
-          'v': v,
-          'w': w,
-          'rho_u': u,
-          'rho_v': v,
-          'rho_w': w,
-          'p': self.p,
-          'rho': [tf.ones_like(u, dtype=tf.float32) for u in self.u],
-          'q_t': tf.unstack(tf.concat([0.009 * ones, 0.0015 * ones], axis=0)),
-      }
-      zz = np.transpose(
-          np.tile(np.linspace(600.0, 1000.0, 8, dtype=np.float32), (8, 8, 1)),
-          (2, 0, 1))
-      additional_states = {
-          'diffusivity': [
-              1e-2 * tf.ones_like(u, dtype=tf.float32) for u in self.u
-          ],
-          'nu_t': [1e-2 * tf.ones_like(u, dtype=tf.float32) for u in self.u],
-          'zz': tf.unstack(tf.convert_to_tensor(zz)),
-      }
-      sc = tf.unstack(tf.concat([1.5e4 * ones, 1.8e4 * ones], axis=0))
+    buf = np.zeros((8, 8, 8), dtype=np.float32)
+    buf[4, 4, 4] = 4
+    w = tf.unstack(tf.convert_to_tensor(buf))
+    states = {
+        'u': u,
+        'v': v,
+        'w': w,
+        'rho_u': u,
+        'rho_v': v,
+        'rho_w': w,
+        'p': self.p,
+        'rho': [tf.ones_like(u, dtype=tf.float32) for u in self.u],
+        'q_t': tf.unstack(tf.concat([0.009 * ones, 0.0015 * ones], axis=0)),
+        'q_r': tf.unstack(tf.concat([0.0008 * ones, 0.0005 * ones], axis=0)),
+    }
+    zz = np.transpose(
+        np.tile(np.linspace(600.0, 1000.0, 8, dtype=np.float32), (8, 8, 1)),
+        (2, 0, 1))
+    additional_states = {
+        'diffusivity': [
+            1e-2 * tf.ones_like(u, dtype=tf.float32) for u in self.u
+        ],
+        'nu_t': [1e-2 * tf.ones_like(u, dtype=tf.float32) for u in self.u],
+        'zz': tf.unstack(tf.convert_to_tensor(zz)),
+    }
+    sc = tf.unstack(tf.concat([1.5e4 * ones, 1.8e4 * ones], axis=0))
 
-      replica_id = tf.constant(0)
-      replicas = np.array([[[0]]])
-      scalar_rhs = model._e_t_update(replica_id, replicas, states,
-                                     additional_states)
+    replica_id = tf.constant(0)
+    replicas = np.array([[[0]]])
+    scalar_rhs = model._e_t_update(replica_id, replicas, states,
+                                   additional_states)
 
-      rhs_e_t = self.evaluate(scalar_rhs(sc))
+    rhs_e_t = self.evaluate(scalar_rhs(sc))
 
-      self.assertLen(rhs_e_t, 8)
-      expected = -18340.791 if include_subsidence else -18359.148
-      self.assertAlmostEqual(rhs_e_t[4][4, 4], np.float32(expected), 5)
+    self.assertLen(rhs_e_t, 8)
+    expected_all = [[[-18347.69, -18356.73], [-18329.33, -18338.37]],
+                    [[-18359.15, -18368.19], [-18340.79, -18349.83]]]
+    expected = (
+        expected_all[int(include_radiation)][int(include_subsidence)][int(
+            include_precipitation)])
+    #    expected = -18340.791 if include_subsidence else -18359.148
+    actual = rhs_e_t[4][4, 4]
+    print('actual = {}, expected = {}'.format(actual, expected))
+    self.assertAllClose(actual, np.float32(expected))
 
   @parameterized.parameters(
       {
@@ -419,7 +434,7 @@ class ScalarsTest(tf.test.TestCase, parameterized.TestCase):
     rhs = self.evaluate(scalar_rhs(sc))
 
     self.assertLen(rhs, 8)
-    self.assertAlmostEqual(rhs[1][1, 1], np.float32(expected), 6)
+    self.assertAllClose(rhs[1][1, 1], np.float32(expected))
 
 
 if __name__ == '__main__':

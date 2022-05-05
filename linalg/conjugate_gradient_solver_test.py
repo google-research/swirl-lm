@@ -257,7 +257,7 @@ class ConjugateGradientSolverTest(tf.test.TestCase, parameterized.TestCase):
     iterations = poisson_solver_solution[_ITERATIONS]
 
     self.assertIsInstance(l2_norm, expected_np_dtype_l2_norm)
-    self.assertAlmostEqual(expected_l2_norm, l2_norm, places=6)
+    self.assertAllClose(expected_l2_norm, l2_norm)
 
     self.assertIsInstance(iterations, np.int32)
     self.assertEqual(expected_iterations, iterations)
@@ -326,7 +326,7 @@ class ConjugateGradientSolverTest(tf.test.TestCase, parameterized.TestCase):
     l2_norm = poisson_solver_solution[_RESIDUAL_L2_NORM]
     iterations = poisson_solver_solution[_ITERATIONS]
 
-    self.assertAlmostEqual(expected_l2_norm, l2_norm, places=6)
+    self.assertAllClose(expected_l2_norm, l2_norm)
     self.assertEqual(expected_iterations, iterations)
 
     # 1. Comparing a^-1 * b vs x
@@ -369,7 +369,7 @@ class ConjugateGradientSolverTest(tf.test.TestCase, parameterized.TestCase):
     f_0 = tpu_res[0][_X]
     f_1 = tpu_res[1][_X]
 
-    self.assertAlmostEqual(0., l2_norm)
+    self.assertAllClose(0., l2_norm)
     self.assertEqual(2, iterations)
 
     f = np.concatenate([f_0[1:-1], f_1[1:-1]], axis=0)
@@ -541,7 +541,7 @@ class ConjugateGradientSolverTest(tf.test.TestCase, parameterized.TestCase):
     rhs_actual = halo_exchange.clear_halos(rhs_actual, halo_width)
     rhs_actual_val = self.evaluate(rhs_actual)
 
-    self.assertAlmostEqual(1.6139717e-05, l2_norm)
+    self.assertAllClose(1.6139717e-05, l2_norm)
     self.assertEqual(32, iterations)
 
     self.assertLen(rhs_actual_val, len(rhs_val))
@@ -597,7 +597,7 @@ class ConjugateGradientSolverTest(tf.test.TestCase, parameterized.TestCase):
     f_0 = tpu_res[0][_X]
     f_1 = tpu_res[1][_X]
 
-    self.assertAlmostEqual(4.9148656e-14, l2_norm)
+    self.assertAllClose(4.9148656e-14, l2_norm)
     self.assertEqual(2, iterations)
 
     self.assertLen(

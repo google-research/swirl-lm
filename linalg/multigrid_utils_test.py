@@ -182,10 +182,10 @@ class MultigridUtilsTest(tf.test.TestCase, parameterized.TestCase):
 
     max_diff = np.abs(x_actual - x_expected).max()
 
-    self.assertAlmostEqual(max_diff / expected_max_diff, 1, places=2)
+    self.assertAllClose(max_diff, expected_max_diff, rtol=1e-3)
 
     residual_norm = multigrid_utils.poisson_residual_norm(x_actual, b)
-    self.assertAlmostEqual(residual_norm / expected_norm, 1, places=2)
+    self.assertAllClose(residual_norm, expected_norm, rtol=3e-3)
 
     # Check that x borders are equal to b borders.
     self.assertBordersEqual(x_actual, b, atol=borders_equal_atol)
@@ -207,9 +207,10 @@ class MultigridUtilsTest(tf.test.TestCase, parameterized.TestCase):
     x_expected, x_actual = self.evaluate((x_expected, x_actual))
 
     self.assertAllClose(x_actual, x_expected, atol=atol)
-    self.assertAlmostEqual(
-        multigrid_utils.poisson_residual_norm(x_actual, b) / norm_expected, 1,
-        places=2)
+    self.assertAllClose(
+        multigrid_utils.poisson_residual_norm(x_actual, b),
+        norm_expected,
+        rtol=1e-3)
 
     # Check that x borders are equal to b borders.
     self.assertBordersEqual(x_actual, b, atol)
@@ -229,9 +230,10 @@ class MultigridUtilsTest(tf.test.TestCase, parameterized.TestCase):
     x_actual = multigrid_utils.matmul(a_inv, b)
 
     self.assertAllClose(x_actual, x_expected, atol=atol)
-    self.assertAlmostEqual(
-        multigrid_utils.poisson_residual_norm(x_actual, b) / norm_expected, 1,
-        places=2)
+    self.assertAllClose(
+        multigrid_utils.poisson_residual_norm(x_actual, b),
+        norm_expected,
+        rtol=1e-4)
 
     # Check that x borders are equal to b borders.
     self.assertBordersEqual(x_actual, b, atol)
@@ -279,7 +281,7 @@ class MultigridUtilsTest(tf.test.TestCase, parameterized.TestCase):
     exact = self.evaluate(
         multigrid_utils.matmul(a_inv, tf.convert_to_tensor(self.b)))
 
-    self.assertAlmostEqual(np.abs(actual - exact).max(), 0.0376, places=4)
+    self.assertAllClose(np.abs(actual - exact).max(), 0.0376, atol=1e-4)
 
     # Run Jacobi further to confirm that the error decreases.
     actual = self.evaluate(
@@ -287,7 +289,7 @@ class MultigridUtilsTest(tf.test.TestCase, parameterized.TestCase):
             tf.convert_to_tensor(actual), tf.convert_to_tensor(self.b),
             self.params, n, weight))
 
-    self.assertAlmostEqual(np.abs(actual - exact).max(), 0.008, places=4)
+    self.assertAllClose(np.abs(actual - exact).max(), 0.008, atol=1e-5)
 
   BCTYPES = (BCType.DIRICHLET, BCType.NEUMANN)
   PARAMS = itertools.product(BCTYPES, BCTYPES, range(1, 4))

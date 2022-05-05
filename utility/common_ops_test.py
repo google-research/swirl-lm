@@ -720,8 +720,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         typed_norm_i = typed_norms_i[norm_type_str]
 
         self.assertIsInstance(typed_norm_i, dtypes[1])
-        self.assertAlmostEqual(
-            expected_typed_norms[norm_type_str], typed_norm_i, places=6)
+        self.assertAllClose(expected_typed_norms[norm_type_str], typed_norm_i)
 
   def testCrossReplicaGather(self):
     num_replicas = 8

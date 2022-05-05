@@ -154,11 +154,18 @@ message Water {
 
   // An option of the reference state. This option assumes the potential
   // temperature is a constant.
+  // Next id: 5
   message ConstThetaReferenceState {
     // An indicator of whether constant potential temperature is used to define
     // the reference/hydrostatic pressure. Do not define this field if the
     // potential temperature in the simulation setup is not a constant.
     optional float theta = 1;
+    // The total humidity in the reference state.
+    optional float q_t = 2;
+    // The liquid humidity in the reference state.
+    optional float q_l = 3;
+    // The ice humidity in the reference state.
+    optional float q_i = 4;
   }
 
   // An option of the reference state. This option assumes the thermodynamic

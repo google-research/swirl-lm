@@ -61,7 +61,7 @@ class MultigridTest(tf.test.TestCase, parameterized.TestCase):
       actual = tpu.run(lambda: mg_cycle_fn(tf.convert_to_tensor(actual), b))[0]
       max_relative_diff = np.max(np.abs(actual - expected) / expected)
       with self.subTest(name='rtol={}'.format(rtol)):
-        self.assertAlmostEqual(max_relative_diff, rtol, delta=rtol / 1000)
+        self.assertAllClose(max_relative_diff, rtol, atol=rtol / 1000)
 
   def test_mg_cycle_1d_np_no_source_start_away_from_soln(self):
     """mg_cycle 1D np: Convergence to exact solution."""
@@ -75,7 +75,7 @@ class MultigridTest(tf.test.TestCase, parameterized.TestCase):
       actual = mg_cycle_fn(actual, b)
       max_relative_diff = np.max(np.abs(actual - expected) / expected)
       with self.subTest(name='rtol={}'.format(rtol)):
-        self.assertAlmostEqual(max_relative_diff, rtol, delta=rtol / 800)
+        self.assertAllClose(max_relative_diff, rtol, atol=rtol / 800)
 
   def test_mg_cycle_2d_tf_no_source_start_at_soln(self):
     """mg_cycle 2D tf: No change when starting at the solution."""

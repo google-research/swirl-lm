@@ -31,6 +31,31 @@ pytype_strict_library(
     ],
 )
 
+pytype_strict_library(
+    name = "calculus",
+    srcs = ["calculus.py"],
+    srcs_version = "PY3",
+    deps = [
+        "//third_party/py/swirl_lm/utility:get_kernel_fn",
+        "//third_party/py/tensorflow",
+    ],
+)
+
+py_strict_test(
+    name = "calculus_test",
+    srcs = ["calculus_test.py"],
+    python_version = "PY3",
+    srcs_version = "PY3",
+    deps = [
+        ":calculus",
+        "//testing/pybase:parameterized",
+        "//third_party/py/numpy",
+        "//third_party/py/swirl_lm/utility:get_kernel_fn",
+        "//third_party/py/swirl_lm/utility:tf_test_util",
+        "//third_party/py/tensorflow",
+    ],
+)
+
 py_strict_test(
     name = "convection_test",
     srcs = ["convection_test.py"],
@@ -180,6 +205,30 @@ pytype_strict_library(
         ":algebra",
         "//third_party/py/numpy",
         "//third_party/py/swirl_lm/utility:common_ops",
+        "//third_party/py/tensorflow",
+    ],
+)
+
+pytype_strict_library(
+    name = "time_integration",
+    srcs = ["time_integration.py"],
+    srcs_version = "PY3",
+    deps = [
+        ":numerics_proto_py_pb2",
+        "//third_party/py/tensorflow",
+    ],
+)
+
+py_strict_test(
+    name = "time_integration_test",
+    srcs = ["time_integration_test.py"],
+    python_version = "PY3",
+    srcs_version = "PY3",
+    deps = [
+        ":time_integration",
+        "//testing/pybase:parameterized",
+        "//third_party/py/numpy",
+        "//third_party/py/swirl_lm/utility:tf_test_util",
         "//third_party/py/tensorflow",
     ],
 )

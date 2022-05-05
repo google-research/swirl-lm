@@ -160,23 +160,23 @@ class VelocityTest(tf.test.TestCase, parameterized.TestCase):
     if convection_scheme == (
         velocity._ConvectionScheme.CONVECTION_SCHEME_CENTRAL_2):
       with self.subTest(name='RhsRhoUAt121WithoutDiffusion'):
-        self.assertAlmostEqual(rhs_rhou[1][1, 2], -3500.0, 3)
+        self.assertAllClose(rhs_rhou[1][1, 2], -3500.0)
 
       with self.subTest(name='RhsRhoVAt121WithoutDiffusion'):
-        self.assertAlmostEqual(rhs_rhov[1][1, 2], 1750.0, 3)
+        self.assertAllClose(rhs_rhov[1][1, 2], 1750.0)
 
       with self.subTest(name='RhsRhoWAt121WithoutDiffusion'):
-        self.assertAlmostEqual(rhs_rhow[1][1, 2], -3395.0947, 3)
+        self.assertAllClose(rhs_rhow[1][1, 2], -3395.0947)
     elif convection_scheme == (
         velocity._ConvectionScheme.CONVECTION_SCHEME_QUICK):
       with self.subTest(name='RhsRhoUAt121WithoutDiffusion'):
-        self.assertAlmostEqual(rhs_rhou[1][1, 2], -2562.5, 3)
+        self.assertAllClose(rhs_rhou[1][1, 2], -2562.5)
 
       with self.subTest(name='RhsRhoVAt121WithoutDiffusion'):
-        self.assertAlmostEqual(rhs_rhov[1][1, 2], 343.74997, 3)
+        self.assertAllClose(rhs_rhov[1][1, 2], 343.74997)
 
       with self.subTest(name='RhsRhoWAt121WithoutDiffusion'):
-        self.assertAlmostEqual(rhs_rhow[1][1, 2], -1520.095, 3)
+        self.assertAllClose(rhs_rhow[1][1, 2], -1520.095)
 
   @parameterized.parameters(*zip(_CONVECTION_SCHEME))
   @test_util.run_in_graph_and_eager_modes
@@ -201,66 +201,66 @@ class VelocityTest(tf.test.TestCase, parameterized.TestCase):
     if convection_scheme == (
         velocity._ConvectionScheme.CONVECTION_SCHEME_CENTRAL_2):
       with self.subTest(name='RhsRhoUAt121WithoutDiffusion'):
-        self.assertAlmostEqual(terms[0]['conv_x'][1][1, 2], 0.0, 3)
-        self.assertAlmostEqual(terms[0]['conv_y'][1][1, 2], 1500.0, 3)
-        self.assertAlmostEqual(terms[0]['conv_z'][1][1, 2], 0.0, 3)
-        self.assertAlmostEqual(terms[0]['diff_x'][1][1, 2], 0.0)
-        self.assertAlmostEqual(terms[0]['diff_y'][1][1, 2], 0.0)
-        self.assertAlmostEqual(terms[0]['diff_z'][1][1, 2], 0.0)
-        self.assertAlmostEqual(terms[0]['gravity'][1][1, 2], 0.0)
-        self.assertAlmostEqual(terms[0]['force'][1][1, 2], 0.0)
+        self.assertAllClose(terms[0]['conv_x'][1][1, 2], 0.0)
+        self.assertAllClose(terms[0]['conv_y'][1][1, 2], 1500.0)
+        self.assertAllClose(terms[0]['conv_z'][1][1, 2], 0.0)
+        self.assertAllClose(terms[0]['diff_x'][1][1, 2], 0.0)
+        self.assertAllClose(terms[0]['diff_y'][1][1, 2], 0.0)
+        self.assertAllClose(terms[0]['diff_z'][1][1, 2], 0.0)
+        self.assertAllClose(terms[0]['gravity'][1][1, 2], 0.0)
+        self.assertAllClose(terms[0]['force'][1][1, 2], 0.0)
 
       with self.subTest(name='RhsRhoVAt121WithoutDiffusion'):
-        self.assertAlmostEqual(terms[1]['conv_x'][1][1, 2], 0.0, 3)
-        self.assertAlmostEqual(terms[1]['conv_y'][1][1, 2], -2250.0, 3)
-        self.assertAlmostEqual(terms[1]['conv_z'][1][1, 2], 0.0, 3)
-        self.assertAlmostEqual(terms[1]['diff_x'][1][1, 2], 0.0)
-        self.assertAlmostEqual(terms[1]['diff_y'][1][1, 2], 0.0)
-        self.assertAlmostEqual(terms[1]['diff_z'][1][1, 2], 0.0)
-        self.assertAlmostEqual(terms[1]['gravity'][1][1, 2], 0.0)
-        self.assertAlmostEqual(terms[1]['force'][1][1, 2], 0.0)
+        self.assertAllClose(terms[1]['conv_x'][1][1, 2], 0.0)
+        self.assertAllClose(terms[1]['conv_y'][1][1, 2], -2250.0)
+        self.assertAllClose(terms[1]['conv_z'][1][1, 2], 0.0)
+        self.assertAllClose(terms[1]['diff_x'][1][1, 2], 0.0)
+        self.assertAllClose(terms[1]['diff_y'][1][1, 2], 0.0)
+        self.assertAllClose(terms[1]['diff_z'][1][1, 2], 0.0)
+        self.assertAllClose(terms[1]['gravity'][1][1, 2], 0.0)
+        self.assertAllClose(terms[1]['force'][1][1, 2], 0.0)
 
       with self.subTest(name='RhsRhoWAt121WithoutDiffusion'):
-        self.assertAlmostEqual(terms[2]['conv_x'][1][1, 2], 0.0, 3)
-        self.assertAlmostEqual(terms[2]['conv_y'][1][1, 2], 3000.0, 3)
-        self.assertAlmostEqual(terms[2]['conv_z'][1][1, 2], 0.0, 3)
-        self.assertAlmostEqual(terms[2]['diff_x'][1][1, 2], 0.0)
-        self.assertAlmostEqual(terms[2]['diff_y'][1][1, 2], 0.0)
-        self.assertAlmostEqual(terms[2]['diff_z'][1][1, 2], 0.0)
-        self.assertAlmostEqual(terms[2]['gravity'][1][1, 2], 4.905, 3)
-        self.assertAlmostEqual(terms[2]['force'][1][1, 2], 0.0)
+        self.assertAllClose(terms[2]['conv_x'][1][1, 2], 0.0)
+        self.assertAllClose(terms[2]['conv_y'][1][1, 2], 3000.0)
+        self.assertAllClose(terms[2]['conv_z'][1][1, 2], 0.0)
+        self.assertAllClose(terms[2]['diff_x'][1][1, 2], 0.0)
+        self.assertAllClose(terms[2]['diff_y'][1][1, 2], 0.0)
+        self.assertAllClose(terms[2]['diff_z'][1][1, 2], 0.0)
+        self.assertAllClose(terms[2]['gravity'][1][1, 2], 4.905)
+        self.assertAllClose(terms[2]['force'][1][1, 2], 0.0)
 
     elif convection_scheme == (
         velocity._ConvectionScheme.CONVECTION_SCHEME_QUICK):
       with self.subTest(name='RhsRhoUAt121WithoutDiffusion'):
-        self.assertAlmostEqual(terms[0]['conv_x'][1][1, 2], 0.0, 3)
-        self.assertAlmostEqual(terms[0]['conv_y'][1][1, 2], 562.5, 3)
-        self.assertAlmostEqual(terms[0]['conv_z'][1][1, 2], 0.0, 3)
-        self.assertAlmostEqual(terms[0]['diff_x'][1][1, 2], 0.0, 3)
-        self.assertAlmostEqual(terms[0]['diff_y'][1][1, 2], 0.0)
-        self.assertAlmostEqual(terms[0]['diff_z'][1][1, 2], 0.0)
-        self.assertAlmostEqual(terms[0]['gravity'][1][1, 2], 0.0)
-        self.assertAlmostEqual(terms[0]['force'][1][1, 2], 0.0)
+        self.assertAllClose(terms[0]['conv_x'][1][1, 2], 0.0)
+        self.assertAllClose(terms[0]['conv_y'][1][1, 2], 562.5)
+        self.assertAllClose(terms[0]['conv_z'][1][1, 2], 0.0)
+        self.assertAllClose(terms[0]['diff_x'][1][1, 2], 0.0)
+        self.assertAllClose(terms[0]['diff_y'][1][1, 2], 0.0)
+        self.assertAllClose(terms[0]['diff_z'][1][1, 2], 0.0)
+        self.assertAllClose(terms[0]['gravity'][1][1, 2], 0.0)
+        self.assertAllClose(terms[0]['force'][1][1, 2], 0.0)
 
       with self.subTest(name='RhsRhoVAt121WithoutDiffusion'):
-        self.assertAlmostEqual(terms[1]['conv_x'][1][1, 2], 0.0, 3)
-        self.assertAlmostEqual(terms[1]['conv_y'][1][1, 2], -843.75, 3)
-        self.assertAlmostEqual(terms[1]['conv_z'][1][1, 2], 0.0, 3)
-        self.assertAlmostEqual(terms[1]['diff_x'][1][1, 2], 0.0)
-        self.assertAlmostEqual(terms[1]['diff_y'][1][1, 2], 0.0, 3)
-        self.assertAlmostEqual(terms[1]['diff_z'][1][1, 2], 0.0)
-        self.assertAlmostEqual(terms[1]['gravity'][1][1, 2], 0.0)
-        self.assertAlmostEqual(terms[1]['force'][1][1, 2], 0.0)
+        self.assertAllClose(terms[1]['conv_x'][1][1, 2], 0.0)
+        self.assertAllClose(terms[1]['conv_y'][1][1, 2], -843.75)
+        self.assertAllClose(terms[1]['conv_z'][1][1, 2], 0.0)
+        self.assertAllClose(terms[1]['diff_x'][1][1, 2], 0.0)
+        self.assertAllClose(terms[1]['diff_y'][1][1, 2], 0.0)
+        self.assertAllClose(terms[1]['diff_z'][1][1, 2], 0.0)
+        self.assertAllClose(terms[1]['gravity'][1][1, 2], 0.0)
+        self.assertAllClose(terms[1]['force'][1][1, 2], 0.0)
 
       with self.subTest(name='RhsRhoWAt121WithoutDiffusion'):
-        self.assertAlmostEqual(terms[2]['conv_x'][1][1, 2], 0.0, 3)
-        self.assertAlmostEqual(terms[2]['conv_y'][1][1, 2], 1125.0, 3)
-        self.assertAlmostEqual(terms[2]['conv_z'][1][1, 2], 0.0, 3)
-        self.assertAlmostEqual(terms[2]['diff_x'][1][1, 2], 0.0)
-        self.assertAlmostEqual(terms[2]['diff_y'][1][1, 2], 0.0)
-        self.assertAlmostEqual(terms[2]['diff_z'][1][1, 2], 0.0)
-        self.assertAlmostEqual(terms[2]['gravity'][1][1, 2], 4.905, 3)
-        self.assertAlmostEqual(terms[2]['force'][1][1, 2], 0.0)
+        self.assertAllClose(terms[2]['conv_x'][1][1, 2], 0.0)
+        self.assertAllClose(terms[2]['conv_y'][1][1, 2], 1125.0)
+        self.assertAllClose(terms[2]['conv_z'][1][1, 2], 0.0)
+        self.assertAllClose(terms[2]['diff_x'][1][1, 2], 0.0)
+        self.assertAllClose(terms[2]['diff_y'][1][1, 2], 0.0)
+        self.assertAllClose(terms[2]['diff_z'][1][1, 2], 0.0)
+        self.assertAllClose(terms[2]['gravity'][1][1, 2], 4.905)
+        self.assertAllClose(terms[2]['force'][1][1, 2], 0.0)
 
   def testUpdateWallBCGeneratesCorrectVelocityBC(self):
     """Checks if wall boundary conditions for velocity is correctly updated."""

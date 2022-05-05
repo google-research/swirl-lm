@@ -15,4 +15,5 @@ third_party {
 }
 presubmit: {
   include_presubmit: "//depot/google3/research/simulation/METADATA"
+  path_expression: "//depot/google3/third_party/py/swirl_lm/..."
 }

@@ -75,10 +75,10 @@ class ThermodynamicsTest(parameterized.TestCase):
     rho = np.array([1.2, 0.9])
     zz = np.array([100.0, 800.0])
 
-    theta_l = self.water.liquid_potential_temperature(t, q_t, rho, zz)
+    theta_li = self.water.liquid_ice_potential_temperature(t, q_t, rho, zz)
 
     expected = [255.42886, 292.1548]
-    self.assertSequenceAlmostEqual(expected, theta_l, 4)
+    self.assertSequenceAlmostEqual(expected, theta_li, 4)
 
   def testVirtualPotentialTemperatureIsComputedCorrectly(self):
     """Checks if the virtual potential temperature is computed correctly."""

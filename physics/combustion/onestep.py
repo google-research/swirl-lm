@@ -31,12 +31,12 @@ import functools
 from typing import List, Sequence
 
 import numpy as np
+from swirl_lm.numerics import time_integration
 from swirl_lm.utility import get_kernel_fn
-from swirl_lm.utility import grid_parametrization  # pylint: disable=line-too-long
+from swirl_lm.utility import grid_parametrization
 import tensorflow as tf
 from google3.research.simulation.tensorflow.fluid.framework.tf1 import model_function  # pylint: disable=line-too-long
 from google3.research.simulation.tensorflow.fluid.framework.tf1 import step_updater
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_numerics  # pylint: disable=line-too-long
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_updates  # pylint: disable=line-too-long
 
 # The universal gas constant that is used to compute the density in the onestep
@@ -203,11 +203,10 @@ def one_step_reaction_integration(
     )
     scalars = [states['Y_F'], states['Y_O'], states['T']]
     scalars_new = (
-        incompressible_structured_mesh_numerics.time_advancement_explicit(
+        time_integration.time_advancement_explicit(
             rhs,
             dt,
-            incompressible_structured_mesh_numerics.TimeIntegrationScheme
-            .TIME_SCHEME_RK3,
+            time_integration.TimeIntegrationScheme.TIME_SCHEME_RK3,
             scalars,
             scalars,
         ))

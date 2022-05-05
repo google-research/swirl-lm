@@ -253,6 +253,21 @@ class WaterTest(tf.test.TestCase, parameterized.TestCase):
 
     self.assertAllClose(expected, e_int)
 
+  def testSpecificInternalEnergy(self):
+    """Checks if the internal enenrgy is computed correctly."""
+    temperature = [tf.constant(266.0), tf.constant(293.0)]
+
+    e_v, e_l, e_i = self.evaluate(
+        self.water.internal_energy_components(temperature))
+
+    expected_v = [2122124.2, 2159846.2]
+    expected_l = [-29521.799, 84348.]
+    expected_i = [-348350., -293000.]
+
+    self.assertAllClose(expected_v, e_v)
+    self.assertAllClose(expected_l, e_l)
+    self.assertAllClose(expected_i, e_i)
+
   def testSaturationInternalEnergy(self):
     """Checks if the internal energy is computed correctly at saturation."""
     temperature = [tf.constant(266.0), tf.constant(293.0)]
@@ -452,13 +467,80 @@ class WaterTest(tf.test.TestCase, parameterized.TestCase):
       expected = [271.3176, 284.31808]
       self.assertAllClose(expected, t['T'])
 
-    with self.subTest(name='LiquidWaterPotentialTemperature'):
+    with self.subTest(name='LiquidIcePotentialTemperature'):
       expected = [255.42886, 292.1548]
-      self.assertAllClose(expected, t['theta_l'])
+      self.assertAllClose(expected, t['theta_li'])
 
-    with self.subTest(name='WaterVaporPotentialTemperature'):
+    with self.subTest(name='VirtualPotentialTemperature'):
       expected = [271.0622, 292.69037]
       self.assertAllClose(expected, t['theta_v'])
+
+  @parameterized.named_parameters(
+      ('HotSurface', 41000.0, 0.01, 0.0),
+      ('ColdSurface', 20000.0, 0.01, 0.0),
+      ('HumidSurface', 36000.0, 0.1, 0.0),
+      ('DrySurface', 36000.0, 0.0, 0.0),
+      ('HotAir', 60000.0, 0.01, 1000.0),
+      ('ColdAir', 20000.0, 0.01, 1000.0),
+      ('HumidAir', 50000.0, 0.1, 1000.0),
+      ('DryAir', 40000.0, 0.0, 1000.0),
+  )
+  def testThermodynamicsStatesConsistency(
+      self,
+      e_t_val,
+      q_t_val,
+      height_val,
+  ):
+    """Checks if functions in this library are consistent."""
+    # Defines the velocity field.
+    u = [tf.constant(0.0, dtype=tf.float32)]
+    v = [tf.constant(0.0, dtype=tf.float32)]
+    w = [tf.constant(0.0, dtype=tf.float32)]
+
+    # Defines the original thermodynamic states.
+    e_t = [tf.constant(e_t_val, dtype=tf.float32)]
+    q_t = [tf.constant(q_t_val, dtype=tf.float32)]
+    height = [tf.constant(height_val, dtype=tf.float32)]
+
+    # Compute the density.
+    rho_0 = [tf.constant(1.0, dtype=tf.float32)]
+    rho = self.evaluate(
+        self.water.saturation_density(e_t, q_t, u, v, w, rho_0, height))
+
+    e = self.evaluate(
+        self.water.internal_energy_from_total_energy(e_t, u, v, w, height))
+
+    # Compute the temperature.
+    t = self.evaluate(self.water.saturation_adjustment(e, rho, q_t))
+    t = [tf.constant(t[0], dtype=tf.float32)]
+
+    # Compute the liquid and ice phase fractions.
+    q_l, q_i = self.evaluate(
+        self.water.equilibrium_phase_partition(t, rho, q_t))
+
+    # Compute the internal energy from the temperature.
+    e_model = self.evaluate(self.water.internal_energy(t, q_t, q_l, q_i))
+
+    # Compute the total energy.
+    e_t_model = self.evaluate(self.water.total_energy(e_model, u, v, w, height))
+
+    # Compute the virtual potential temperature.
+    theta = self.evaluate(
+        self.water.potential_temperatures(t, q_t, rho, height))
+
+    with self.subTest(name='TemperatureAndTotalEnergy'):
+      self.assertAllClose(e_t_val, e_t_model[0], atol=10, rtol=1e-3)
+
+    for varname in ('theta', 'theta_v', 'theta_li'):
+      with self.subTest(name=f'T&{varname}'):
+        # Compute the temperature from the potential temperature.
+        t_model = self.evaluate(
+            self.water.potential_temperature_to_temperature(
+                varname, [tf.constant(theta[varname][0], dtype=tf.float32)],
+                q_t, q_l, q_i, height))
+
+        expected = self.evaluate(t)
+        self.assertAllClose(expected, t_model)
 
 
 if __name__ == '__main__':

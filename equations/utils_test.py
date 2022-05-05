@@ -93,31 +93,31 @@ class UtilsTest(tf.test.TestCase, parameterized.TestCase):
     tau_value = self.evaluate(tau)
 
     with self.subTest(name='Tau11At211'):
-      self.assertAlmostEqual(tau_value['xx'][1][2, 1], -0.0133333, 6)
+      self.assertAllClose(tau_value['xx'][1][2, 1], -0.0133333)
 
     with self.subTest(name='Tau12At121'):
-      self.assertAlmostEqual(tau_value['xy'][1][1, 2], -0.005)
+      self.assertAllClose(tau_value['xy'][1][1, 2], -0.005)
 
     with self.subTest(name='Tau13At112'):
-      self.assertAlmostEqual(tau_value['xz'][2][1, 1], -0.002)
+      self.assertAllClose(tau_value['xz'][2][1, 1], -0.002)
 
     with self.subTest(name='Tau21At211'):
-      self.assertAlmostEqual(tau_value['yx'][1][2, 1], 0.015)
+      self.assertAllClose(tau_value['yx'][1][2, 1], 0.015)
 
     with self.subTest(name='Tau22At121'):
-      self.assertAlmostEqual(tau_value['yy'][1][1, 2], 0.01)
+      self.assertAllClose(tau_value['yy'][1][1, 2], 0.01)
 
     with self.subTest(name='Tau23At112'):
-      self.assertAlmostEqual(tau_value['yz'][2][1, 1], 0.003)
+      self.assertAllClose(tau_value['yz'][2][1, 1], 0.003)
 
     with self.subTest(name='Tau31At211'):
-      self.assertAlmostEqual(tau_value['zx'][1][2, 1], -0.02)
+      self.assertAllClose(tau_value['zx'][1][2, 1], -0.02)
 
     with self.subTest(name='Tau32At121'):
-      self.assertAlmostEqual(tau_value['zy'][1][1, 2], -0.01)
+      self.assertAllClose(tau_value['zy'][1][1, 2], -0.01)
 
     with self.subTest(name='Tau33At112'):
-      self.assertAlmostEqual(tau_value['zz'][2][1, 1], -0.0053333)
+      self.assertAllClose(tau_value['zz'][2][1, 1], -0.0053333)
 
   def testShearStressWithBCComputesCorrectly(self):
     """Checks if the shear stress is updated correctly."""
@@ -148,32 +148,32 @@ class UtilsTest(tf.test.TestCase, parameterized.TestCase):
                            self.w, bc_fn))
 
     with self.subTest(name='tau00'):
-      self.assertAlmostEqual(tau['xx'][1][2, 1], -1.3333332e-04)
+      self.assertAllClose(tau['xx'][1][2, 1], -1.3333332e-04)
 
     with self.subTest(name='tau01'):
-      self.assertAlmostEqual(tau['xy'][1][1, 2], -5e-5)
+      self.assertAllClose(tau['xy'][1][1, 2], -5e-5)
 
     with self.subTest(name='tau02'):
-      self.assertAlmostEqual(tau['xz'][0][1, 1], 6.0)
-      self.assertAlmostEqual(tau['xz'][2][1, 1], -2e-5)
+      self.assertAllClose(tau['xz'][0][1, 1], 6.0)
+      self.assertAllClose(tau['xz'][2][1, 1], -2e-5)
 
     with self.subTest(name='tau10'):
-      self.assertAlmostEqual(tau['yx'][1][1, 2], -5e-5)
+      self.assertAllClose(tau['yx'][1][1, 2], -5e-5)
 
     with self.subTest(name='tau11'):
-      self.assertAlmostEqual(tau['yy'][1][1, 2], 1e-4)
+      self.assertAllClose(tau['yy'][1][1, 2], 1e-4)
 
     with self.subTest(name='tau12'):
-      self.assertAlmostEqual(tau['yz'][2][1, 1], 3e-5)
+      self.assertAllClose(tau['yz'][2][1, 1], 3e-5)
 
     with self.subTest(name='tau20'):
-      self.assertAlmostEqual(tau['zx'][2][1, 1], -2e-5)
+      self.assertAllClose(tau['zx'][2][1, 1], -2e-5)
 
     with self.subTest(name='tau21'):
-      self.assertAlmostEqual(tau['zy'][2][1, 1], 3e-5)
+      self.assertAllClose(tau['zy'][2][1, 1], 3e-5)
 
     with self.subTest(name='tau22'):
-      self.assertAlmostEqual(tau['zz'][2][1, 1], -5.333333e-05)
+      self.assertAllClose(tau['zz'][2][1, 1], -5.333333e-05)
 
   def testShearStressFluxComputesCorrectly(self):
     """Checks if the shear stress is updated correctly."""

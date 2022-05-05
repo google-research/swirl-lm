@@ -85,7 +85,7 @@ class ThermodynamicsUtilsTest(tf.test.TestCase):
 
     expected = 0.02745098039
 
-    self.assertAlmostEqual(expected, w_mix[0])
+    self.assertAllClose(expected, w_mix[0])
 
 
 if __name__ == '__main__':

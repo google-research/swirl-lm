@@ -75,7 +75,7 @@ class TurbulentKineticEnergyTest(tf.test.TestCase):
     tke = self.run_update_fn_test(update_fn, states, additional_states)['tke']
 
     self.assertLen(tke, 16)
-    self.assertAlmostEqual(tke[8][8, 8], 182.0, 4)
+    self.assertAllClose(tke[8][8, 8], 182.0)
 
   def testTurbulentViscosityTkeModel(self):
     """Checks TKE with the turbulent viscosity model."""

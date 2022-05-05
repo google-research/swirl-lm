@@ -1,6 +1,7 @@
 """Tests for google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh.equations.scalars."""
 
 from absl import flags
+from absl.testing import parameterized
 import numpy as np
 from swirl_lm.equations import scalars
 from swirl_lm.utility import components_debug
@@ -12,11 +13,12 @@ from google3.net.proto2.python.public import text_format
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
 
+
 FLAGS = flags.FLAGS
 
 
 @test_util.run_all_in_graph_and_eager_modes
-class ScalarsTest(tf.test.TestCase):
+class ScalarsTest(tf.test.TestCase, parameterized.TestCase):
 
   _GRAVITY_AND_THERMODYNAMICS_PBTXT = (R'gravity_direction { '
                                        R'  dim_0: 0.0 dim_1: 0.0 dim_2: -1.0 '
@@ -305,68 +307,119 @@ class ScalarsTest(tf.test.TestCase):
       expected = -18340.791 if include_subsidence else -18359.148
       self.assertAlmostEqual(rhs_e_t[4][4, 4], np.float32(expected), 5)
 
-  def testQtUpdatesOutputsCorrectTensor(self):
+  @parameterized.parameters(
+      {
+          'scalar_name': 'q_t',
+          'include_precipitation': False,
+          'include_subsidence': False,
+          'expected': 0.009999998
+      }, {
+          'scalar_name': 'q_t',
+          'include_precipitation': False,
+          'include_subsidence': True,
+          'expected': 0.0100007
+      }, {
+          'scalar_name': 'q_t',
+          'include_precipitation': True,
+          'include_subsidence': False,
+          'expected': 0.008444427
+      }, {
+          'scalar_name': 'q_t',
+          'include_precipitation': True,
+          'include_subsidence': True,
+          'expected': 0.0084452
+      }, {
+          'scalar_name': 'q_r',
+          'include_precipitation': True,
+          'include_subsidence': True,
+          'expected': 0.009987371
+      })
+  def testHumidityUpdate(self, scalar_name, include_precipitation,
+                         include_subsidence, expected):
     """Total humidity RHS value at [1, 1, 1] is correct."""
-    for include_subsidence in [False, True]:
+
+    pbtxt = (
+        self._GRAVITY_AND_THERMODYNAMICS_PBTXT + R'scalars {  '
+        R'  name: "q_t"  '
+        R'  diffusivity: 1e-5  '
+        R'  density: 1.0   '
+        R'  molecular_weight: 0.018  '
+        R'  solve_scalar: true  '
+        R'  humidity {  '
+        R'    include_subsidence:  ' +
+        (R'true' if include_subsidence else R'false') +
+        R'    include_precipitation:  ' +
+        (R'true' if include_precipitation else R'false') + R'  } '
+        R'}  ')
+
+    if include_precipitation:
       pbtxt = (
-          self._GRAVITY_AND_THERMODYNAMICS_PBTXT + R'scalars {  '
-          R'  name: "q_t"  '
+          pbtxt + R'scalars {  '
+          R'  name: "q_r"  '
           R'  diffusivity: 1e-5  '
           R'  density: 1.0   '
           R'  molecular_weight: 0.018  '
           R'  solve_scalar: true  '
-          R'  total_humidity{  '
+          R'  humidity {  '
           R'    include_subsidence:  ' +
-          (R'true' if include_subsidence else R'false') + R'  }'
+          (R'true' if include_subsidence else R'false') +
+          R'    include_precipitation:  ' +
+          (R'true' if include_precipitation else R'false') + R'  } '
           R'}  ')
 
-      model = self.set_up_scalars(False, pbtxt)
+    model = self.set_up_scalars(False, pbtxt)
 
-      ones = tf.ones((int(4), 8, 8), dtype=tf.float32)
-      buf = np.zeros((8, 8, 8), dtype=np.float32)
-      buf[4, 4, 4] = 2
-      u = tf.unstack(tf.convert_to_tensor(buf))
+    ones = tf.ones((int(4), 8, 8), dtype=tf.float32)
+    buf = np.zeros((8, 8, 8), dtype=np.float32)
+    buf[4, 4, 4] = 2
+    u = tf.unstack(tf.convert_to_tensor(buf))
 
-      buf = np.zeros((8, 8, 8), dtype=np.float32)
-      buf[4, 4, 4] = -3
-      v = tf.unstack(tf.convert_to_tensor(buf))
+    buf = np.zeros((8, 8, 8), dtype=np.float32)
+    buf[4, 4, 4] = -3
+    v = tf.unstack(tf.convert_to_tensor(buf))
 
-      buf = np.zeros((8, 8, 8), dtype=np.float32)
-      buf[4, 4, 4] = 4
-      w = tf.unstack(tf.convert_to_tensor(buf))
-      # Internal energy of ~41000 J/(kg/m^3) at the sea surface of
-      # temperature 292.5K with a humidity 0.011 kg/kg.
-      e = 41e3
-      states = {
-          'u': u,
-          'v': v,
-          'w': w,
-          'rho_u': self.u,
-          'rho_v': self.v,
-          'rho_w': self.w,
-          'p': self.p,
-          'rho': [tf.ones_like(u, dtype=tf.float32) for u in self.u],
-          'e_t': [e * tf.ones_like(u, dtype=tf.float32) for u in self.u],
-      }
-      additional_states = {
-          'diffusivity': [
-              1e-2 * tf.ones_like(u, dtype=tf.float32) for u in self.u
-          ],
-          'zz': tf.unstack(tf.linspace(600.0, 1000.0, 8)),
-      }
-      sc = tf.unstack(tf.concat([0.08 * ones, 0.1 * ones], axis=0))
+    buf = np.zeros((8, 8, 8), dtype=np.float32)
+    buf[4, 4, 4] = 4
+    w = tf.unstack(tf.convert_to_tensor(buf))
+    # Internal energy of ~41000 J/(kg/m^3) at the sea surface of
+    # temperature 292.5K with a humidity 0.011 kg/kg.
+    e = 41e3
+    q_t = 0.011
+    q_r = 0.005
+    states = {
+        'u': u,
+        'v': v,
+        'w': w,
+        'rho_u': self.u,
+        'rho_v': self.v,
+        'rho_w': self.w,
+        'p': self.p,
+        'rho': [tf.ones_like(u, dtype=tf.float32) for u in self.u],
+        'e_t': [e * tf.ones_like(u, dtype=tf.float32) for u in self.u],
+        'q_t': [q_t * tf.ones_like(u, dtype=tf.float32) for u in self.u],
+        'q_r': [q_r * tf.ones_like(u, dtype=tf.float32) for u in self.u],
+    }
+    additional_states = {
+        'diffusivity': [
+            1e-2 * tf.ones_like(u, dtype=tf.float32) for u in self.u
+        ],
+        'zz': tf.unstack(tf.linspace(600.0, 1000.0, 8)),
+    }
+    sc = tf.unstack(tf.concat([0.08 * ones, 0.1 * ones], axis=0))
 
-      replica_id = tf.constant(0)
-      replicas = np.array([[[0]]])
-      scalar_rhs = model._q_t_update(replica_id, replicas, states,
-                                     additional_states)
+    replica_id = tf.constant(0)
+    replicas = np.array([[[0]]])
+    scalar_rhs = model._humidity_update(
+        replica_id,
+        replicas,
+        states,
+        additional_states,
+        scalar_name=scalar_name)
 
-      rhs_q_t = self.evaluate(scalar_rhs(sc))
+    rhs = self.evaluate(scalar_rhs(sc))
 
-      self.assertLen(rhs_q_t, 8)
-
-      expected = 0.0100007 if include_subsidence else 0.009999998
-      self.assertAlmostEqual(rhs_q_t[1][1, 1], np.float32(expected), 6)
+    self.assertLen(rhs, 8)
+    self.assertAlmostEqual(rhs[1][1, 1], np.float32(expected), 6)
 
 
 if __name__ == '__main__':

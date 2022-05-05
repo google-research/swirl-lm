@@ -5,7 +5,7 @@ package research.simulation;
 import "third_party/py/swirl_lm/numerics/numerics.proto";
 
 // Defines the properties of a scalar to be included in the flow field.
-// Next id: 13
+// Next id: 14
 message Scalar {
   // The name of the scalar.
   optional string name = 1;
@@ -53,7 +53,7 @@ message Scalar {
   oneof scalar_config {
     GenericScalar generic_scalar = 8;
     TotalEnergy total_energy = 9;
-    TotalHumidity total_humidity = 12;
+    Humidity humidity = 12;
   }
 }
 
@@ -61,19 +61,25 @@ message Scalar {
 message GenericScalar {}
 
 // Defines configurations for total energy.
-// Next id: 3
+// Next id: 4
 message TotalEnergy {
   // An option of whether radiation is included in the total energy equation.
   optional bool include_radiation = 1;
   // An option of whether the effect of subsidence velocity is included in the
   // total energy equation.
   optional bool include_subsidence = 2;
+  // An option of whether the effects of precipitation is included in the
+  // total energy equation.
+  optional bool include_precipitation = 3;
 }
 
 // Defines configurations for total humidity.
-// Next id: 2
-message TotalHumidity {
+// Next id: 3
+message Humidity {
   // An option of whether the effect of subsidence velocity is included in the
   // total humidity equation.
   optional bool include_subsidence = 1;
+  // An option of whether the effects of precipitation is included in the
+  // equations for total humidity and rain water.
+  optional bool include_precipitation = 2;
 }

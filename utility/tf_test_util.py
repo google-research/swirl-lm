@@ -76,13 +76,10 @@ def run_in_graph_and_eager_modes(func=None):
           'Did you mean to use `run_all_in_graph_and_eager_modes`?')
 
     def decorated(self, *args, **kwargs):
-      if not tf.executing_eagerly():
-        raise ValueError('Must be executing eagerly when using the '
-                         'run_in_graph_and_eager_modes decorator.')
-
-      # Run eager block
-      f(self, *args, **kwargs)
-      self.tearDown()
+      if tf.executing_eagerly():
+        # Run eager block
+        f(self, *args, **kwargs)
+        self.tearDown()
 
       # Run in graph mode block
       with tf.Graph().as_default():

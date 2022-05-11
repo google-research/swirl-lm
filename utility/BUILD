@@ -1,3 +1,4 @@
+load("//tools/build_defs/testing:bzl_library.bzl", "bzl_library")
 load("//devtools/python/blaze:strict.bzl", "py_strict_test")
 load("//devtools/python/blaze:pytype.bzl", "pytype_strict_library")
 
@@ -176,6 +177,16 @@ py_strict_test(
     srcs = ["tf_test_util_test.py"],
     deps = [
         ":tf_test_util",
+        "//third_party/py/tensorflow",
+    ],
+)
+
+py_strict_test(
+    name = "tf_test_util_tf1_test",
+    srcs = ["tf_test_util_tf1_test.py"],
+    deps = [
+        ":tf_test_util",
+        "//learning/brain/public:disable_tf2",  # build_cleaner: keep; go/disable_tf2
         "//third_party/py/tensorflow",
     ],
 )
@@ -378,4 +389,11 @@ py_proto_library(
     name = "grid_parametrization_py_pb2",
     api_version = 2,
     deps = [":grid_parametrization_proto"],
+)
+
+bzl_library(
+    name = "build_defs_bzl",
+    srcs = ["build_defs.bzl"],
+    parse_tests = False,
+    deps = ["//devtools/python/blaze:strict_bzl"],
 )

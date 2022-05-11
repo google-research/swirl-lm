@@ -1,5 +1,6 @@
 load("//devtools/python/blaze:pytype.bzl", "pytype_strict_library")
 load("//devtools/python/blaze:strict.bzl", "py_strict_test")
+load("//third_party/py/swirl_lm/utility:build_defs.bzl", "tf1_and_tf2_test")
 
 licenses(["notice"])
 
@@ -41,7 +42,7 @@ pytype_strict_library(
     ],
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "calculus_test",
     srcs = ["calculus_test.py"],
     python_version = "PY3",
@@ -100,11 +101,19 @@ py_strict_test(
 py_strict_test(
     name = "filter_test",
     srcs = ["filter_test.py"],
+    args = ["--xla_jf_conv_full_precision=True"],
     python_version = "PY3",
     srcs_version = "PY3",
+    tags = [
+        "requires-dragonfish",
+    ],
     deps = [
         ":filters",
+        "//learning/brain/google/xla:deepsea_hardware_device",
+        "//research/simulation/tensorflow/fluid/framework:tpu_runner",
+        "//testing/pybase:parameterized",
         "//third_party/py/numpy",
+        "//third_party/py/swirl_lm/communication:halo_exchange",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
         "//third_party/py/swirl_lm/utility:tf_test_util",
         "//third_party/py/tensorflow",
@@ -219,7 +228,7 @@ pytype_strict_library(
     ],
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "time_integration_test",
     srcs = ["time_integration_test.py"],
     python_version = "PY3",

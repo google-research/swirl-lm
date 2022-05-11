@@ -10,12 +10,12 @@ from typing import List, Sequence
 
 from absl import flags
 import numpy as np
+from swirl_lm.numerics import filters
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
 import tensorflow as tf
 from google3.research.simulation.tensorflow.fluid.framework.tf1 import model_function
 from google3.research.simulation.tensorflow.fluid.framework.tf1 import step_updater
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_numerics
 
 # Parameters required by the constant TKE model.
 flags.DEFINE_float(
@@ -73,9 +73,8 @@ def _local_box_filter_3d(state: Sequence[tf.Tensor]) -> Sequence[tf.Tensor]:
   """
   halo_update_fn = functools.partial(_update_local_halos, halo_width=1)
 
-  filter_width = 3
-  return incompressible_structured_mesh_numerics.global_box_filter_3d(
-      state, halo_update_fn, filter_width, 1)
+  return filters.global_box_filter_3d(
+      state, halo_update_fn, filter_width=3, num_iter=1)
 
 
 def constant_tke_update_function(

@@ -1,7 +1,7 @@
 """A library for filter operators."""
 
 import functools
-from typing import List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence
 from swirl_lm.utility import get_kernel_fn
 import tensorflow as tf
 
@@ -97,3 +97,52 @@ def filter_2(
   g[-1] = f[-1]
 
   return g
+
+
+def global_box_filter_3d(state: Sequence[tf.Tensor],
+                         halo_update_fn: Callable[[Sequence[tf.Tensor]],
+                                                  Sequence[tf.Tensor]],
+                         filter_width: int, num_iter: int) -> List[tf.Tensor]:
+  """Applies a balanced 3D Tophat filter to a 3D tensor.
+
+  The following operation is performed by this function:
+    u'_{lmn} =
+      ∑_{p=l-N/2}^{l+N/2} ∑_{s=m-N/2}^{m+N/2} ∑_{t=n-N/2}^{n+N/2} 1/N³ uₚₛₜ
+  Note that the filter is balanced, so only odd number is allowed as
+  `filter_wdith`.
+
+  Args:
+    state: The 3D tensor field to be filtered.
+    halo_update_fn: A function that is used to update the halos of `f`.
+    filter_width: The full width of stencil of the filter in each direction.
+    num_iter: The number of iterations that the filter is applied.
+
+  Returns:
+    The filtered `state`.
+
+  Raises:
+    ValueError if `filter_width` is even.
+  """
+  if filter_width % 2 == 0:
+    raise ValueError(
+        'Filter width has to be an odd number. {} is not allowed.'.format(
+            filter_width))
+
+  filter_coeffs = [1.0 / filter_width,] * filter_width
+  offset = filter_width // 2
+  kernel_dict = {'filter': (filter_coeffs, offset)}
+  kernel_op = get_kernel_fn.ApplyKernelConvOp(8, kernel_dict)
+
+  stop_condition = lambda i, f_filtered: i < num_iter
+
+  def body(i, f_filtered):
+    filtered_x = kernel_op.apply_kernel_op_x(f_filtered, 'filterx')
+    filtered_y = kernel_op.apply_kernel_op_y(filtered_x, 'filtery')
+    filtered_z = kernel_op.apply_kernel_op_z(filtered_y, 'filterz', 'filterzsh')
+    return (i + 1, halo_update_fn(filtered_z))
+
+  i0 = tf.constant(0)
+  _, f_filtered = tf.while_loop(
+      cond=stop_condition, body=body, loop_vars=(i0, state), back_prop=False)
+
+  return f_filtered

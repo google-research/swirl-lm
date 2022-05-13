@@ -191,6 +191,17 @@ py_strict_test(
     ],
 )
 
+pytype_strict_library(
+    name = "tf_tpu_test_util",
+    srcs = ["tf_tpu_test_util.py"],
+    deps = [
+        "//research/simulation/tensorflow/fluid/framework:tpu_runner",
+        "//research/simulation/tensorflow/fluid/framework:util",
+        "//third_party/py/numpy",
+        "//third_party/py/tensorflow",
+    ],
+)
+
 py_strict_test(
     name = "common_ops_test",
     srcs = ["common_ops_test.py"],

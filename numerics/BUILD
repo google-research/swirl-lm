@@ -98,7 +98,7 @@ py_strict_test(
     ],
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "filter_test",
     srcs = ["filter_test.py"],
     args = ["--xla_jf_conv_full_precision=True"],
@@ -110,12 +110,12 @@ py_strict_test(
     deps = [
         ":filters",
         "//learning/brain/google/xla:deepsea_hardware_device",
-        "//research/simulation/tensorflow/fluid/framework:tpu_runner",
         "//testing/pybase:parameterized",
         "//third_party/py/numpy",
         "//third_party/py/swirl_lm/communication:halo_exchange",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
         "//third_party/py/swirl_lm/utility:tf_test_util",
+        "//third_party/py/swirl_lm/utility:tf_tpu_test_util",
         "//third_party/py/tensorflow",
     ],
 )

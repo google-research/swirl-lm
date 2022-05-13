@@ -7,8 +7,8 @@ from swirl_lm.communication import halo_exchange
 from swirl_lm.numerics import filters
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import tf_test_util as test_util
+from swirl_lm.utility.tf_tpu_test_util import run_on_tpu_in_test
 import tensorflow as tf
-from google3.research.simulation.tensorflow.fluid.framework.tpu_runner import TpuRunner
 from google3.testing.pybase import parameterized
 
 
@@ -107,9 +107,7 @@ class FilterTest(tf.test.TestCase, parameterized.TestCase):
 
     # transpose inputs.
     device_inputs = [list(x) for x in zip(*inputs)]
-    computation_shape = replicas.shape
-    runner = TpuRunner(computation_shape=computation_shape)
-    output = runner.run(filter_fn, *device_inputs)
+    output = run_on_tpu_in_test(self, replicas, filter_fn, *device_inputs)
 
     with self.subTest(name='NumberOfReplicaOutputsIsTwo'):
       self.assertLen(output, 2)
@@ -123,7 +121,6 @@ class FilterTest(tf.test.TestCase, parameterized.TestCase):
   def testGlobalFilter3DProducesCorrectResultWithFilterWidthThree(self):
     """Tests filter with width 3 produces correct result."""
     replicas = np.array([[[0], [1]]])
-    computation_shape = np.array(replicas.shape)
     filter_width = 3
 
     def halo_update_fn(state):
@@ -152,9 +149,7 @@ class FilterTest(tf.test.TestCase, parameterized.TestCase):
 
     # transpose inputs.
     device_inputs = [list(x) for x in zip(*inputs)]
-    computation_shape = replicas.shape
-    runner = TpuRunner(computation_shape=computation_shape)
-    output = runner.run(filter_fn, *device_inputs)
+    output = run_on_tpu_in_test(self, replicas, filter_fn, *device_inputs)
 
     with self.subTest(name='NumberOfReplicaOutputsIsTwo'):
       self.assertLen(output, 2)
@@ -174,7 +169,6 @@ class FilterTest(tf.test.TestCase, parameterized.TestCase):
   def testGlobalFilter3DRaisesValueErrorForEvenFilterWidth(self):
     """Tests filter with width 4 raises `ValueError`."""
     replicas = np.array([[[0], [1]]])
-    computation_shape = np.array(replicas.shape)
     filter_width = 4
 
     dummy_halo_update_fn = lambda state: state
@@ -192,11 +186,9 @@ class FilterTest(tf.test.TestCase, parameterized.TestCase):
 
     # transpose inputs.
     device_inputs = [list(x) for x in zip(*inputs)]
-    computation_shape = replicas.shape
     with self.assertRaisesRegex(ValueError,
                                 'Filter width has to be an odd number.'):
-      runner = TpuRunner(computation_shape=computation_shape)
-      runner.run(filter_fn, *device_inputs)
+      run_on_tpu_in_test(self, replicas, filter_fn, *device_inputs)
 
 
 if __name__ == '__main__':

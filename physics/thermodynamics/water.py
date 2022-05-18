@@ -55,6 +55,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     self._t_min = model_params.water.t_min
     self._t_freeze = model_params.water.t_freeze
     self._t_triple = model_params.water.t_triple
+    self._t_icenuc = model_params.water.t_icenuc
     self._p_triple = model_params.water.p_triple
     self._e_int_v0 = model_params.water.e_int_v0
     self._e_int_i0 = model_params.water.e_int_i0
@@ -378,7 +379,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
             (lh_0 - d_cp * self._t_0) / self._r_v *
             (1.0 / self._t_triple - 1.0 / temperature))
 
-  def saturation_vapor_pressure(
+  def saturation_vapor_pressure_generic(
       self,
       temperature: FlowFieldVar,
       lh_0: Optional[FlowFieldVar] = None,
@@ -409,18 +410,46 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       The saturation vapor pressure at given conditions.
     """
     if lh_0 is None:
-      lh_0 = [
-          self._lh_v0,
-      ] * len(temperature)
+      lh_0 = tf.nest.map_structure(lambda t: self._lh_v0 * tf.ones_like(t),
+                                   temperature)
     if d_cp is None:
-      d_cp = [
-          self._cp_v - self._cp_l,
-      ] * len(temperature)
+      d_cp = tf.nest.map_structure(
+          lambda t: (self._cp_v - self._cp_l) * tf.ones_like(t), temperature)
 
-    return [
-        self._saturation_vapor_pressure(t_i, lh_0_i, d_cp_i)
-        for t_i, d_cp_i, lh_0_i in zip(temperature, d_cp, lh_0)
-    ]
+    return tf.nest.map_structure(self._saturation_vapor_pressure, temperature,
+                                 lh_0, d_cp)
+
+  def saturation_vapor_pressure(
+      self,
+      temperature: FlowFieldVar,
+      q_liq: Optional[FlowFieldVar] = None,
+      q_c: Optional[FlowFieldVar] = None,
+  ) -> FlowFieldVar:
+    """Computes the saturation vapor pressure.
+
+    Args:
+      temperature: The temperature of the flow field.
+      q_liq: The specific humidity of the liquid phase.
+      q_c: The specific humidity of the condensed phase.
+
+    Returns:
+      The saturation vapor pressure.
+    """
+    liquid_frac = self.liquid_fraction(temperature, q_liq, q_c)
+    ice_frac = tf.nest.map_structure(lambda liquid_frac_i: 1.0 - liquid_frac_i,
+                                     liquid_frac)
+
+    # pylint: disable=g-long-lambda
+    lh_0 = tf.nest.map_structure(
+        lambda liquid_frac_i, ice_frac_i: liquid_frac_i * self._lh_v0 +
+        ice_frac_i * self._lh_s0, liquid_frac, ice_frac)
+    d_cp = tf.nest.map_structure(
+        lambda liquid_frac_i, ice_frac_i: liquid_frac_i *
+        (self._cp_v - self._cp_l) + ice_frac_i * (self._cp_v - self._cp_i),
+        liquid_frac, ice_frac)
+    # pylint: enable=g-long-lambda
+
+    return self.saturation_vapor_pressure_generic(temperature, lh_0, d_cp)
 
   def saturation_q_vapor(
       self,
@@ -429,9 +458,9 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       q_liq: Optional[FlowFieldVar] = None,
       q_c: Optional[FlowFieldVar] = None,
   ) -> FlowFieldVar:
-    """Computes the saturation specific humidity.
+    """Computes the saturation specific humidity from the equation of states.
 
-    qᵥ = pₛₐₜ / (ϱ Rᵥ T)
+    qᵥₛ = pₛₐₜ / (ϱ Rᵥ T)
 
     Args:
       temperature: The temperature of the flow field.
@@ -442,23 +471,35 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     Returns:
       The saturation specific humidity.
     """
-    liquid_frac = self.liquid_fraction(temperature, q_liq, q_c)
-    ice_frac = [1.0 - liquid_frac_i for liquid_frac_i in liquid_frac]
-    lh_0 = [
-        liquid_frac_i * self._lh_v0 + ice_frac_i * self._lh_s0
-        for liquid_frac_i, ice_frac_i in zip(liquid_frac, ice_frac)
-    ]
-    d_cp = [
-        liquid_frac_i * (self._cp_v - self._cp_l) + ice_frac_i *
-        (self._cp_v - self._cp_i)
-        for liquid_frac_i, ice_frac_i in zip(liquid_frac, ice_frac)
-    ]
-    p_v_sat = self.saturation_vapor_pressure(temperature, lh_0, d_cp)
+    p_v_sat = self.saturation_vapor_pressure(temperature, q_liq, q_c)
+    return tf.nest.map_structure(
+        lambda p_v_sat_i, rho_i, t_i: p_v_sat_i / (rho_i * self._r_v * t_i),
+        p_v_sat, rho, temperature)
 
-    return [
-        p_v_sat_i / (rho_i * self._r_v * t_i)
-        for p_v_sat_i, rho_i, t_i in zip(p_v_sat, rho, temperature)
-    ]
+  def saturation_q_vapor_from_pressure(
+      self,
+      temperature: FlowFieldVar,
+      q_tot: FlowFieldVar,
+      zz: FlowFieldVar,
+      q_liq: Optional[FlowFieldVar] = None,
+      q_c: Optional[FlowFieldVar] = None,
+  ) -> FlowFieldVar:
+    """Computes the saturation specific humidity from the pressure.
+
+    Args:
+      temperature: The temperature of the flow field.
+      q_tot: The total specific humidity.
+      zz: The cooridinates in the vertical direction, in units of m.
+      q_liq: The specific humidity of the liquid phase.
+      q_c: The specific humidity of the condensed phase.
+
+    Returns:
+      The saturation specific humidity.
+    """
+    p_v_sat = self.saturation_vapor_pressure(temperature, q_liq, q_c)
+    return tf.nest.map_structure(
+        lambda q_t, p_v_s, p: (_R_D / self._r_v) * (1.0 - q_t) * p_v_s /  # pylint: disable=g-long-lambda
+        (p - p_v_s), q_tot, p_v_sat, self.p_ref(zz))
 
   def saturation_excess(
       self,
@@ -506,19 +547,33 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     Returns:
       The fraction of liquid phase over the condensed phase.
     """
-    liquid_frac_no_condensate = [
-        tf.where(
-            tf.greater(t_i, self._t_freeze), tf.ones_like(t_i, dtype=_TF_DTYPE),
-            tf.zeros_like(t_i, dtype=_TF_DTYPE)) for t_i in temperature
-    ]
+    liquid_frac_nuc = lambda t: (t - self._t_icenuc) / (  # pylint: disable=g-long-lambda
+        self._t_freeze - self._t_icenuc)
+
+    def liquid_fraction_from_temperature(t: tf.Tensor) -> tf.Tensor:
+      """Computes the liquid fraction from tempearture."""
+      return tf.where(
+          tf.greater(t, self._t_freeze), tf.ones_like(t),
+          tf.where(
+              tf.less_equal(t, self._t_icenuc), tf.zeros_like(t),
+              liquid_frac_nuc(t)))
+
+    liquid_frac_no_condensate = tf.nest.map_structure(
+        liquid_fraction_from_temperature, temperature)
+
     if q_liq is None or q_c is None:
       return liquid_frac_no_condensate
 
-    return [
-        tf.where(tf.greater(q_c_i, 0.0), q_liq_i / q_c_i,
-                 liquid_frac_i) for q_c_i, q_liq_i, liquid_frac_i in zip(
-                     q_c, q_liq, liquid_frac_no_condensate)
-    ]
+    def liquid_fraction_from_condensate(
+        q_l: tf.Tensor,
+        q_c: tf.Tensor,
+        liquid_frac: tf.Tensor,
+    ) -> tf.Tensor:
+      """Computes the liquid fraction from condensate fractions."""
+      return tf.where(tf.greater(q_c, 0.0), q_l / q_c, liquid_frac)
+
+    return tf.nest.map_structure(
+        liquid_fraction_from_condensate, q_liq, q_c, liquid_frac_no_condensate)
 
   def equilibrium_phase_partition(
       self,

@@ -22,13 +22,13 @@ from swirl_lm.physics import constants
 from swirl_lm.physics.atmosphere import precipitation
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import water
+from swirl_lm.physics.turbulence import sgs_model
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import components_debug
 from swirl_lm.utility import get_kernel_fn
 import tensorflow as tf
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import physical_variable_keys_manager
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import sgs_model
 
 # A small number that's used as the threshold for the gravity vector. If the
 # absolute value of a gravity component is less than this threshold, it is

@@ -6,19 +6,18 @@ from swirl_lm.boundary_condition import boundary_condition_utils
 from swirl_lm.numerics import convection
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import tf_test_util as test_util
+from swirl_lm.utility.tf_tpu_test_util import run_on_tpu_in_test
 import tensorflow as tf
-from google3.research.simulation.tensorflow.fluid.framework.tpu_runner import TpuRunner
 from google3.testing.pybase import parameterized
 
 
-class IncompressibleStructuredMeshNumericsTest(tf.test.TestCase,
-                                               parameterized.TestCase):
+class ConvectionTest(tf.test.TestCase, parameterized.TestCase):
 
   MESH_SIZES = [1.0, 1.0, 1.0]
   DIRECTIONS = [0, 1, 2]
 
   def setUp(self):
-    super(IncompressibleStructuredMeshNumericsTest, self).setUp()
+    super(ConvectionTest, self).setUp()
 
     self.f = [
         tf.constant([[2, 3, 5, 6], [3, 4, 6, 7], [5, 6, 8, 9], [6, 7, 9, 10]],
@@ -311,8 +310,7 @@ class IncompressibleStructuredMeshNumericsTest(tf.test.TestCase,
     device_inputs = [list(x) for x in zip(*inputs)]
 
     computation_shape = np.array(replicas.shape)
-    runner = TpuRunner(computation_shape=computation_shape)
-    output = runner.run(device_fn, *device_inputs)
+    output = run_on_tpu_in_test(self, replicas, device_fn, *device_inputs)
     output_0 = np.array(output[0])
     output_1 = np.array(output[1])
 
@@ -381,8 +379,7 @@ class IncompressibleStructuredMeshNumericsTest(tf.test.TestCase,
     device_inputs = [list(x) for x in zip(*inputs)]
 
     computation_shape = np.array(replicas.shape)
-    runner = TpuRunner(computation_shape=computation_shape)
-    output = runner.run(device_fn, *device_inputs)
+    output = run_on_tpu_in_test(self, replicas, device_fn, *device_inputs)
     output_0 = np.array(output[0])
     output_1 = np.array(output[1])
 
@@ -451,8 +448,7 @@ class IncompressibleStructuredMeshNumericsTest(tf.test.TestCase,
     device_inputs = [list(x) for x in zip(*inputs)]
 
     computation_shape = np.array(replicas.shape)
-    runner = TpuRunner(computation_shape=computation_shape)
-    output = runner.run(device_fn, *device_inputs)
+    output = run_on_tpu_in_test(self, replicas, device_fn, *device_inputs)
     output_0 = np.array(output[0])
     output_1 = np.array(output[1])
 

@@ -1,5 +1,5 @@
 load("//devtools/python/blaze:pytype.bzl", "pytype_strict_library")
-load("//devtools/python/blaze:strict.bzl", "py_strict_test")
+load("//third_party/py/swirl_lm/utility:build_defs.bzl", "tf1_and_tf2_test")
 
 package(
     default_visibility = [
@@ -21,7 +21,7 @@ py_proto_library(
     deps = [":thermodynamics_proto"],
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "constant_density_test",
     srcs = ["constant_density_test.py"],
     python_version = "PY3",
@@ -37,7 +37,7 @@ py_strict_test(
     ],
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "ideal_gas_test",
     srcs = ["ideal_gas_test.py"],
     python_version = "PY3",
@@ -53,7 +53,7 @@ py_strict_test(
     ],
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "linear_mixing_test",
     srcs = ["linear_mixing_test.py"],
     python_version = "PY3",
@@ -69,7 +69,7 @@ py_strict_test(
     ],
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "thermodynamics_generic_test",
     srcs = ["thermodynamics_generic_test.py"],
     python_version = "PY3",
@@ -86,7 +86,7 @@ py_strict_test(
     ],
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "thermodynamics_manager_test",
     srcs = ["thermodynamics_manager_test.py"],
     args = ["--xla_jf_conv_full_precision=True"],
@@ -108,7 +108,6 @@ py_strict_test(
         "//net/proto2/python/public",
         "//pyglib:gfile",
         "//pyglib:resources",
-        "//research/simulation/tensorflow/fluid/framework:tpu_runner",
         "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
         "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_parameters_py_pb2",
         "//testing/pybase:parameterized",
@@ -116,11 +115,12 @@ py_strict_test(
         "//third_party/py/swirl_lm/physics/thermodynamics:thermodynamics_py_pb2",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
         "//third_party/py/swirl_lm/utility:tf_test_util",
+        "//third_party/py/swirl_lm/utility:tf_tpu_test_util",
         "//third_party/py/tensorflow",
     ],
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "thermodynamics_utils_test",
     srcs = ["thermodynamics_utils_test.py"],
     python_version = "PY3",
@@ -133,7 +133,7 @@ py_strict_test(
     ],
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "water_test",
     srcs = ["water_test.py"],
     python_version = "PY3",

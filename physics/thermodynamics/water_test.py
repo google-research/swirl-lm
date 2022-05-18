@@ -38,6 +38,7 @@ class WaterTest(tf.test.TestCase, parameterized.TestCase):
               R'    t_min: 250.0  '
               R'    t_freeze: 273.15  '
               R'    t_triple: 273.16  '
+              R'    t_icenuc: 233.0  '
               R'    p_triple: 611.7  '
               R'    e_int_v0: 2.132e6  '
               R'    e_int_i0: 3.34e5  '
@@ -87,7 +88,7 @@ class WaterTest(tf.test.TestCase, parameterized.TestCase):
 
     r_m = self.evaluate(self.water.r_m(temperature, rho, q_t))
 
-    expected = [285.14575, 287.2156]
+    expected = [285.22366, 287.2156]
 
     self.assertAllClose(expected, r_m)
 
@@ -168,7 +169,7 @@ class WaterTest(tf.test.TestCase, parameterized.TestCase):
     p = self.evaluate(
         self.water.saturation_vapor_pressure(temperature, lh_0, d_cp))
 
-    expected = [604.37965064, 128229.58693153]
+    expected = [605.3146, 128229.67]
 
     self.assertAllClose(expected, p)
 
@@ -189,9 +190,25 @@ class WaterTest(tf.test.TestCase, parameterized.TestCase):
     with self.subTest(name='WithoutInputQs'):
       liq_frac = self.evaluate(self.water.liquid_fraction(temperature))
 
-      expected = [0.0, 1.0]
+      expected = [0.821918, 1.0]
 
       self.assertAllClose(expected, liq_frac)
+
+  def testSaturationQVaporFromPressure(self):
+    """Checks if the saturation qv from pressure is computed correctly."""
+    temperature = [tf.constant(266.0), tf.constant(293.0)]
+    q_t = [tf.constant(0.01), tf.constant(0.005)]
+    q_l = [tf.constant(0.004), tf.constant(0.001)]
+    q_c = [tf.constant(0.005), tf.constant(0.001)]
+    zz = [tf.constant(1000.0), tf.constant(0.0)]
+
+    q_v = self.evaluate(
+        self.water.saturation_q_vapor_from_pressure(temperature, q_t, zz, q_l,
+                                                    q_c))
+
+    expected = [0.002553, 0.012627]
+
+    self.assertAllClose(expected, q_v)
 
   def testSaturationQVapor(self):
     """Checks if the saturation specific humidity is computed correctly."""
@@ -232,11 +249,11 @@ class WaterTest(tf.test.TestCase, parameterized.TestCase):
         self.water.equilibrium_phase_partition(temperature, rho, q_t))
 
     with self.subTest(name='QL'):
-      expected = [0.0, 0.03500298]
+      expected = [0.006142, 0.035003]
       self.assertAllClose(expected, q_l)
 
     with self.subTest(name='QI'):
-      expected = [0.00761373, 0.0]
+      expected = [0.001331, 0.0]
       self.assertAllClose(expected, q_i)
 
   def testInternalEnergy(self):
@@ -277,7 +294,7 @@ class WaterTest(tf.test.TestCase, parameterized.TestCase):
     e_int = self.evaluate(
         self.water.saturation_internal_energy(temperature, rho, q_t))
 
-    expected = [-1377.08809138, 20774.8126]
+    expected = [865.67163, 20774.812]
 
     self.assertAllClose(expected, e_int, rtol=1e-05, atol=1e-02)
 
@@ -289,7 +306,7 @@ class WaterTest(tf.test.TestCase, parameterized.TestCase):
 
     dedt = self.evaluate(self.water.de_int_dt(temperature, rho, q_t))
 
-    expected = [1289.44906027, 2934.62306238]
+    expected = [1215.5399, 2934.6255]
 
     self.assertAllClose(expected, dedt)
 
@@ -310,7 +327,7 @@ class WaterTest(tf.test.TestCase, parameterized.TestCase):
 
     t = self.evaluate(self.water.saturation_adjustment(e_int, rho, q_t))
 
-    expected = [270.16278, 284.33896]
+    expected = [268.59998, 284.33896]
 
     self.assertAllClose(expected, t, atol=1e-5, rtol=0)
 
@@ -343,7 +360,7 @@ class WaterTest(tf.test.TestCase, parameterized.TestCase):
 
     t = self.evaluate(self.water.saturation_density(e_t, q_t, u, v, w, rho_0))
 
-    expected = [1.305706, 1.240500]
+    expected = [1.314876, 1.2405]
 
     self.assertAllClose(expected, t)
 
@@ -464,15 +481,15 @@ class WaterTest(tf.test.TestCase, parameterized.TestCase):
     t = self.evaluate(self.water.update_temperatures(states, additional_states))
 
     with self.subTest(name='Temperature'):
-      expected = [271.3176, 284.31808]
+      expected = [269.60706, 284.31808]
       self.assertAllClose(expected, t['T'])
 
     with self.subTest(name='LiquidIcePotentialTemperature'):
-      expected = [255.42886, 292.1548]
+      expected = [254.95332, 292.1548]
       self.assertAllClose(expected, t['theta_li'])
 
     with self.subTest(name='VirtualPotentialTemperature'):
-      expected = [271.0622, 292.69037]
+      expected = [269.21576, 292.69037]
       self.assertAllClose(expected, t['theta_v'])
 
   @parameterized.named_parameters(

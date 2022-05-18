@@ -1,5 +1,4 @@
 load("//devtools/python/blaze:pytype.bzl", "pytype_strict_library")
-load("//devtools/python/blaze:strict.bzl", "py_strict_test")
 load("//third_party/py/swirl_lm/utility:build_defs.bzl", "tf1_and_tf2_test")
 
 licenses(["notice"])
@@ -57,7 +56,7 @@ tf1_and_tf2_test(
     ],
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "convection_test",
     srcs = ["convection_test.py"],
     args = ["--xla_jf_conv_full_precision=True"],
@@ -71,17 +70,17 @@ py_strict_test(
     deps = [
         ":convection",
         "//learning/brain/google/xla:deepsea_hardware_device",
-        "//research/simulation/tensorflow/fluid/framework:tpu_runner",
         "//testing/pybase:parameterized",
         "//third_party/py/numpy",
         "//third_party/py/swirl_lm/boundary_condition:boundary_condition_utils",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
         "//third_party/py/swirl_lm/utility:tf_test_util",
+        "//third_party/py/swirl_lm/utility:tf_tpu_test_util",
         "//third_party/py/tensorflow",
     ],
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "diffusion_test",
     srcs = ["diffusion_test.py"],
     deps = [
@@ -120,7 +119,7 @@ tf1_and_tf2_test(
     ],
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "root_finder_test",
     srcs = ["root_finder_test.py"],
     data = ["//third_party/py/swirl_lm/numerics:testdata/config.textpb"],

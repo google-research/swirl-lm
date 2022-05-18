@@ -147,7 +147,10 @@ _FlowFieldMap = eq_utils.FlowFieldMap
 _NormType = common_ops.NormType
 
 
-def _monitor_key(statistic_type: Text, metric_name: Text) -> Text:
+def _monitor_key(
+    statistic_type: Text,
+    metric_name: Text,
+) -> Text:
   return monitor.MONITOR_KEY_TEMPLATE.format(
       module='pressure', statistic_type=statistic_type, metric_name=metric_name)
 
@@ -229,9 +232,13 @@ def _supported_convergence_norms() -> Dict[Text, _NormType]:
 
 
 def _gen_monitor_data(
-    monitor_lib: monitor.Monitor, replica_id: tf.Tensor, replicas: np.ndarray,
+    monitor_lib: monitor.Monitor,
+    replica_id: tf.Tensor,
+    replicas: np.ndarray,
     states: _FlowFieldMap,
-    input_monitor_params: Mapping[Text, Any]) -> Mapping[Text, tf.Tensor]:
+    input_monitor_params: Mapping[Text, Any],
+    halo_width: int,
+) -> Mapping[Text, tf.Tensor]:
   """Generates monitoring data.
 
   Args:
@@ -243,6 +250,8 @@ def _gen_monitor_data(
       'rho' in it.
     input_monitor_params: A dict contains all needed objects and values to
       generate the monitor values.
+    halo_width: A int representing the halo_width for all dimensions. The values
+      inside the halos will be excluded from the monitor data calculation.
 
   Returns:
     A dictionary representing the mapping of the monitor key to the monitor
@@ -267,7 +276,8 @@ def _gen_monitor_data(
     if key not in monitor_params:
       continue
 
-    stacked_v = tf.stack(monitor_params[key])
+    cleared_v = common_ops.strip_halos(monitor_params[key], [halo_width] * 3)
+    stacked_v = tf.pad(tf.stack(cleared_v), [[halo_width, halo_width]] * 3)
     # Vector.
     monitor_key = _monitor_key('raw', key)
     if monitor_lib.check_key(monitor_key):
@@ -280,7 +290,10 @@ def _gen_monitor_data(
         _NormType.L_INF,
     )
 
-    def _key(key, norm_type):
+    def _key(
+        key,
+        norm_type,
+    ):
       return _monitor_key('scalar', '{}-{}'.format(key, norm_type))
 
     monitor_keys = (
@@ -340,13 +353,14 @@ def _gen_monitor_data(
       if (monitor_lib.statistic_type(norm_metric) ==
           monitor.StatisticType.SUBITER_SCALAR):
         if subiter is None:
-          logging.error(
-              'Missing subiter counter, monitor key: `%s` ignored.',
-              norm_metric)
+          logging.error('Missing subiter counter, monitor key: `%s` ignored.',
+                        norm_metric)
         else:
           monitor_vars.update({
-              norm_metric: tf.tensor_scatter_nd_update(
-                  monitor_lib.data[norm_metric], [[subiter]], [norm])})
+              norm_metric:
+                  tf.tensor_scatter_nd_update(monitor_lib.data[norm_metric],
+                                              [[subiter]], [norm])
+          })
       else:
         monitor_vars.update({norm_metric: norm})
 
@@ -392,8 +406,8 @@ class Pressure(object):
     self.monitor = monitor_lib
 
     self._pressure_params = (
-        params.pressure if params.pressure is not None else
-        text_format.Parse(_DEFAULT_PRESSURE_PARAMS, pressure_pb2.Pressure()))
+        params.pressure if params.pressure is not None else text_format.Parse(
+            _DEFAULT_PRESSURE_PARAMS, pressure_pb2.Pressure()))
 
     self._solver = poisson_solver.poisson_solver_factory(
         params, self._kernel_op, self._pressure_params.solver)
@@ -408,10 +422,15 @@ class Pressure(object):
 
     self._source = {'rho': None}
 
-    self._src_manager = (
-        physical_variable_keys_manager.SourceKeysHelper())
+    self._src_manager = (physical_variable_keys_manager.SourceKeysHelper())
 
-  def _exchange_halos(self, f, bc_f, replica_id, replicas):
+  def _exchange_halos(
+      self,
+      f,
+      bc_f,
+      replica_id,
+      replicas,
+  ):
     """Performs halo exchange for the variable f."""
     return halo_exchange.inplace_halo_exchange(
         f,
@@ -464,8 +483,8 @@ class Pressure(object):
         density, `rho_info` is the rate of change of density, as a 3D tensor.
       subiter: A scalar Tensor of the integer type that represents the
         subiteration count. Default to `None`, and when it is not `None` and
-        corresponding monitor variable `MONITOR_pressure_subiter_convergence`
-        is specified in the config, the norm of the pressure residual will be
+        corresponding monitor variable `MONITOR_pressure_subiter_convergence` is
+        specified in the config, the norm of the pressure residual will be
         stored separately for each subiteration.
 
     Returns:
@@ -500,7 +519,12 @@ class Pressure(object):
         Poisson equation of the present time step.
       """
 
-      def div(coeff_rho, momentum_x, momentum_y, momentum_z):
+      def div(
+          coeff_rho,
+          momentum_x,
+          momentum_y,
+          momentum_z,
+      ):
         """Computes the divergence of the velocity field."""
         # Compute the fourth order derivative of the pressure for the face
         # velocity correction.
@@ -536,7 +560,10 @@ class Pressure(object):
             for du_dx_i, dv_dy_i, dw_dz_i in zip(du_dx, dv_dy, dw_dz)
         ]
 
-      def add_factor(v, factor):
+      def add_factor(
+          v,
+          factor,
+      ):
         return [factor * v_i for v_i in v]
 
       b_terms = {
@@ -576,12 +603,18 @@ class Pressure(object):
               )], b_terms
       # pylint: enable=g-complex-comprehension
 
-    def dp_exchange_halos(dpr):
+    def dp_exchange_halos(dpr,):
       """Updates halos and applies the homogeneoues boundary condition."""
-      bc_dp = [[(halo_exchange.BCType.NEUMANN, 0.0),] * 2,] * 3
+      bc_dp = [
+          [
+              (halo_exchange.BCType.NEUMANN, 0.0),
+          ] * 2,
+      ] * 3
       for dim in range(3):
         if self._params.periodic_dims[dim]:
-          bc_dp[dim] = [None,] * 2
+          bc_dp[dim] = [
+              None,
+          ] * 2
           continue
 
         for face in range(2):
@@ -645,7 +678,7 @@ class Pressure(object):
     monitor_params.update(poisson_solution)
 
     monitor_vars = _gen_monitor_data(self.monitor, replica_id, replicas, states,
-                                     monitor_params)
+                                     monitor_params, halo_width)
 
     dp = common_ops.remove_global_mean(
         common_ops.tf_cast(dp, _TF_DTYPE), replicas,
@@ -677,12 +710,21 @@ class Pressure(object):
     exchange_halos = functools.partial(
         self._exchange_halos, replica_id=replica_id, replicas=replicas)
 
-    def convection_per_dim(kernel_op, rho_u, u, dx):
+    def convection_per_dim(
+        kernel_op,
+        rho_u,
+        u,
+        dx,
+    ):
       """Computes the convection term in a specific dimension."""
       flux = [rho_u_i * u_i for rho_u_i, u_i in zip(rho_u, u)]
       return [-grad / (2.0 * dx) for grad in kernel_op(flux)]
 
-    def grad_per_dim(kernel_op, f, dx):
+    def grad_per_dim(
+        kernel_op,
+        f,
+        dx,
+    ):
       """Computes the diffusion term in a specific dimension."""
       return [grad / (2.0 * dx) for grad in kernel_op(f)]
 
@@ -751,7 +793,8 @@ class Pressure(object):
     diff = [[
         diff_fn(mu_i, ddu_n_i, ddu_t_i)
         for mu_i, ddu_n_i, ddu_t_i in zip(mu, ddu_n[i], ddu_t[i])
-    ] for i in range(3)]
+    ]
+            for i in range(3)]
 
     for i in range(3):
       u_key = velocity_keys[i]
@@ -858,8 +901,8 @@ class Pressure(object):
       additional_states: A dictionary that holds constants that will be used in
         the simulation, e.g. boundary conditions, forcing terms.
       subiter: A scalar Tensor of the integer type that represents the
-        subiteration count. Default to `None`, and when it is not `None`
-        the pressure residual will be stored separately.
+        subiteration count. Default to `None`, and when it is not `None` the
+        pressure residual will be stored separately.
 
     Returns:
       A dictionary with the updated pressure and pressure corrector.
@@ -886,7 +929,10 @@ class Pressure(object):
 
       drho_filter_cond = lambda i, drho_i: i < self._n_filter
 
-      def drho_filter_fn(i, drho_i):
+      def drho_filter_fn(
+          i,
+          drho_i,
+      ):
         """The body function for drho filtering."""
         return i + 1, exchange_halos(
             filters.filter_op(self._kernel_op, drho_i, order=2))

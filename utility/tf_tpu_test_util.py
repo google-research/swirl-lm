@@ -38,7 +38,7 @@ def run_on_tpu_in_test(
           sess.run(tf.compat.v1.tpu.initialize_system()))
       device_assignment, _ = util.tpu_device_assignment(computation_shape,
                                                         topology)
-      inputs = [list(x) for x in zip(*args)]  # transpose args
+      inputs = [list(x) for x in zip(*args)] if args else None  # transpose args
       tpu_fn = tf.compat.v1.tpu.replicate(
           fn, inputs=inputs, device_assignment=device_assignment)
 

@@ -77,7 +77,7 @@ class ThermodynamicsTest(parameterized.TestCase):
 
     theta_li = self.water.liquid_ice_potential_temperature(t, q_t, rho, zz)
 
-    expected = [255.42886, 292.1548]
+    expected = [257.63593, 292.1548]
     self.assertSequenceAlmostEqual(expected, theta_li, 4)
 
   def testVirtualPotentialTemperatureIsComputedCorrectly(self):
@@ -89,7 +89,7 @@ class ThermodynamicsTest(parameterized.TestCase):
 
     theta_v = self.water.virtual_potential_temperature(t, q_t, rho, zz)
 
-    expected = [271.0622, 292.6904]
+    expected = [271.0889, 292.6904]
     self.assertSequenceAlmostEqual(expected, theta_v, 4)
 
   def testTemperatureIsComputedCorrectly(self):
@@ -100,7 +100,7 @@ class ThermodynamicsTest(parameterized.TestCase):
 
     t = self.water.temperature(e_int, rho, q_t)
 
-    expected = np.array([271.9599, 284.31808])
+    expected = np.array([270.30612, 284.31808])
     self.assertSequenceAlmostEqual(expected, t, 4)
 
   def testDensityIsComputedCorrectly(self):
@@ -114,7 +114,7 @@ class ThermodynamicsTest(parameterized.TestCase):
 
     rho = self.water.density(e_t, q_t, u, v, w, rho_0)
 
-    expected = [1.3057063, 1.2405005]
+    expected = [1.3148757, 1.2405005]
 
     self.assertSequenceAlmostEqual(expected, rho)
 
@@ -126,7 +126,7 @@ class ThermodynamicsTest(parameterized.TestCase):
 
     q_l = self.water.liquid_mass_fraction(t, rho, q_t)
 
-    expected = [0.0, 0.03500298]
+    expected = [0.006142296, 0.03500298]
     self.assertSequenceAlmostEqual(expected, q_l)
 
   def testCondensedWaterMassFractionIsComputedCorrectly(self):
@@ -137,7 +137,7 @@ class ThermodynamicsTest(parameterized.TestCase):
 
     q_c = self.water.condensed_mass_fraction(t, rho, q_t)
 
-    expected = [0.00761373, 0.03500298]
+    expected = [0.007473125, 0.03500298]
     self.assertSequenceAlmostEqual(expected, q_c)
 
   def testInternalEnergyIsComputedCorrectly(self):
@@ -162,7 +162,7 @@ class ThermodynamicsTest(parameterized.TestCase):
 
     h_t = self.water.total_enthalpy(e_t, rho, q_t, temperature)
 
-    expected = [115848.7695, 114154.1708]
+    expected = [115869.49, 114154.1708]
 
     self.assertSequenceAlmostEqual(expected, h_t, places=2)
 

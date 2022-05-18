@@ -67,7 +67,7 @@ message IdealGasLaw {
 message ConstantDensity {}
 
 // A library for parameters required by the water thermodynamics.
-// Next id: 25
+// Next id: 26
 message Water {
   // The gas constant of water vapor, in unit of J/kg/K. The default value is
   // computed based on treating the molecular weight of water as 0.018 kg/mol.
@@ -83,6 +83,10 @@ message Water {
   // values:
   // engineeringtoolbox.com/critical-point-water-steam-d_834.html
   optional float t_triple = 5 [default = 273.16];
+  // The nucleation temperature, in units of K. Default value obtained from
+  // CliMa:
+  // https://github.com/CliMA/CLIMAParameters.jl/blob/main/src/Planet/planet_parameters.jl
+  optional float t_icenuc = 25 [default = 233.0];
   // The triple point pressure, in units of Pa.
   optional float p_triple = 6 [default = 611.7];
   // The reference specific internal energy of water vapor, in units of J/kg.

@@ -7,12 +7,12 @@ from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import thermodynamics_pb2
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import tf_test_util as test_util
+from swirl_lm.utility.tf_tpu_test_util import run_on_tpu_in_test
 import tensorflow as tf
 
 from google3.net.proto2.python.public import text_format
 from google3.pyglib import gfile
 from google3.pyglib import resources
-from google3.research.simulation.tensorflow.fluid.framework.tpu_runner import TpuRunner
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
 from google3.testing.pybase import parameterized
@@ -42,11 +42,6 @@ class ThermodynamicsManagerTest(tf.test.TestCase, parameterized.TestCase):
 
     return thermodynamics_manager.thermodynamics_factory(params)
 
-  def _run_on_tpu(self, replicas, inputs, device_fn):
-    """Wrapper for the Cartesian grid method."""
-    runner = TpuRunner(replicas=replicas)
-    return runner.run(device_fn, *inputs)
-
   @parameterized.named_parameters(
       ('WaterGeoStaticAnelastic', 'water_geo_static_anelastic.textpb', {
           'e_t': [5201.06235, 22396.03],
@@ -67,7 +62,7 @@ class ThermodynamicsManagerTest(tf.test.TestCase, parameterized.TestCase):
           'rho': [1.2, 0.9],
       }, {
           'zz': [100.0, 800.0],
-      }, (1.2906898, 1.1277938)),
+      }, (1.299703, 1.1277938)),
       ('IdealGasAnelastic', 'ideal_gas_anelastic.textpb', {
           'T': [270.0, 900.0],
           'Y_CO2': [0.1, 0.8],
@@ -123,7 +118,7 @@ class ThermodynamicsManagerTest(tf.test.TestCase, parameterized.TestCase):
 
     inputs = [[tf.constant(0)]]
 
-    output = self._run_on_tpu(replicas, inputs, device_fn)
+    output = run_on_tpu_in_test(self, replicas, device_fn, *inputs)
     rho_new, drho = output[0]
 
     if model.solver_mode == thermodynamics_pb2.Thermodynamics.LOW_MACH:
@@ -150,7 +145,7 @@ class ThermodynamicsManagerTest(tf.test.TestCase, parameterized.TestCase):
           'rho': [1.2, 0.9],
       }, {
           'zz': [100.0, 800.0],
-      }, (1.290692, 1.127795)),
+      }, (1.299705, 1.127795)),
       ('WaterGeoStaticLowMach', 'water_geo_static_low_mach.textpb', {
           'e_t': [5201.06235, 22396.03],
           'q_t': [0.01, 0.003],
@@ -160,7 +155,7 @@ class ThermodynamicsManagerTest(tf.test.TestCase, parameterized.TestCase):
           'rho': [1.2, 0.9],
       }, {
           'zz': [100.0, 800.0],
-      }, (1.290692, 1.127795)),
+      }, (1.299705, 1.127795)),
       ('IdealGasAnelastic', 'ideal_gas_anelastic.textpb', {
           'T': [270.0, 900.0],
           'Y_CO2': [0.1, 0.8],

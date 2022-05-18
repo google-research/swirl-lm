@@ -1,5 +1,6 @@
 load("//devtools/python/blaze:pytype.bzl", "pytype_strict_library")
 load("//devtools/python/blaze:strict.bzl", "py_strict_test")
+load("//third_party/py/swirl_lm/utility:build_defs.bzl", "tf1_and_tf2_test")
 
 licenses(["notice"])
 
@@ -36,7 +37,7 @@ pytype_strict_library(
     srcs_version = "PY3",
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "pressure_test",
     timeout = "long",
     srcs = ["pressure_test.py"],
@@ -71,7 +72,7 @@ py_strict_test(
     ],
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "scalars_test",
     srcs = ["scalars_test.py"],
     args = ["--xla_jf_conv_full_precision=True"],
@@ -97,7 +98,7 @@ py_strict_test(
     ],
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "utils_test",
     srcs = ["utils_test.py"],
     python_version = "PY3",
@@ -188,7 +189,6 @@ pytype_strict_library(
         ":utils",
         "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
         "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:physical_variable_keys_manager",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:sgs_model",
         "//third_party/py/numpy",
         "//third_party/py/swirl_lm/boundary_condition:immersed_boundary_method",
         "//third_party/py/swirl_lm/communication:halo_exchange",
@@ -201,6 +201,7 @@ pytype_strict_library(
         "//third_party/py/swirl_lm/physics/atmosphere:precipitation",
         "//third_party/py/swirl_lm/physics/thermodynamics:thermodynamics_manager",
         "//third_party/py/swirl_lm/physics/thermodynamics:water",
+        "//third_party/py/swirl_lm/physics/turbulence:sgs_model",
         "//third_party/py/swirl_lm/utility:common_ops",
         "//third_party/py/swirl_lm/utility:components_debug",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
@@ -233,7 +234,6 @@ pytype_strict_library(
         "//research/simulation/tensorflow/fluid/framework:util",
         "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
         "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:physical_variable_keys_manager",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:sgs_model",
         "//third_party/py/numpy",
         "//third_party/py/swirl_lm/boundary_condition:boundary_condition_utils",
         "//third_party/py/swirl_lm/boundary_condition:immersed_boundary_method",
@@ -245,6 +245,7 @@ pytype_strict_library(
         "//third_party/py/swirl_lm/numerics:time_integration",
         "//third_party/py/swirl_lm/physics/thermodynamics:thermodynamics_manager",
         "//third_party/py/swirl_lm/physics/thermodynamics:water",
+        "//third_party/py/swirl_lm/physics/turbulence:sgs_model",
         "//third_party/py/swirl_lm/utility:common_ops",
         "//third_party/py/swirl_lm/utility:components_debug",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",

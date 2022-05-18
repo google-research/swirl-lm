@@ -19,7 +19,6 @@ from google3.research.simulation.tensorflow.fluid.models.incompressible_structur
 FLAGS = flags.FLAGS
 
 
-@test_util.run_all_in_graph_and_eager_modes
 class ScalarsTest(tf.test.TestCase, parameterized.TestCase):
 
   _GRAVITY_AND_THERMODYNAMICS_PBTXT = (R'gravity_direction { '
@@ -58,14 +57,14 @@ class ScalarsTest(tf.test.TestCase, parameterized.TestCase):
   def setUp(self):
     super(ScalarsTest, self).setUp()
 
-    # Set up a (8, 8, 8) mesh. Only the point at (1, 1, 1) is tested as a
+    # Set up a (8, 8, 8) mesh. Only the point at (2, 2, 2) is tested as a
     # reference.
     self.u = [
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
-        tf.constant([[0] * 8, [0, 2, 0, 0, 0, 0, 0, 0], [0] * 8, [0] * 8,
+        tf.constant(0, shape=(8, 8), dtype=tf.float32),
+        tf.constant([[0] * 8, [0] * 8, [0, 0, 2, 0, 0, 0, 0, 0], [0] * 8,
                      [0] * 8, [0] * 8, [0] * 8, [0] * 8],
                     dtype=tf.float32),
-        tf.constant(0, shape=(8, 8), dtype=tf.float32),
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
@@ -75,10 +74,10 @@ class ScalarsTest(tf.test.TestCase, parameterized.TestCase):
 
     self.v = [
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
-        tf.constant([[0] * 8, [0, -3, 0, 0, 0, 0, 0, 0], [0] * 8, [0] * 8,
+        tf.constant(0, shape=(8, 8), dtype=tf.float32),
+        tf.constant([[0] * 8, [0] * 8, [0, 0, -3, 0, 0, 0, 0, 0], [0] * 8,
                      [0] * 8, [0] * 8, [0] * 8, [0] * 8],
                     dtype=tf.float32),
-        tf.constant(0, shape=(8, 8), dtype=tf.float32),
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
@@ -88,10 +87,10 @@ class ScalarsTest(tf.test.TestCase, parameterized.TestCase):
 
     self.w = [
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
-        tf.constant([[0] * 8, [0, 4, 0, 0, 0, 0, 0, 0], [0] * 8, [0] * 8,
+        tf.constant(0, shape=(8, 8), dtype=tf.float32),
+        tf.constant([[0] * 8, [0] * 8, [0, 0, 4, 0, 0, 0, 0, 0], [0] * 8,
                      [0] * 8, [0] * 8, [0] * 8, [0] * 8],
                     dtype=tf.float32),
-        tf.constant(0, shape=(8, 8), dtype=tf.float32),
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
@@ -101,12 +100,12 @@ class ScalarsTest(tf.test.TestCase, parameterized.TestCase):
 
     self.p = [
         tf.constant(2, shape=(8, 8), dtype=tf.float32),
+        tf.constant(6, shape=(8, 8), dtype=tf.float32),
         tf.constant([[0, 1, 2, 3, 4, 5, 6, 7], [4, 5, 6, 7, 8, 9, 10, 11],
                      [8, 7, 6, 5, 4, 3, 2, 1], [4, 3, 2, 1, 0, -1, -2, -3],
                      [0, 1, 2, 3, 4, 5, 6, 7], [4, 5, 6, 7, 8, 9, 10, 11],
                      [8, 7, 6, 5, 4, 3, 2, 1], [4, 3, 2, 1, 0, -1, -2, -3]],
                     dtype=tf.float32),
-        tf.constant(6, shape=(8, 8), dtype=tf.float32),
         tf.constant(8, shape=(8, 8), dtype=tf.float32),
         tf.constant(10, shape=(8, 8), dtype=tf.float32),
         tf.constant(8, shape=(8, 8), dtype=tf.float32),
@@ -116,6 +115,7 @@ class ScalarsTest(tf.test.TestCase, parameterized.TestCase):
 
     self.sc = [
         tf.constant(0.1, shape=(8, 8), dtype=tf.float32),
+        tf.constant(0.5, shape=(8, 8), dtype=tf.float32),
         tf.constant([[0.4, 0.5, 0.6, 0.7, 0.0, 0.1, 0.2, 0.3],
                      [0.5, 0.6, 0.7, 0.0, 0.1, 0.2, 0.3, 0.4],
                      [0.6, 0.7, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5],
@@ -125,7 +125,6 @@ class ScalarsTest(tf.test.TestCase, parameterized.TestCase):
                      [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.0, 0.1],
                      [0.3, 0.4, 0.5, 0.6, 0.7, 0.0, 0.1, 0.2]],
                     dtype=tf.float32),
-        tf.constant(0.5, shape=(8, 8), dtype=tf.float32),
         tf.constant(0.7, shape=(8, 8), dtype=tf.float32),
         tf.constant(0.9, shape=(8, 8), dtype=tf.float32),
         tf.constant(0.7, shape=(8, 8), dtype=tf.float32),
@@ -172,8 +171,9 @@ class ScalarsTest(tf.test.TestCase, parameterized.TestCase):
 
     return scalars.Scalars(self.kernel_op, params, dbg=dbg_model)
 
+  @test_util.run_in_graph_and_eager_modes
   def testConservativeScalarUpdatesOutputsCorrectTensor(self):
-    """Function value at [1, 1, 1] is correct."""
+    """Function value at [2, 2, 2] is correct."""
     model = self.set_up_scalars(False)
 
     states = {
@@ -200,11 +200,11 @@ class ScalarsTest(tf.test.TestCase, parameterized.TestCase):
     rhs_sc = self.evaluate(scalar_rhs(self.sc))
 
     self.assertLen(rhs_sc, 8)
+    self.assertAllClose(rhs_sc[2][2, 2], np.float32(0.134))
 
-    self.assertAllClose(rhs_sc[1][1, 1], np.float32(1.026))
-
+  @test_util.run_in_graph_and_eager_modes
   def testConservativeScalarUpdatesOutputsCorrectTensorWithDebugMode(self):
-    """Function value at [1, 1, 1] is correct."""
+    """Function value at [2, 2, 2] is correct."""
     model = self.set_up_scalars(False)
     states = {
         'u': self.u,
@@ -230,27 +230,28 @@ class ScalarsTest(tf.test.TestCase, parameterized.TestCase):
     terms = self.evaluate(scalar_rhs(self.sc))
 
     with self.subTest(name='ConvectionX'):
-      self.assertAllClose(terms['conv_x'][1][1, 1], 0.05)
+      self.assertAllClose(terms['conv_x'][2][2, 2], -0.5)
 
     with self.subTest(name='ConvectionY'):
-      self.assertAllClose(terms['conv_y'][1][1, 1], -1.2)
+      self.assertAllClose(terms['conv_y'][2][2, 2], 1.2)
 
     with self.subTest(name='ConvectionZ'):
-      self.assertAllClose(terms['conv_z'][1][1, 1], 0.1)
+      self.assertAllClose(terms['conv_z'][2][2, 2], -0.65)
 
     with self.subTest(name='DiffusionX'):
-      self.assertAllClose(terms['diff_x'][1][1, 1], 0.0)
+      self.assertAllClose(terms['diff_x'][2][2, 2], 0.008)
 
     with self.subTest(name='DiffusionY'):
-      self.assertAllClose(terms['diff_y'][1][1, 1], 0.0)
+      self.assertAllClose(terms['diff_y'][2][2, 2], 0.128)
 
     with self.subTest(name='DiffusionZ'):
-      self.assertAllClose(terms['diff_z'][1][1, 1], -0.024)
+      self.assertAllClose(terms['diff_z'][2][2, 2], 0.048)
 
     with self.subTest(name='Source'):
-      self.assertAllClose(terms['source'][1][1, 1], 0.0)
+      self.assertAllClose(terms['source'][2][2, 2], 0.0)
 
   @parameterized.parameters(*list(itertools.product([True, False], repeat=3)))
+  @test_util.run_in_graph_and_eager_modes
   def testEtUpdatesOutputsCorrectTensor(self, include_radiation,
                                         include_subsidence,
                                         include_precipitation):
@@ -312,14 +313,12 @@ class ScalarsTest(tf.test.TestCase, parameterized.TestCase):
     rhs_e_t = self.evaluate(scalar_rhs(sc))
 
     self.assertLen(rhs_e_t, 8)
-    expected_all = [[[-18347.69, -18356.73], [-18329.33, -18338.37]],
-                    [[-18359.15, -18368.19], [-18340.79, -18349.83]]]
+    expected_all = [[[-19442.453, -19451.49], [-19422.984, -19432.021]],
+                    [[-19459.172, -19468.209], [-19439.701, -19448.74]]]
     expected = (
         expected_all[int(include_radiation)][int(include_subsidence)][int(
             include_precipitation)])
-    #    expected = -18340.791 if include_subsidence else -18359.148
     actual = rhs_e_t[4][4, 4]
-    print('actual = {}, expected = {}'.format(actual, expected))
     self.assertAllClose(actual, np.float32(expected))
 
   @parameterized.parameters(
@@ -327,31 +326,32 @@ class ScalarsTest(tf.test.TestCase, parameterized.TestCase):
           'scalar_name': 'q_t',
           'include_precipitation': False,
           'include_subsidence': False,
-          'expected': 0.009999998
+          'expected': 0.0
       }, {
           'scalar_name': 'q_t',
           'include_precipitation': False,
           'include_subsidence': True,
-          'expected': 0.0100007
+          'expected': 7.88e-7
       }, {
           'scalar_name': 'q_t',
           'include_precipitation': True,
           'include_subsidence': False,
-          'expected': 0.008444427
+          'expected': -0.001558865
       }, {
           'scalar_name': 'q_t',
           'include_precipitation': True,
           'include_subsidence': True,
-          'expected': 0.0084452
+          'expected': -0.001558077
       }, {
           'scalar_name': 'q_r',
           'include_precipitation': True,
           'include_subsidence': True,
-          'expected': 0.009987371
+          'expected': -0.044734500
       })
+  @test_util.run_in_graph_and_eager_modes
   def testHumidityUpdate(self, scalar_name, include_precipitation,
                          include_subsidence, expected):
-    """Total humidity RHS value at [1, 1, 1] is correct."""
+    """Total humidity RHS value at [3, 3, 3] is correct."""
 
     pbtxt = (
         self._GRAVITY_AND_THERMODYNAMICS_PBTXT + R'scalars {  '
@@ -434,7 +434,7 @@ class ScalarsTest(tf.test.TestCase, parameterized.TestCase):
     rhs = self.evaluate(scalar_rhs(sc))
 
     self.assertLen(rhs, 8)
-    self.assertAllClose(rhs[1][1, 1], np.float32(expected))
+    self.assertAllClose(rhs[2][2, 2], np.float32(expected))
 
 
 if __name__ == '__main__':

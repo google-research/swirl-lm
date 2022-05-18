@@ -27,7 +27,6 @@ FLAGS = flags.FLAGS
 _TESTDATA_DIR = 'google3/third_party/py/swirl_lm/equations/testdata'
 
 
-@test_util.run_all_in_graph_and_eager_modes
 class PressureTest(tf.test.TestCase, parameterized.TestCase):
 
   _RHO_INFO = [
@@ -35,11 +34,7 @@ class PressureTest(tf.test.TestCase, parameterized.TestCase):
       pressure.VariableDensityInfo,
   ]
 
-  _SUBITER = [
-      None,
-      0,
-      1
-  ]
+  _SUBITER = [None, 0, 1]
 
   def setUp(self):
     """Initializes shared fields for tests."""
@@ -51,14 +46,14 @@ class PressureTest(tf.test.TestCase, parameterized.TestCase):
     self.replica_dims = [0, 1, 2]
     self.periodic_dims = [False, False, False]
 
-    # Set up a (8, 8, 8) mesh. Only the point at (1, 1, 1) is tested as a
+    # Set up a (8, 8, 8) mesh. Only the point at (2, 2, 2) is tested as a
     # reference.
     self.u = [
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
-        tf.constant([[0] * 8, [0, 2, 0, 0, 0, 0, 0, 0], [0] * 8, [0] * 8,
+        tf.constant(0, shape=(8, 8), dtype=tf.float32),
+        tf.constant([[0] * 8, [0] * 8, [0, 0, 2, 0, 0, 0, 0, 0], [0] * 8,
                      [0] * 8, [0] * 8, [0] * 8, [0] * 8],
                     dtype=tf.float32),
-        tf.constant(0, shape=(8, 8), dtype=tf.float32),
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
@@ -68,10 +63,10 @@ class PressureTest(tf.test.TestCase, parameterized.TestCase):
 
     self.v = [
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
-        tf.constant([[0] * 8, [0, -3, 0, 0, 0, 0, 0, 0], [0] * 8, [0] * 8,
+        tf.constant(0, shape=(8, 8), dtype=tf.float32),
+        tf.constant([[0] * 8, [0] * 8, [0, 0, -3, 0, 0, 0, 0, 0], [0] * 8,
                      [0] * 8, [0] * 8, [0] * 8, [0] * 8],
                     dtype=tf.float32),
-        tf.constant(0, shape=(8, 8), dtype=tf.float32),
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
@@ -81,10 +76,10 @@ class PressureTest(tf.test.TestCase, parameterized.TestCase):
 
     self.w = [
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
-        tf.constant([[0] * 8, [0, 4, 0, 0, 0, 0, 0, 0], [0] * 8, [0] * 8,
+        tf.constant(0, shape=(8, 8), dtype=tf.float32),
+        tf.constant([[0] * 8, [0] * 8, [0, 0, 4, 0, 0, 0, 0, 0], [0] * 8,
                      [0] * 8, [0] * 8, [0] * 8, [0] * 8],
                     dtype=tf.float32),
-        tf.constant(0, shape=(8, 8), dtype=tf.float32),
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
         tf.constant(0, shape=(8, 8), dtype=tf.float32),
@@ -94,12 +89,12 @@ class PressureTest(tf.test.TestCase, parameterized.TestCase):
 
     self.p = [
         tf.constant(2, shape=(8, 8), dtype=tf.float32),
+        tf.constant(6, shape=(8, 8), dtype=tf.float32),
         tf.constant([[0, 1, 2, 3, 4, 5, 6, 7], [4, 5, 6, 7, 8, 9, 10, 11],
                      [8, 7, 6, 5, 4, 3, 2, 1], [4, 3, 2, 1, 0, -1, -2, -3],
                      [0, 1, 2, 3, 4, 5, 6, 7], [4, 5, 6, 7, 8, 9, 10, 11],
                      [8, 7, 6, 5, 4, 3, 2, 1], [4, 3, 2, 1, 0, -1, -2, -3]],
                     dtype=tf.float32),
-        tf.constant(6, shape=(8, 8), dtype=tf.float32),
         tf.constant(8, shape=(8, 8), dtype=tf.float32),
         tf.constant(10, shape=(8, 8), dtype=tf.float32),
         tf.constant(8, shape=(8, 8), dtype=tf.float32),
@@ -159,9 +154,10 @@ class PressureTest(tf.test.TestCase, parameterized.TestCase):
     return pressure.Pressure(self.kernel_op, params, thermodynamics,
                              monitor_lib)
 
+  @test_util.run_in_graph_and_eager_modes
   def testUpdatePressureHalosComputesPressureBCAtWallsCorrectly(self):
     """Checks if pressure boundary conditions are correct at different walls."""
-    model = self.set_up_pressure(16, 16, 16, 2)
+    model = self.set_up_pressure(nx=16, ny=16, nz=16, halo_width=2)
 
     u = np.zeros((16, 16, 16), dtype=np.float32)
     u[:, 1, :] = 1.0
@@ -225,9 +221,11 @@ class PressureTest(tf.test.TestCase, parameterized.TestCase):
       self.assertAllClose(expected, p[2:-2, 2:-2, 2:-2])
 
   @parameterized.parameters(*itertools.product(_RHO_INFO, _SUBITER))
-  def testPressureCorrectorUpdatesOutputsCorrectTensor(
-      self, rho_info_fn, subiter):
-    model = self.set_up_pressure()
+  @test_util.run_in_graph_and_eager_modes
+  def testPressureCorrectorUpdatesOutputsCorrectTensor(self, rho_info_fn,
+                                                       subiter):
+    halo_width = 2
+    model = self.set_up_pressure(nx=8, ny=8, nz=8, halo_width=halo_width)
 
     u = halo_exchange.inplace_halo_exchange(
         self.u,
@@ -256,26 +254,25 @@ class PressureTest(tf.test.TestCase, parameterized.TestCase):
         periodic_dims=self.periodic_dims,
         boundary_conditions=self.bc_w)
 
-    if (rho_info_fn ==
-        pressure.ConstantDensityInfo):
+    if rho_info_fn == pressure.ConstantDensityInfo:
       rho_info_val = 1.0
-    elif (rho_info_fn ==
-          pressure.VariableDensityInfo):
+    elif rho_info_fn == pressure.VariableDensityInfo:
       rho_info_val = tf.unstack(
           tf.constant(np.reshape(np.arange(512, dtype=np.float32), (8, 8, 8))))
 
     rho_info = rho_info_fn(rho_info_val)
 
     dp, monitor_vars = self.evaluate(
-        model._pressure_corrector_update(self.replica_id, self.replicas, {
-            'u': u,
-            'v': v,
-            'w': w,
-            'rho_u': u,
-            'rho_v': v,
-            'rho_w': w,
-            'p': self.p,
-        }, rho_info, subiter))
+        model._pressure_corrector_update(
+            self.replica_id, self.replicas, {
+                'u': u,
+                'v': v,
+                'w': w,
+                'rho_u': u,
+                'rho_v': v,
+                'rho_w': w,
+                'p': self.p,
+            }, rho_info, subiter))
 
     expected_monitor_keys = [
         'MONITOR_pressure_convergence_l-1',
@@ -322,45 +319,61 @@ class PressureTest(tf.test.TestCase, parameterized.TestCase):
 
     self.assertLen(dp, 8)
     self.assertLen(dp[0], 8)
-    self.assertAllClose(monitor_vars['MONITOR_pressure_raw_dp'], np.stack(dp))
+    self.assertAllClose(
+        monitor_vars['MONITOR_pressure_raw_dp'][halo_width:-halo_width,
+                                                halo_width:-halo_width,
+                                                halo_width:-halo_width],
+        np.stack(dp)[halo_width:-halo_width, halo_width:-halo_width,
+                     halo_width:-halo_width])
 
     if isinstance(rho_info, pressure.ConstantDensityInfo):
-      self.assertAllClose(dp[1][1, 1], np.float32(-7.2041254))
-      self.assertAllClose(dp[1][2, 1], np.float32(-6.099423))
-      self.assertAllClose(dp[1][1, 2], np.float32(-10.6219225))
-      self.assertAllClose(dp[2][1, 1], np.float32(1.1349825))
+      self.assertAllClose(
+          dp[2][3, 2:-2],
+          np.array([4.2669296, 0.65637410, 0.76804066, 0.87970746], np.float32))
+      self.assertAllClose(
+          dp[3][4, 2:-2],
+          np.array([-0.22100691, -0.1571974, -0.09338787, -0.02957835],
+                   np.float32))
+      self.assertAllClose(
+          dp[4][4, 2:-2],
+          np.array([-0.06148311, -0.07743549, -0.09338787, -0.10934025],
+                   np.float32))
+      self.assertAllClose(
+          dp[5][5, 2:-2],
+          np.array([0.09804069, 0.09804069, 0.09804069, 0.09804069],
+                   np.float32))
 
       self.assertAllClose(monitor_vars['MONITOR_pressure_convergence_l-1'],
-                          32439.387)
+                          498.463104)
       self.assertAllClose(monitor_vars['MONITOR_pressure_convergence_l-inf'],
-                          471.82547)
+                          103.150627)
 
       self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_b-l-inf'],
-                          814.1482, 4)
+                          254.728333)
       self.assertAllClose(
-          monitor_vars['MONITOR_pressure_scalar_b-term-div-l-1'], 92682.0)
+          monitor_vars['MONITOR_pressure_scalar_b-term-div-l-1'], 599.632690)
       self.assertAllClose(
           monitor_vars['MONITOR_pressure_scalar_b-term-drho-dt-l-2'], 0.0)
       self.assertAllClose(
           monitor_vars['MONITOR_pressure_scalar_b-term-source-rho-l-inf'], 0.0)
       self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_dp-l-2'],
-                          107.47147)
-      self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-l-1'], 2968.0)
+                          27.094650)
+      self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-l-1'], 482.0)
 
       # Sampling the raw convergence
       self.assertAllClose(
-          monitor_vars['MONITOR_pressure_raw_convergence'][1, 1, 3], -214.11798)
+          monitor_vars['MONITOR_pressure_raw_convergence'][2, 3, 4], 7.8586235)
       self.assertAllClose(
-          monitor_vars['MONITOR_pressure_raw_convergence'][3, 3, 2], -98.12996)
+          monitor_vars['MONITOR_pressure_raw_convergence'][3, 4, 4], -0.7705314)
       self.assertAllClose(
-          monitor_vars['MONITOR_pressure_raw_convergence'][6, 5, 5], 187.4802)
-
+          monitor_vars['MONITOR_pressure_raw_convergence'][4, 5, 5], -1.4427764)
+      self.assertAllClose(
+          monitor_vars['MONITOR_pressure_raw_convergence'][5, 5, 5], 0.9295851)
       if subiter is not None:
         l2_expected = np.zeros(3)
-        l2_expected[subiter] = 2854.2053
+        l2_expected[subiter] = 174.20946
         l_inf_expected = np.zeros(3)
-        l_inf_expected[subiter] = 471.82547
-
+        l_inf_expected[subiter] = 103.15063
         self.assertAllClose(
             monitor_vars['MONITOR_pressure_subiter-scalar_convergence_l-2'],
             l2_expected)
@@ -369,41 +382,52 @@ class PressureTest(tf.test.TestCase, parameterized.TestCase):
             l_inf_expected)
 
     elif isinstance(rho_info, pressure.VariableDensityInfo):
-      self.assertAllClose(dp[1][1, 1], np.float32(283.92685))
-      self.assertAllClose(dp[1][2, 1], np.float32(272.26965))
-      self.assertAllClose(dp[1][1, 2], np.float32(278.9138))
-      self.assertAllClose(dp[2][1, 1], np.float32(190.17072))
+      self.assertAllClose(
+          dp[2][3, 2:-2],
+          np.array([885.8132, 873.51746, 864.944, 856.3704], np.float32))
+      self.assertAllClose(
+          dp[3][4, 2:-2],
+          np.array([255.99188, 247.37067, 238.74925, 230.12785], np.float32))
+      self.assertAllClose(
+          dp[4][4, 2:-2],
+          np.array([-299.70035, -308.40146, -317.1026, -325.80374], np.float32))
+      self.assertAllClose(
+          dp[5][5, 2:-2],
+          np.array([-924.8742, -933.55945, -942.24457, -950.9298], np.float32))
 
       self.assertAllClose(monitor_vars['MONITOR_pressure_convergence_l-1'],
-                          2036889.5)
+                          396508.25)
       self.assertAllClose(monitor_vars['MONITOR_pressure_convergence_l-inf'],
-                          17619.986)
+                          10502.405273)
 
       self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_b-l-inf'],
-                          26064.148)
+                          10951.126953)
       self.assertAllClose(
-          monitor_vars['MONITOR_pressure_scalar_b-term-div-l-1'], 92682.0)
+          monitor_vars['MONITOR_pressure_scalar_b-term-div-l-1'], 599.632690)
       self.assertAllClose(
-          monitor_vars['MONITOR_pressure_scalar_b-term-drho-dt-l-2'], 667894.1)
+          monitor_vars['MONITOR_pressure_scalar_b-term-drho-dt-l-2'],
+          212386.8125)
       self.assertAllClose(
           monitor_vars['MONITOR_pressure_scalar_b-term-source-rho-l-inf'], 0.0)
       self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_dp-l-2'],
-                          4485.634)
-      self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-l-1'], 2968.0)
+                          5009.300781)
+      self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-l-1'], 482.0)
 
       # Sampling the raw convergence
       self.assertAllClose(
-          monitor_vars['MONITOR_pressure_raw_convergence'][1, 1, 3], 17414.74)
+          monitor_vars['MONITOR_pressure_raw_convergence'][2, 3, 4], 9549.477)
       self.assertAllClose(
-          monitor_vars['MONITOR_pressure_raw_convergence'][3, 3, 2], 3651.8704)
+          monitor_vars['MONITOR_pressure_raw_convergence'][3, 4, 4], 2749.2285)
       self.assertAllClose(
-          monitor_vars['MONITOR_pressure_raw_convergence'][6, 5, 5], -16754.139)
+          monitor_vars['MONITOR_pressure_raw_convergence'][4, 5, 5], -4513.1577)
+      self.assertAllClose(
+          monitor_vars['MONITOR_pressure_raw_convergence'][5, 5, 5], -10502.405)
 
       if subiter is not None:
         l2_expected = np.zeros(3)
-        l2_expected[subiter] = 158304.92
+        l2_expected[subiter] = 55497.566
         l_inf_expected = np.zeros(3)
-        l_inf_expected[subiter] = 17619.986
+        l_inf_expected[subiter] = 10502.405
         self.assertAllClose(
             monitor_vars['MONITOR_pressure_subiter-scalar_convergence_l-2'],
             l2_expected)
@@ -418,16 +442,15 @@ class PressureTest(tf.test.TestCase, parameterized.TestCase):
         monitor_vars['MONITOR_pressure_convergence_solver-iterations'], 1)
 
     self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-rho-u-l-1'],
-                        650.0)
+                        2.0)
     self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-rho-v-l-2'],
-                        40.211937)
+                        3.0)
     self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-rho-w-l-inf'],
                         4.0)
 
-    self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-u-l-inf'], 3.0)
-    self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-v-l-2'],
-                        40.211937)
-    self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-w-l-1'], 564.0)
+    self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-u-l-inf'], 2.0)
+    self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-v-l-2'], 3.0)
+    self.assertAllClose(monitor_vars['MONITOR_pressure_scalar_p-w-l-1'], 4.0)
 
 
 if __name__ == '__main__':

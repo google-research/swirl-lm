@@ -1,5 +1,6 @@
 load("//devtools/python/blaze:pytype.bzl", "pytype_strict_library")
 load("//devtools/python/blaze:strict.bzl", "py_strict_test")
+load("//third_party/py/swirl_lm/utility:build_defs.bzl", "tf1_and_tf2_test")
 
 licenses(["notice"])
 
@@ -42,7 +43,7 @@ py_strict_test(
     ],
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "onestep_test",
     srcs = ["onestep_test.py"],
     python_version = "PY3",
@@ -58,7 +59,7 @@ py_strict_test(
     ],
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "turbulent_kinetic_energy_test",
     srcs = ["turbulent_kinetic_energy_test.py"],
     python_version = "PY3",
@@ -74,7 +75,7 @@ py_strict_test(
     ],
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "wood_test",
     srcs = ["wood_test.py"],
     data = [

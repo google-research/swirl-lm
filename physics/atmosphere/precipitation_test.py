@@ -109,8 +109,7 @@ class PrecipitationTest(tf.test.TestCase):
 
     c = 1.6 + 30.3922 * np.power((rho * q_r), 0.2046).astype(np.float32)
     q_vs = self.evaluate(
-        tf.stack(
-            model.water_model.saturation_q_vapor(temperature, rho, q_l, q_c)))
+        model.water_model.saturation_q_vapor(temperature, rho, q_l, q_c))
     p_vs = q_vs * model.water_model.r_v * rho * temperature
     expected_evaporation_rate = ((1.0 / rho) * (1 - q_v / q_vs) * c *
                                  np.power((rho * q_r), 0.525) /
@@ -122,7 +121,8 @@ class PrecipitationTest(tf.test.TestCase):
                 tf.unstack(rho), tf.unstack(temperature), tf.unstack(q_r),
                 tf.unstack(q_v), tf.unstack(q_l), tf.unstack(q_c))))
 
-    self.assertAllClose(actual_evaporation_rate, expected_evaporation_rate)
+    self.assertAllClose(
+        np.stack(actual_evaporation_rate), expected_evaporation_rate)
 
   def testCloudLiquidToRainConversionRate(self):
     """Cloud liquid conversion rate to drops is as expected."""

@@ -1,4 +1,5 @@
 # Swirl-LM: Computational Fluid Dynamics in TensorFlow
+*This is not an official Google product*
 
 Swirl-LM is a computational fluid dynamics (CFD) simulation framework that is
 accelerated by the Tensor Processing Unit (TPU). It solves the three dimensional

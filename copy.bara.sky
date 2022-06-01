@@ -1,0 +1,89 @@
+"""Project go/copybara configuration.
+
+See documentation at go/oss-kit
+
+To manually import a PR:
+
+```
+copybara third_party/py/swirl_lm/copy.bara.sky github_pr_to_piper <PR NUM> --dry-run
+```
+
+To export from a workspace to a local folder (useful for testing):
+
+```
+copybara third_party/py/swirl_lm/copy.bara.sky g3_to_folder .. \
+  --folder-dir /tmp/swirl_lm_copybara/$(date +'%Y%m%d_%H%M')
+```
+
+"""
+
+load(
+    "//third_party/py/etils/copybara_utils",
+    "common_transforms",
+    "g3_to_folder",
+    "google3_glob",
+    "make_project_info",
+    "piper_sot_to_github",
+)
+
+# ================= CONSTANTS =================
+
+# Project info
+# See http://google3/third_party/py/etils/copybara_utils.bara.sky for available
+# configurations
+info = make_project_info(
+    module_name = "swirl_lm",
+    github_repo = "google-research/swirl_lm",
+    contact_email = "swirl_lm-automated+copybara@google.com",
+    owner_mdb = "swirl_lm",
+)
+
+# Files to include
+g3_files = google3_glob(
+    info.g3_root,
+    # Additional files to excludes.
+    # Common internal files (`BUILD`, `**/google/**`...) are automatically excluded.
+    google3_exclude = [],
+    # Additional files to include, applied after the `google3_exclude`.
+    # By default, `g3doc/` is excluded. To include it, add `"g3doc/**"`
+    google3_include = [],
+)
+
+# ================= TRANSFORMATIONS =================
+
+# Transformations, applied in both g3->git (cl->PR) and git->g3
+_G3_TO_GIT_TRANSFORMATIONS = [
+    # (optionally) Rename the open source doc folder
+    # core.move(
+    #     before = info.g3_root + "g3doc/",
+    #     after = info.g3_root + "docs/",
+    # ),
+
+    # Apply the common transformations:
+    # * Move the implementation `/**` -> `/<module_name>/**` subdir
+    #   top level files can be customized in `make_project_info` like:
+    #   `make_project_info(top_level_files=common_top_level_files() + ["my_file.txt"])`
+    # * Add apache headers
+    # * Scrub internal code (in `.py` and `.md`)
+    # * Rename `http://google3` <> `https://github.com` urls
+    common_transforms(info),
+]
+
+# ================= WORKFLOWS =================
+
+# Default workflow (cl -> PR export)
+piper_sot_to_github(
+    project_info = info,
+    google3_files = g3_files,
+    transformations = _G3_TO_GIT_TRANSFORMATIONS,
+    github_actions = [
+        "pytest-job",
+    ],
+)
+
+# Workflow to export to folder
+g3_to_folder(
+    project_info = info,
+    origin_files = g3_files,
+    transformations = _G3_TO_GIT_TRANSFORMATIONS,
+)

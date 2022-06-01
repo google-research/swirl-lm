@@ -4,14 +4,17 @@ import re
 
 import numpy as np
 from swirl_lm.utility import common_ops
+from swirl_lm.utility import composite_types
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
+from swirl_lm.utility import types
 import tensorflow as tf
-from google3.research.simulation.tensorflow.fluid.framework.tf1 import model_function
-from google3.research.simulation.tensorflow.fluid.framework.tf1 import step_updater
+
+FlowFieldMap = types.FlowFieldMap
+StatesUpdateFn = composite_types.StatesUpdateFn
 
 
-def outflow_boundary_condition() -> step_updater.StatesUpdateFn:
+def outflow_boundary_condition() -> StatesUpdateFn:
   r"""Generates a update function for an outflow boundary condition.
 
   A forward Euler with upwinding scheme is used to solve the outflow boundary
@@ -32,10 +35,10 @@ def outflow_boundary_condition() -> step_updater.StatesUpdateFn:
       kernel_op: get_kernel_fn.ApplyKernelOp,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: model_function.StatesMap,
-      additional_states: model_function.StatesMap,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
       params: grid_parametrization.GridParametrization,
-  ) -> model_function.StatesMap:
+  ) -> FlowFieldMap:
     """Computes the boundary condition for variables on the +x boundary."""
     del kernel_op, replica_id
 

@@ -25,6 +25,8 @@ import os
 from absl import flags
 import numpy as np
 from swirl_lm.utility import get_kernel_fn
+# For grid related flags.
+from swirl_lm.utility import grid_parametrization  # pylint: disable=unused-import
 from swirl_lm.utility import tf_test_util as test_util
 import tensorflow as tf
 
@@ -58,7 +60,7 @@ class ApplyKernelOpTest(tf.test.TestCase, parameterized.TestCase):
       'k3d1{}+',
       'k4d2{}',
   ), (2, 3, 4, 10)))
-  def testmulop_kernel_dictSymmetry(self, template_name, kernel_size):
+  def testmulop_kernel_dict_symmetry(self, template_name, kernel_size):
     """Tests `_mulop_kernel_dict`'s symmetry, y should be x transpose."""
     kernel_dict = (
         get_kernel_fn.ApplyKernelMulOp(kernel_size, kernel_size)._kernels)

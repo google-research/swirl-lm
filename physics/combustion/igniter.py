@@ -2,10 +2,12 @@
 
 from typing import Sequence
 
+from swirl_lm.utility import types
 import tensorflow as tf
 
 from google3.research.simulation.tensorflow.fluid.framework import initializer
 
+FlowFieldVal = types.FlowFieldVal
 _DTYPE = tf.float32
 
 
@@ -112,8 +114,8 @@ class Igniter(object):
   def ignition_kernel(
       self,
       step_id: tf.Tensor,
-      ignition_schedule: Sequence[tf.Tensor],
-  ) -> Sequence[tf.Tensor]:
+      ignition_schedule: FlowFieldVal,
+  ) -> FlowFieldVal:
     """Generates a binary ignition kernel at the present step.
 
     Args:

@@ -14,13 +14,14 @@ Terms considered in each equation, and their naming rules are (take variable ):
 """
 
 import re
-from typing import Mapping, Optional, Sequence, Text
+from typing import Optional, Sequence, Text
 from swirl_lm.utility import common_ops
+from swirl_lm.utility import types
 import tensorflow as tf
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 
-_StatesType = Sequence[tf.Tensor]
-_StatesLibraryType = Mapping[Text, _StatesType]
+FlowFieldVal = types.FlowFieldVal
+FlowFieldMap = types.FlowFieldMap
 
 _MOMEMTUM_VARIABLES = ['rhou', 'rhov', 'rhow']
 
@@ -88,9 +89,9 @@ class ComponentsDebug(object):
   def update_scalar_terms(
       self,
       key: Text,
-      terms: _StatesLibraryType,
-      diff_t: Optional[_StatesType] = None,
-  ) -> _StatesLibraryType:
+      terms: FlowFieldMap,
+      diff_t: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldMap:
     """Updates the debugging terms for variable named `key`.
 
     Note that the name of the source term from the input `terms` has the key
@@ -130,8 +131,8 @@ class ComponentsDebug(object):
 
     return dbg_terms
 
-  def update_momentum_terms(
-      self, terms: Sequence[_StatesLibraryType]) -> _StatesLibraryType:
+  def update_momentum_terms(self,
+                            terms: Sequence[FlowFieldMap]) -> FlowFieldMap:
     """Updates the debugging terms for the momentum.
 
     Note that the name of the forcing term from the input `terms` has the key

@@ -117,7 +117,6 @@ import numpy as np
 from swirl_lm.boundary_condition import boundary_condition_utils
 from swirl_lm.communication import halo_exchange
 from swirl_lm.equations import pressure_pb2
-from swirl_lm.equations import utils as eq_utils
 from swirl_lm.linalg import poisson_solver
 from swirl_lm.numerics import filters
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
@@ -133,6 +132,9 @@ from google3.research.simulation.tensorflow.fluid.framework import util
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import physical_variable_keys_manager
 
+FlowFieldVal = types.FlowFieldVal
+FlowFieldMap = types.FlowFieldMap
+
 # The gravitational acceleration constant, in units of N/kg.
 _GRAVITY = 9.81
 # Poisson solver's dtype is the same as other parts by default (being `None` or
@@ -140,9 +142,6 @@ _GRAVITY = 9.81
 # for the Poisson solver only.
 _POISSON_SOLVER_INTERNAL_DTYPE = None
 _TF_DTYPE = types.TF_DTYPE
-
-_FlowFieldVar = eq_utils.FlowFieldVar
-_FlowFieldMap = eq_utils.FlowFieldMap
 
 _NormType = common_ops.NormType
 
@@ -235,7 +234,7 @@ def _gen_monitor_data(
     monitor_lib: monitor.Monitor,
     replica_id: tf.Tensor,
     replicas: np.ndarray,
-    states: _FlowFieldMap,
+    states: FlowFieldMap,
     input_monitor_params: Mapping[Text, Any],
     halo_width: int,
 ) -> Mapping[Text, tf.Tensor]:
@@ -277,7 +276,10 @@ def _gen_monitor_data(
       continue
 
     cleared_v = common_ops.strip_halos(monitor_params[key], [halo_width] * 3)
-    stacked_v = tf.pad(tf.stack(cleared_v), [[halo_width, halo_width]] * 3)
+    stacked_v = tf.pad(
+        cleared_v if isinstance(cleared_v, tf.Tensor) else tf.stack(cleared_v),
+        [[halo_width, halo_width]] * 3)
+
     # Vector.
     monitor_key = _monitor_key('raw', key)
     if monitor_lib.check_key(monitor_key):
@@ -449,7 +451,7 @@ class Pressure(object):
       states,
       rho_info: DensityInfo,
       subiter: tf.Tensor = None,
-  ) -> Tuple[_FlowFieldVar, monitor.MonitorDataType]:  # pytype: disable=annotation-type-mismatch
+  ) -> Tuple[FlowFieldVal, monitor.MonitorDataType]:  # pytype: disable=annotation-type-mismatch
     # pylint: disable=line-too-long
     """Updates the pressure correction.
 
@@ -690,8 +692,8 @@ class Pressure(object):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: _FlowFieldMap,
-  ) -> _FlowFieldMap:
+      states: FlowFieldMap,
+  ) -> FlowFieldMap:
     """Updates halos for p.
 
     Args:
@@ -860,7 +862,7 @@ class Pressure(object):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      additional_states: _FlowFieldMap,
+      additional_states: FlowFieldMap,
   ) -> None:
     """Updates additional information required for pressure step.
 
@@ -884,11 +886,11 @@ class Pressure(object):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: _FlowFieldMap,
-      states_0: _FlowFieldMap,
-      additional_states: _FlowFieldMap,
+      states: FlowFieldMap,
+      states_0: FlowFieldMap,
+      additional_states: FlowFieldMap,
       subiter: tf.Tensor = None,
-  ) -> Tuple[_FlowFieldMap, _FlowFieldVar]:  # pytype: disable=annotation-type-mismatch
+  ) -> Tuple[FlowFieldMap, FlowFieldVal]:  # pytype: disable=annotation-type-mismatch
     """Updates the pressure and its correction for the current subiteration.
 
     Args:

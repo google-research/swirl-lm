@@ -1,16 +1,19 @@
 """A library for filter operators."""
 
 import functools
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, Optional
 from swirl_lm.utility import get_kernel_fn
+from swirl_lm.utility import types
 import tensorflow as tf
+
+FlowFieldVal = types.FlowFieldVal
 
 
 def filter_op(
     kernel_op: get_kernel_fn.ApplyKernelOp,
-    f: Sequence[tf.Tensor],
+    f: FlowFieldVal,
     order: Optional[int] = 2,
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   """Performs filtering to a variable.
 
   Args:
@@ -34,9 +37,9 @@ def filter_op(
 
 def filter_2(
     kernel_op: get_kernel_fn.ApplyKernelOp,
-    f: Sequence[tf.Tensor],
+    f: FlowFieldVal,
     stencil: Optional[int] = 27,
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   r"""Performs filtering by adding second-order derivatives to a variable.
 
   For stencil = 7:
@@ -99,10 +102,9 @@ def filter_2(
   return g
 
 
-def global_box_filter_3d(state: Sequence[tf.Tensor],
-                         halo_update_fn: Callable[[Sequence[tf.Tensor]],
-                                                  Sequence[tf.Tensor]],
-                         filter_width: int, num_iter: int) -> List[tf.Tensor]:
+def global_box_filter_3d(state: FlowFieldVal,
+                         halo_update_fn: Callable[[FlowFieldVal], FlowFieldVal],
+                         filter_width: int, num_iter: int) -> FlowFieldVal:
   """Applies a balanced 3D Tophat filter to a 3D tensor.
 
   The following operation is performed by this function:

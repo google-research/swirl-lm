@@ -48,8 +48,12 @@ tf1_and_tf2_test(
     srcs = ["onestep_test.py"],
     python_version = "PY3",
     srcs_version = "PY3",
+    tags = ["optonly"],
     deps = [
         ":onestep",
+        "//net/proto2/python/public",
+        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
+        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_parameters_py_pb2",
         "//third_party/py/absl/flags",
         "//third_party/py/numpy",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
@@ -107,6 +111,7 @@ pytype_strict_library(
     srcs = ["igniter.py"],
     deps = [
         "//research/simulation/tensorflow/fluid/framework:initializer",
+        "//third_party/py/swirl_lm/utility:types",
         "//third_party/py/tensorflow:tensorflow_no_contrib",
     ],
 )
@@ -116,13 +121,14 @@ pytype_strict_library(
     srcs = ["onestep.py"],
     srcs_version = "PY3",
     deps = [
-        "//research/simulation/tensorflow/fluid/framework/tf1:model_function",
-        "//research/simulation/tensorflow/fluid/framework/tf1:step_updater",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_updates",
+        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
         "//third_party/py/numpy",
         "//third_party/py/swirl_lm/numerics:time_integration",
+        "//third_party/py/swirl_lm/physics/thermodynamics:ideal_gas",
+        "//third_party/py/swirl_lm/utility:composite_types",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
         "//third_party/py/swirl_lm/utility:grid_parametrization",
+        "//third_party/py/swirl_lm/utility:types",
         "//third_party/py/tensorflow",
     ],
 )
@@ -132,13 +138,13 @@ pytype_strict_library(
     srcs = ["turbulent_kinetic_energy.py"],
     srcs_version = "PY3",
     deps = [
-        "//research/simulation/tensorflow/fluid/framework/tf1:model_function",
-        "//research/simulation/tensorflow/fluid/framework/tf1:step_updater",
         "//third_party/py/absl/flags",
         "//third_party/py/numpy",
         "//third_party/py/swirl_lm/numerics:filters",
+        "//third_party/py/swirl_lm/utility:composite_types",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
         "//third_party/py/swirl_lm/utility:grid_parametrization",
+        "//third_party/py/swirl_lm/utility:types",
         "//third_party/py/tensorflow",
     ],
 )
@@ -148,12 +154,11 @@ pytype_strict_library(
     srcs = ["wood.py"],
     srcs_version = "PY3",
     deps = [
-        "//research/simulation/tensorflow/fluid/framework/tf1:model_function",
-        "//research/simulation/tensorflow/fluid/framework/tf1:step_updater",
         "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
         "//third_party/py/numpy",
         "//third_party/py/swirl_lm/numerics:time_integration",
         "//third_party/py/swirl_lm/physics/thermodynamics:thermodynamics_manager",
+        "//third_party/py/swirl_lm/utility:composite_types",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
         "//third_party/py/swirl_lm/utility:grid_parametrization",
         "//third_party/py/swirl_lm/utility:types",

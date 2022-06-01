@@ -246,7 +246,7 @@ pytype_strict_library(
         "//research/simulation/tensorflow/fluid/framework:util",
         "//research/simulation/tensorflow/fluid/util:constants",
         "//third_party/py/swirl_lm/communication:halo_exchange",
-        "//third_party/py/tensorflow",
+        "//third_party/py/swirl_lm/utility:types",
     ],
 )
 
@@ -256,7 +256,6 @@ pytype_strict_library(
     srcs_version = "PY3",
     deps = [
         "//research/simulation/tensorflow/fluid/framework:initializer",
-        "//research/simulation/tensorflow/fluid/framework/tf1:model_function",
         "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
         "//third_party/py/absl/logging",
         "//third_party/py/numpy",
@@ -264,6 +263,7 @@ pytype_strict_library(
         "//third_party/py/swirl_lm/communication:halo_exchange",
         "//third_party/py/swirl_lm/utility:common_ops",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
+        "//third_party/py/swirl_lm/utility:types",
         "//third_party/py/tensorflow",
     ],
 )
@@ -275,7 +275,6 @@ pytype_strict_library(
     deps = [
         "//research/simulation/tensorflow/fluid/framework:initializer",
         "//research/simulation/tensorflow/fluid/framework:util",
-        "//research/simulation/tensorflow/fluid/framework/tf1:model_function",
         "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
         "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:physical_variable_keys_manager",
         "//third_party/py/numpy",
@@ -285,6 +284,7 @@ pytype_strict_library(
         "//third_party/py/swirl_lm/utility:common_ops",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
         "//third_party/py/swirl_lm/utility:grid_parametrization",
+        "//third_party/py/swirl_lm/utility:types",
         "//third_party/py/tensorflow",
     ],
 )
@@ -294,12 +294,12 @@ pytype_strict_library(
     srcs = ["outflow.py"],
     srcs_version = "PY3",
     deps = [
-        "//research/simulation/tensorflow/fluid/framework/tf1:model_function",
-        "//research/simulation/tensorflow/fluid/framework/tf1:step_updater",
         "//third_party/py/numpy",
         "//third_party/py/swirl_lm/utility:common_ops",
+        "//third_party/py/swirl_lm/utility:composite_types",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
         "//third_party/py/swirl_lm/utility:grid_parametrization",
+        "//third_party/py/swirl_lm/utility:types",
         "//third_party/py/tensorflow",
     ],
 )
@@ -311,13 +311,13 @@ pytype_strict_library(
     deps = [
         ":rayleigh_damping_layer_py_pb2",
         "//research/simulation/tensorflow/fluid/framework:initializer",
-        "//research/simulation/tensorflow/fluid/framework/tf1:model_function",
         "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_parameters_py_pb2",
         "//third_party/py/absl/logging",
         "//third_party/py/numpy",
         "//third_party/py/swirl_lm/utility:common_ops",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
         "//third_party/py/swirl_lm/utility:grid_parametrization",
+        "//third_party/py/swirl_lm/utility:types",
         "//third_party/py/tensorflow",
     ],
 )
@@ -327,7 +327,6 @@ pytype_strict_library(
     srcs = ["synthetic_turbulent_inflow.py"],
     srcs_version = "PY3",
     deps = [
-        "//research/simulation/tensorflow/fluid/framework/tf1:model_function",
         "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:physical_variable_keys_manager",
         "//third_party/py/numpy",
         "//third_party/py/swirl_lm/communication:halo_exchange",

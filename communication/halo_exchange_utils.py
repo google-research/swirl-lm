@@ -52,7 +52,6 @@ class BCType(enum.Enum):
   NO_TOUCH = 3  # Preserves the boundary at its current value.
   ADDITIVE = 4  # Adds the given values at the boundary.
 
-
 _FaceBoundaryCondition = Tuple[BCType, Union[Sequence[
     Union[util.TensorOrArray, Sequence[util.TensorOrArray]]], float]]
 _DimBoundaryConditions = Sequence[Optional[_FaceBoundaryCondition]]

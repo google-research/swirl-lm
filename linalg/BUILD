@@ -447,7 +447,6 @@ pytype_strict_library(
     srcs_version = "PY3",
     deps = [
         "//research/simulation/tensorflow/fluid/framework:initializer",
-        "//research/simulation/tensorflow/fluid/framework/tf1:fluid",
         "//third_party/py/absl/logging",
         "//third_party/py/numpy",
         "//third_party/py/scipy",

@@ -25,7 +25,7 @@ The main idea for case #1 is the following:
 In both cases `tf.math.divide_no_nan` gives the desired output.
 """
 import functools
-from typing import List, Mapping, Sequence, Text, Tuple, Union
+from typing import Mapping, Text, Tuple
 
 import numpy as np
 from swirl_lm.boundary_condition import monin_obukhov_similarity_theory_pb2
@@ -34,16 +34,17 @@ from swirl_lm.numerics import root_finder
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
+from swirl_lm.utility import types
 import tensorflow as tf
 
 from google3.research.simulation.tensorflow.fluid.framework import initializer
 from google3.research.simulation.tensorflow.fluid.framework import util
-from google3.research.simulation.tensorflow.fluid.framework.tf1 import model_function
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import physical_variable_keys_manager
 
 # The type of a state variable.
-StateVariableType = Union[List[tf.Tensor], tf.Tensor]
+FlowFieldVal = types.FlowFieldVal
+FlowFieldMap = types.FlowFieldMap
 
 # The von Karman constant.
 _KAPPA = 0.4
@@ -99,9 +100,9 @@ class MoninObukhovSimilarityTheory(object):
 
   def _stability_correction_function(
       self,
-      zeta: StateVariableType,
-      theta: StateVariableType,
-  ) -> Tuple[StateVariableType, StateVariableType]:
+      zeta: FlowFieldVal,
+      theta: FlowFieldVal,
+  ) -> Tuple[FlowFieldVal, FlowFieldVal]:
     """Computes the stability correction function based on buoyancy condition.
 
     Args:
@@ -213,11 +214,11 @@ class MoninObukhovSimilarityTheory(object):
 
   def _richardson_number(
       self,
-      theta: StateVariableType,
-      u1: StateVariableType,
-      u2: StateVariableType,
+      theta: FlowFieldVal,
+      u1: FlowFieldVal,
+      u2: FlowFieldVal,
       height: float,
-  ) -> StateVariableType:
+  ) -> FlowFieldVal:
     """Computes the bulk Richardson number.
 
     Args:
@@ -244,11 +245,11 @@ class MoninObukhovSimilarityTheory(object):
 
   def _normalized_height(
       self,
-      theta: StateVariableType,
-      u1: StateVariableType,
-      u2: StateVariableType,
+      theta: FlowFieldVal,
+      u1: FlowFieldVal,
+      u2: FlowFieldVal,
       height: float,
-  ) -> StateVariableType:
+  ) -> FlowFieldVal:
     """Computes the height normalized by the Obukhov length 𝜁 = z / L.
 
     Based on the definition of the Obukhov length, surface shear stress and heat
@@ -288,7 +289,7 @@ class MoninObukhovSimilarityTheory(object):
       """Computes the error function for the iterative solve with tf.Tensor."""
       return r - z * (ln_z_by_z0 - p_h) / (ln_z_by_z0 - p_m)**2
 
-    def rhs_fn(zeta: StateVariableType) -> StateVariableType:
+    def rhs_fn(zeta: FlowFieldVal) -> FlowFieldVal:
       """Defines the right hand side function for the iterative solve."""
       psi_m, psi_h = self._stability_correction_function(zeta, theta)
       err = tf.nest.map_structure(err_fn, r_b, zeta, psi_h, psi_m)
@@ -300,7 +301,7 @@ class MoninObukhovSimilarityTheory(object):
     return root_finder.newton_method(rhs_fn, zeta_init, max_iter)
 
   def _maybe_regularize_potential_temperature(
-      self, theta: StateVariableType) -> StateVariableType:
+      self, theta: FlowFieldVal) -> FlowFieldVal:
     """Applies bounds to the potential temperature is requested.
 
     Args:
@@ -320,11 +321,11 @@ class MoninObukhovSimilarityTheory(object):
 
   def _surface_shear_stress_and_heat_flux(
       self,
-      theta: StateVariableType,
-      u1: StateVariableType,
-      u2: StateVariableType,
+      theta: FlowFieldVal,
+      u1: FlowFieldVal,
+      u2: FlowFieldVal,
       height: float,
-  ) -> Tuple[StateVariableType, StateVariableType, StateVariableType]:
+  ) -> Tuple[FlowFieldVal, FlowFieldVal, FlowFieldVal]:
     """Computes the surface shear stress and heat flux.
 
     Reference:
@@ -378,8 +379,8 @@ class MoninObukhovSimilarityTheory(object):
 
   def surface_shear_stress_and_heat_flux_update_fn(
       self,
-      states: model_function.StatesMap,
-  ) -> Tuple[StateVariableType, StateVariableType, StateVariableType]:
+      states: FlowFieldMap,
+  ) -> Tuple[FlowFieldVal, FlowFieldVal, FlowFieldVal]:
     """Computes the wall shear stress and heat flux.
 
     Args:
@@ -413,11 +414,11 @@ class MoninObukhovSimilarityTheory(object):
 
   def _exchange_coefficient(
       self,
-      theta: StateVariableType,
-      u1: StateVariableType,
-      u2: StateVariableType,
+      theta: FlowFieldVal,
+      u1: FlowFieldVal,
+      u2: FlowFieldVal,
       height: float,
-  ) -> StateVariableType:
+  ) -> FlowFieldVal:
     """Computes the exchange coefficient for the energy equation.
 
     Reference:
@@ -446,8 +447,8 @@ class MoninObukhovSimilarityTheory(object):
 
   def surface_scalar_flux_update_fn(
       self,
-      states: model_function.StatesMap,
-  ) -> StateVariableType:
+      states: FlowFieldMap,
+  ) -> FlowFieldVal:
     """Computes the scalar flux at the surface.
 
     Reference:
@@ -609,7 +610,7 @@ class MoninObukhovSimilarityTheory(object):
 
   def _check_additional_states_keys(
       self,
-      additional_states: model_function.StatesMap,
+      additional_states: FlowFieldMap,
       update_bc_t: bool,
   ) -> None:
     """Checks if all required keys exist in `additional_states`.
@@ -721,16 +722,16 @@ class MoninObukhovSimilarityTheory(object):
 
   def _get_slice(
       self,
-      f: Sequence[tf.Tensor],
+      f: FlowFieldVal,
       idx: int,
-      ) -> Sequence[tf.Tensor]:
+  ) -> FlowFieldVal:
     """Returns a horizontal slice of `f` at level `idx`."""
     slices = util.get_slice(f, self.vertical_dim, 0, idx)
     return slices if self.vertical_dim == 2 else slices[0]
 
   def _expand_state(
-      self, f: Sequence[tf.Tensor],
-      params: grid_parametrization.GridParametrization) -> Sequence[tf.Tensor]:
+      self, f: FlowFieldVal,
+      params: grid_parametrization.GridParametrization) -> FlowFieldVal:
     """Expands the state variable along the vertical dimension."""
     if self.vertical_dim == 2:
       return f * params.nz
@@ -742,12 +743,12 @@ class MoninObukhovSimilarityTheory(object):
 
   def _get_horizontal_slices(
       self,
-      states: model_function.StatesMap,
-      t: Sequence[tf.Tensor],
+      states: FlowFieldMap,
+      t: FlowFieldVal,
       params: grid_parametrization.GridParametrization,
       idx: int,
       strip_halos: bool = False,
-      ):
+  ):
     """Gets horizontal velocity components and temperature fields at `idx`."""
     halo = params.halo_width
     halos = [halo] * 3
@@ -771,10 +772,10 @@ class MoninObukhovSimilarityTheory(object):
       kernel_op: get_kernel_fn.ApplyKernelOp,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: model_function.StatesMap,
-      additional_states: model_function.StatesMap,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
       params: grid_parametrization.GridParametrization,
-  ) -> model_function.StatesMap:
+  ) -> FlowFieldMap:
     """Computes the Neumann BC for u, v, T (optional) with Porte Agel's model.
 
     The wall shear stress is computed and applied as boundary conditions to the
@@ -914,10 +915,10 @@ class MoninObukhovSimilarityTheory(object):
       kernel_op: get_kernel_fn.ApplyKernelOp,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: model_function.StatesMap,
-      additional_states: model_function.StatesMap,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
       params: grid_parametrization.GridParametrization,
-  ) -> model_function.StatesMap:
+  ) -> FlowFieldMap:
     """Computes the Neumann BC for u, v, and T (optional) with Moeng's model.
 
     The boundary condition is updated for a wall following the Monin-Obukhov

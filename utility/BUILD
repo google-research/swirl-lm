@@ -1,6 +1,7 @@
 load("//tools/build_defs/testing:bzl_library.bzl", "bzl_library")
 load("//devtools/python/blaze:strict.bzl", "py_strict_test")
 load("//devtools/python/blaze:pytype.bzl", "pytype_strict_library")
+load("//third_party/py/swirl_lm/utility:build_defs.bzl", "tf1_and_tf2_test")
 
 package(
     default_visibility = [
@@ -56,7 +57,6 @@ pytype_strict_library(
     deps = [
         ":types",
         "//research/simulation/tensorflow/fluid/framework:util",
-        "//research/simulation/tensorflow/fluid/framework/tf1:fluid",
         "//third_party/py/numpy",
         "//third_party/py/tensorflow",
     ],
@@ -68,7 +68,20 @@ pytype_strict_library(
     srcs_version = "PY3",
     deps = [
         ":common_ops",
+        ":types",
         "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
+        "//third_party/py/tensorflow",
+    ],
+)
+
+pytype_strict_library(
+    name = "composite_types",
+    srcs = ["composite_types.py"],
+    deps = [
+        ":get_kernel_fn",
+        ":grid_parametrization",
+        ":types",
+        "//third_party/py/numpy",
         "//third_party/py/tensorflow",
     ],
 )
@@ -150,7 +163,6 @@ pytype_strict_library(
         ":types",
         "//research/simulation/tensorflow/fluid/framework:initializer",
         "//research/simulation/tensorflow/fluid/framework/post_processing:data_processing",
-        "//research/simulation/tensorflow/fluid/framework/tf1:model_function",
         "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
         "//third_party/py/numpy",
         "//third_party/py/tensorflow:tensorflow_no_contrib",
@@ -238,7 +250,7 @@ py_strict_test(
     ],
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "get_kernel_fn_test",
     srcs = ["get_kernel_fn_test.py"],
     args = ["--xla_jf_conv_full_precision=true"],
@@ -294,6 +306,7 @@ py_strict_test(
     tags = ["requires-dragonfish"],
     deps = [
         ":get_kernel_fn",
+        ":grid_parametrization",  # For Flags.
         ":tf_test_util",
         "//learning/brain/google/xla:deepsea_hardware_device",
         "//pyglib:gfile",

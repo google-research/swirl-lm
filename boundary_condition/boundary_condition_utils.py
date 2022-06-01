@@ -5,13 +5,15 @@ import enum
 from typing import Dict, List, Optional, Sequence, Text
 
 from swirl_lm.communication import halo_exchange
-import tensorflow as tf
+from swirl_lm.utility import types
 
 from google3.research.simulation.tensorflow.fluid.framework import util
 from google3.research.simulation.tensorflow.fluid.util import constants
 
 BoundaryConditionDict = Dict[Text,
                              Optional[halo_exchange.BoundaryConditionsSpec]]
+
+FlowFieldMap = types.FlowFieldMap
 
 
 class BoundaryType(enum.Enum):
@@ -176,7 +178,7 @@ def find_bc_type(
 
 def dirichlet_ghost_cell_quick(
     bc: BoundaryConditionDict,
-    states: Dict[Text, Sequence[tf.Tensor]],
+    states: FlowFieldMap,
     bc_type: List[List[Optional[BoundaryType]]],
 ) -> BoundaryConditionDict:
   """Updates the ghost cell for Dirichelt BC where QUICK scheme is used.

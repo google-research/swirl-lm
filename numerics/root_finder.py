@@ -1,22 +1,23 @@
 """A library for root finding methods."""
 
 import collections
-from typing import Callable, Dict, Optional, Text, Tuple, Union
+from typing import Callable, List, Optional, Sequence, Tuple
 
 import numpy as np
 from swirl_lm.numerics import algebra
 from swirl_lm.utility import common_ops
+from swirl_lm.utility import types
 import tensorflow as tf
 
-Tensor3D = Union[algebra.Field, tf.Tensor]
-Tensor3DMap = Dict[Text, Tensor3D]
+FlowFieldVal = types.FlowFieldVal
+FlowFieldMap = types.FlowFieldMap
 
 # A list of 3D tensors, which is a list of 2D tensors.
-Fields = algebra.Fields
-OutputFields = algebra.OutputFields
+Fields = Sequence[FlowFieldVal]
+OutputFields = List[FlowFieldVal]
 
 # A list of Fields, which shows up in the Jacobian function.
-FieldMatrix = algebra.FieldMatrix
+FieldMatrix = Sequence[Sequence[FlowFieldVal]]
 
 # A small number to be used as perturbation to the solution.
 _EPS = 1e-4
@@ -254,13 +255,14 @@ def newton_method_multi_dim(
 
 
 def newton_method(
-    objective_fn: Callable[[Tensor3D], Tensor3D],
-    initial_position: Tensor3D,
+    objective_fn: Callable[[FlowFieldVal], FlowFieldVal],
+    initial_position: FlowFieldVal,
     max_iterations: int,
     value_tolerance: Optional[float] = None,
     position_tolerance: Optional[float] = None,
-    analytical_jacobian_fn: Optional[Callable[[Tensor3D], Tensor3D]] = None,
-) -> Tensor3D:
+    analytical_jacobian_fn: Optional[Callable[[FlowFieldVal],
+                                              FlowFieldVal]] = None,
+) -> FlowFieldVal:
   """Finds the root of `objective_fn` with the Newton method.
 
   Args:
@@ -291,7 +293,7 @@ def newton_method(
   eps = np.finfo(dtype.as_numpy_dtype).resolution
   eps = np.power(2.0, np.ceil(np.log(10.0 * eps) / np.log(2.0)))
 
-  def numerical_jacobian_fn(x: Tensor3D) -> Tensor3D:
+  def numerical_jacobian_fn(x: FlowFieldVal) -> FlowFieldVal:
     """The Jacobian estimated with the finite difference method."""
     dx = tf.nest.map_structure(lambda x_i: eps * tf.abs(x_i), x)
     dx = tf.nest.map_structure(
@@ -306,7 +308,8 @@ def newton_method(
       numerical_jacobian_fn
       if analytical_jacobian_fn is None else analytical_jacobian_fn)
 
-  def body(i: tf.Tensor, states: Tensor3DMap) -> Tuple[tf.Tensor, Tensor3DMap]:
+  def body(i: tf.Tensor,
+           states: FlowFieldMap) -> Tuple[tf.Tensor, FlowFieldMap]:
     """The main function for one Newton iteration."""
     x = states['x']
     f = objective_fn(x)
@@ -315,7 +318,7 @@ def newton_method(
     x1 = tf.nest.map_structure(tf.math.subtract, x, h)
     return (i + 1, {'x': x1, 'x0': x, 'f': f})
 
-  def cond(i: tf.Tensor, states: Tensor3DMap) -> bool:
+  def cond(i: tf.Tensor, states: FlowFieldMap) -> bool:
     """The stop condition of Newton iterations."""
     cond_value_not_converge = True
     if value_tolerance is not None:

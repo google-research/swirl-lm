@@ -10,10 +10,10 @@ import tensorflow as tf
 
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 
-_TF_DTYPE = thermodynamics_generic.TF_DTYPE
-
-FlowFieldVar = thermodynamics_generic.FlowFieldVar
+FlowFieldVal = thermodynamics_generic.FlowFieldVal
 FlowFieldMap = thermodynamics_generic.FlowFieldMap
+
+_TF_DTYPE = thermodynamics_generic.TF_DTYPE
 
 # A small number that is used as a tolerance for the internal energy around the
 # freezing point.
@@ -105,10 +105,10 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def cv_m(
       self,
-      q_tot: FlowFieldVar,
-      q_liq: FlowFieldVar,
-      q_ice: FlowFieldVar,
-  ) -> FlowFieldVar:
+      q_tot: FlowFieldVal,
+      q_liq: FlowFieldVal,
+      q_ice: FlowFieldVal,
+  ) -> FlowFieldVal:
     """Computes the isovolumetric specific heat capacity of moist air.
 
     cvₘ = cv,d + (cvᵥ - cv,d) qₜ + (cvₗ - cvᵥ) qₗ + (cvᵢ - cvᵥ)
@@ -131,10 +131,10 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def cp_m(
       self,
-      q_tot: FlowFieldVar,
-      q_liq: FlowFieldVar,
-      q_ice: FlowFieldVar,
-  ) -> FlowFieldVar:
+      q_tot: FlowFieldVal,
+      q_liq: FlowFieldVal,
+      q_ice: FlowFieldVal,
+  ) -> FlowFieldVal:
     """Computes the isobaric specific heat capacity of moist air.
 
     cpₘ = (1 - qₜ) cp,d + (qₜ - qₗ - qᵢ) cpᵥ
@@ -154,10 +154,10 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def r_m(
       self,
-      temperature: FlowFieldVar,
-      rho: FlowFieldVar,
-      q_tot: FlowFieldVar,
-  ) -> FlowFieldVar:
+      temperature: FlowFieldVal,
+      rho: FlowFieldVal,
+      q_tot: FlowFieldVal,
+  ) -> FlowFieldVal:
     """Computes the gas constant for moist air.
 
     Rₘ = R,d [1 + (𝜀 - 1) qₜ - 𝜀 q_c],
@@ -175,7 +175,11 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
     return self.r_mix(q_tot, q_c)
 
-  def r_mix(self, q_tot: FlowFieldVar, q_c: FlowFieldVar,) -> FlowFieldVar:
+  def r_mix(
+      self,
+      q_tot: FlowFieldVal,
+      q_c: FlowFieldVal,
+  ) -> FlowFieldVal:
     """Computes the gas constant for moist air.
 
     Rₘ = R,d [1 + (𝜀 - 1) qₜ - 𝜀 q_c],
@@ -197,8 +201,8 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def p_ref(
       self,
-      zz: FlowFieldVar,
-  ) -> FlowFieldVar:
+      zz: FlowFieldVal,
+  ) -> FlowFieldVal:
     """Computes the reference pressure considering the geopotential.
 
     Assuming the virtual temperature profile takes the form:
@@ -258,7 +262,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
     return [pressure_fn(zz_i) for zz_i in zz]
 
-  def t_ref(self, zz: Optional[FlowFieldVar] = None) -> FlowFieldVar:
+  def t_ref(self, zz: Optional[FlowFieldVal] = None) -> FlowFieldVal:
     """Generates the reference temperature considering the geopotential.
 
     The virtual temperature profile is assumed to take the form if the potential
@@ -273,7 +277,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       The reference temperature as a function of height.
     """
 
-    def temperature_with_geo_static() -> FlowFieldVar:
+    def temperature_with_geo_static() -> FlowFieldVal:
       """Computes the reference temperature following the presumed profile."""
       return [
           self._ref_state.t_s -
@@ -281,7 +285,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
           for z in zz
       ]
 
-    def temperature_with_const_theta() -> FlowFieldVar:
+    def temperature_with_const_theta() -> FlowFieldVal:
       """Computes reference temperature for constant potential temperature."""
       theta = [self._ref_state.theta] * len(zz)
       q_t = [self._ref_state.q_t] * len(zz)
@@ -290,7 +294,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       return self.potential_temperature_to_temperature(
           PotentialTemperature.THETA.value, theta, q_t, q_l, q_i, zz)
 
-    def temperature_with_constant() -> FlowFieldVar:
+    def temperature_with_constant() -> FlowFieldVal:
       """Provides a constant temperature as the reference state."""
       return [
           self._ref_state.t_ref * tf.ones_like(z, dtype=z.dtype) for z in zz
@@ -310,8 +314,8 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def rho_ref(
       self,
-      zz: Optional[FlowFieldVar] = None,
-  ) -> FlowFieldVar:
+      zz: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldVal:
     """Generates the reference density considering the geopotential.
 
     Args:
@@ -327,11 +331,11 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def air_temperature(
       self,
-      e_int: FlowFieldVar,
-      q_tot: FlowFieldVar,
-      q_liq: FlowFieldVar,
-      q_ice: FlowFieldVar,
-  ) -> FlowFieldVar:
+      e_int: FlowFieldVal,
+      q_tot: FlowFieldVal,
+      q_liq: FlowFieldVal,
+      q_ice: FlowFieldVal,
+  ) -> FlowFieldVal:
     """Computes the air temperature.
 
     T = T₀ + (e - (qₜ - qₗ) eᵥ₀ + qᵢ (eᵥ₀ + eᵢ₀)) / cvₘ
@@ -381,10 +385,10 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def saturation_vapor_pressure_generic(
       self,
-      temperature: FlowFieldVar,
-      lh_0: Optional[FlowFieldVar] = None,
-      d_cp: Optional[FlowFieldVar] = None,
-  ) -> FlowFieldVar:
+      temperature: FlowFieldVal,
+      lh_0: Optional[FlowFieldVal] = None,
+      d_cp: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldVal:
     """Computes the saturation vapor pressure over a plane surface.
 
     The Clausius-Clapeyron relation is used to compute the saturation vapor
@@ -421,10 +425,10 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def saturation_vapor_pressure(
       self,
-      temperature: FlowFieldVar,
-      q_liq: Optional[FlowFieldVar] = None,
-      q_c: Optional[FlowFieldVar] = None,
-  ) -> FlowFieldVar:
+      temperature: FlowFieldVal,
+      q_liq: Optional[FlowFieldVal] = None,
+      q_c: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldVal:
     """Computes the saturation vapor pressure.
 
     Args:
@@ -453,11 +457,11 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def saturation_q_vapor(
       self,
-      temperature: FlowFieldVar,
-      rho: FlowFieldVar,
-      q_liq: Optional[FlowFieldVar] = None,
-      q_c: Optional[FlowFieldVar] = None,
-  ) -> FlowFieldVar:
+      temperature: FlowFieldVal,
+      rho: FlowFieldVal,
+      q_liq: Optional[FlowFieldVal] = None,
+      q_c: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldVal:
     """Computes the saturation specific humidity from the equation of states.
 
     qᵥₛ = pₛₐₜ / (ϱ Rᵥ T)
@@ -478,12 +482,12 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def saturation_q_vapor_from_pressure(
       self,
-      temperature: FlowFieldVar,
-      q_tot: FlowFieldVar,
-      zz: FlowFieldVar,
-      q_liq: Optional[FlowFieldVar] = None,
-      q_c: Optional[FlowFieldVar] = None,
-  ) -> FlowFieldVar:
+      temperature: FlowFieldVal,
+      q_tot: FlowFieldVal,
+      zz: FlowFieldVal,
+      q_liq: Optional[FlowFieldVal] = None,
+      q_c: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldVal:
     """Computes the saturation specific humidity from the pressure.
 
     Args:
@@ -503,12 +507,12 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def saturation_excess(
       self,
-      temperature: FlowFieldVar,
-      rho: FlowFieldVar,
-      q_tot: FlowFieldVar,
-      q_liq: Optional[FlowFieldVar] = None,
-      q_c: Optional[FlowFieldVar] = None,
-  ) -> FlowFieldVar:
+      temperature: FlowFieldVal,
+      rho: FlowFieldVal,
+      q_tot: FlowFieldVal,
+      q_liq: Optional[FlowFieldVal] = None,
+      q_c: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldVal:
     """Computes the saturation excess in equilibrium.
 
     qₑₓ = max(qₜ - qᵥ, 0)
@@ -531,10 +535,10 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def liquid_fraction(
       self,
-      temperature: FlowFieldVar,
-      q_liq: Optional[FlowFieldVar] = None,
-      q_c: Optional[FlowFieldVar] = None,
-  ) -> FlowFieldVar:
+      temperature: FlowFieldVal,
+      q_liq: Optional[FlowFieldVal] = None,
+      q_c: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldVal:
     """Computes the fraction of liquid in the condensed phase.
 
     fₗ = qₗ / qc
@@ -577,10 +581,10 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def equilibrium_phase_partition(
       self,
-      temperature: FlowFieldVar,
-      rho: FlowFieldVar,
-      q_tot: FlowFieldVar,
-  ) -> Sequence[FlowFieldVar]:
+      temperature: FlowFieldVal,
+      rho: FlowFieldVal,
+      q_tot: FlowFieldVal,
+  ) -> Sequence[FlowFieldVal]:
     """Partitions the water phases in equilibrium.
 
     Args:
@@ -602,8 +606,8 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def internal_energy_components(
       self,
-      temperature: FlowFieldVar,
-  ) -> Sequence[FlowFieldVar]:
+      temperature: FlowFieldVal,
+  ) -> Sequence[FlowFieldVal]:
     """Computes the specific internal energy for vapor, liquid, and ice.
 
     Args:
@@ -626,11 +630,11 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def internal_energy(
       self,
-      temperature: FlowFieldVar,
-      q_tot: FlowFieldVar,
-      q_liq: FlowFieldVar,
-      q_ice: FlowFieldVar,
-  ) -> FlowFieldVar:
+      temperature: FlowFieldVal,
+      q_tot: FlowFieldVal,
+      q_liq: FlowFieldVal,
+      q_ice: FlowFieldVal,
+  ) -> FlowFieldVal:
     """Computes the specific internal energy.
 
     e = cvₘ (T - T₀) + (qₜ - qₗ) eᵥ₀ - qᵢ (eᵥ₀ + eᵢ₀)
@@ -655,12 +659,12 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def internal_energy_from_total_energy(
       self,
-      e_t: FlowFieldVar,
-      u: FlowFieldVar,
-      v: FlowFieldVar,
-      w: FlowFieldVar,
-      zz: Optional[FlowFieldVar] = None,
-  ) -> FlowFieldVar:
+      e_t: FlowFieldVal,
+      u: FlowFieldVal,
+      v: FlowFieldVal,
+      w: FlowFieldVal,
+      zz: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldVal:
     """Computes the specific internal energy of the flow field.
 
     The total energy is the sum of internal energy, kinetic energy, and the geo-
@@ -684,12 +688,12 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def total_energy(
       self,
-      e: FlowFieldVar,
-      u: FlowFieldVar,
-      v: FlowFieldVar,
-      w: FlowFieldVar,
-      zz: Optional[FlowFieldVar] = None,
-  ) -> FlowFieldVar:
+      e: FlowFieldVal,
+      u: FlowFieldVal,
+      v: FlowFieldVal,
+      w: FlowFieldVal,
+      zz: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldVal:
     """Computes the specific total energy of the flow field.
 
     The total energy is the sum of internal energy, kinetic energy, and the geo-
@@ -716,11 +720,11 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def total_enthalpy(
       self,
-      e_tot: FlowFieldVar,
-      rho: FlowFieldVar,
-      q_tot: FlowFieldVar,
-      temperature: FlowFieldVar,
-  ) -> FlowFieldVar:
+      e_tot: FlowFieldVal,
+      rho: FlowFieldVal,
+      q_tot: FlowFieldVal,
+      temperature: FlowFieldVal,
+  ) -> FlowFieldVal:
     """Computes the total enthalpy.
 
     hₜ = eₜ + Rₘ T
@@ -743,10 +747,10 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def saturation_internal_energy(
       self,
-      temperature: FlowFieldVar,
-      rho: FlowFieldVar,
-      q_tot: FlowFieldVar,
-  ) -> FlowFieldVar:
+      temperature: FlowFieldVal,
+      rho: FlowFieldVal,
+      q_tot: FlowFieldVal,
+  ) -> FlowFieldVal:
     """Computes the specific internal energy at saturation.
 
     Args:
@@ -764,10 +768,10 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def de_int_dt(
       self,
-      temperature: FlowFieldVar,
-      rho: FlowFieldVar,
-      q_tot: FlowFieldVar,
-  ) -> FlowFieldVar:
+      temperature: FlowFieldVal,
+      rho: FlowFieldVal,
+      q_tot: FlowFieldVal,
+  ) -> FlowFieldVal:
     """Computes the analytical Jacobian of internal energy wrt temperature.
 
     Args:
@@ -804,14 +808,14 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def saturation_temperature(
       self,
-      t_guess: FlowFieldVar,
-      e_int: FlowFieldVar,
-      rho: FlowFieldVar,
-      q_tot: FlowFieldVar,
-  ) -> FlowFieldVar:
+      t_guess: FlowFieldVal,
+      e_int: FlowFieldVal,
+      rho: FlowFieldVal,
+      q_tot: FlowFieldVal,
+  ) -> FlowFieldVal:
     """Computes the temperature assuming water is at saturation."""
 
-    def internal_energy_error_fn(temperature: FlowFieldVar) -> FlowFieldVar:
+    def internal_energy_error_fn(temperature: FlowFieldVal) -> FlowFieldVal:
       """Computes the error of internal energy for the Newton iterations."""
       e_int_sat = self.saturation_internal_energy(temperature, rho, q_tot)
       return [
@@ -834,10 +838,10 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def saturation_adjustment(
       self,
-      e_int: FlowFieldVar,
-      rho: FlowFieldVar,
-      q_tot: FlowFieldVar,
-  ) -> FlowFieldVar:
+      e_int: FlowFieldVal,
+      rho: FlowFieldVal,
+      q_tot: FlowFieldVal,
+  ) -> FlowFieldVal:
     """Computes the temperature that is consistent with the input state.
 
     Args:
@@ -898,14 +902,14 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def saturation_density(
       self,
-      e_tot: FlowFieldVar,
-      q_tot: FlowFieldVar,
-      u: FlowFieldVar,
-      v: FlowFieldVar,
-      w: FlowFieldVar,
-      rho_0: Optional[FlowFieldVar] = None,
-      zz: Optional[FlowFieldVar] = None,
-  ) -> FlowFieldVar:
+      e_tot: FlowFieldVal,
+      q_tot: FlowFieldVal,
+      u: FlowFieldVal,
+      v: FlowFieldVal,
+      w: FlowFieldVal,
+      rho_0: Optional[FlowFieldVal] = None,
+      zz: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldVal:
     """Computes the density that is consistent with the input state.
 
     Args:
@@ -947,10 +951,10 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def potential_temperatures(
       self,
-      t: FlowFieldVar,
-      q_t: FlowFieldVar,
-      rho: FlowFieldVar,
-      zz: Optional[FlowFieldVar] = None,
+      t: FlowFieldVal,
+      q_t: FlowFieldVal,
+      rho: FlowFieldVal,
+      zz: Optional[FlowFieldVal] = None,
   ) -> FlowFieldMap:
     """Computes the potential temperatures.
 
@@ -1001,12 +1005,12 @@ class Water(thermodynamics_generic.ThermodynamicModel):
   def potential_temperature_to_temperature(
       self,
       theta_name: Text,
-      theta: FlowFieldVar,
-      q_tot: FlowFieldVar,
-      q_liq: FlowFieldVar,
-      q_ice: FlowFieldVar,
-      zz: Optional[FlowFieldVar] = None,
-  ) -> FlowFieldVar:
+      theta: FlowFieldVal,
+      q_tot: FlowFieldVal,
+      q_liq: FlowFieldVal,
+      q_ice: FlowFieldVal,
+      zz: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldVal:
     """Computes temperature from potential temperature.
 
     Args:
@@ -1064,7 +1068,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     return t
 
   def update_density(self, states: FlowFieldMap,
-                     additional_states: FlowFieldMap) -> FlowFieldVar:
+                     additional_states: FlowFieldMap) -> FlowFieldVal:
     """Updates the density of the flow field with water thermodynamics."""
     zz = additional_states['zz'] if 'zz' in additional_states.keys() else None
     return self.saturation_density(states['e_t'], states['q_t'], states['u'],

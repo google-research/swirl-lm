@@ -28,7 +28,6 @@ from google3.research.simulation.tensorflow.fluid.framework import util
 
 BoundaryConditionsSpec = halo_exchange_utils.BoundaryConditionsSpec
 TensorOrArray = multigrid_utils.TensorOrArray
-TensorOrListOfTensors = multigrid_utils.TensorOrListOfTensors
 ModifyTensorOrArrayFn = multigrid_utils.ModifyTensorOrArrayFn
 ProlongRestrictMatrices = multigrid_utils.ProlongRestrictMatrices
 SmootherTypeFn = multigrid_utils.SmootherTypeFn

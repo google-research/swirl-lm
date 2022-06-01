@@ -1,21 +1,15 @@
 """A library for the turbulent kinetic energy (TKE) modeling."""
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import enum
 import functools
-from typing import List, Sequence
 
 from absl import flags
 import numpy as np
 from swirl_lm.numerics import filters
+from swirl_lm.utility import composite_types
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
+from swirl_lm.utility import types
 import tensorflow as tf
-from google3.research.simulation.tensorflow.fluid.framework.tf1 import model_function
-from google3.research.simulation.tensorflow.fluid.framework.tf1 import step_updater
 
 # Parameters required by the constant TKE model.
 flags.DEFINE_float(
@@ -25,6 +19,10 @@ flags.DEFINE_float(
     allow_override=True)
 
 FLAGS = flags.FLAGS
+
+FlowFieldVal = types.FlowFieldVal
+FlowFieldMap = types.FlowFieldMap
+StatesUpdateFn = composite_types.StatesUpdateFn
 
 
 class TkeUpdateOption(enum.Enum):
@@ -37,8 +35,7 @@ class TkeUpdateOption(enum.Enum):
   TURBULENT_VISCOSITY = 3
 
 
-def _update_local_halos(value: Sequence[tf.Tensor],
-                        halo_width: int) -> List[tf.Tensor]:
+def _update_local_halos(value: FlowFieldVal, halo_width: int) -> FlowFieldVal:
   """Pads halos with symmetric condition to `value`."""
   if halo_width < 1:
     raise ValueError(
@@ -56,7 +53,7 @@ def _update_local_halos(value: Sequence[tf.Tensor],
          ] * halo_width + value_xy_valid + [value_xy_valid[-1]] * halo_width
 
 
-def _local_box_filter_3d(state: Sequence[tf.Tensor]) -> Sequence[tf.Tensor]:
+def _local_box_filter_3d(state: FlowFieldVal) -> FlowFieldVal:
   """Applies a box filter of width 3 to `state` locally.
 
   This is a function that is useful to methods in this file only, which assumes
@@ -77,8 +74,7 @@ def _local_box_filter_3d(state: Sequence[tf.Tensor]) -> Sequence[tf.Tensor]:
       state, halo_update_fn, filter_width=3, num_iter=1)
 
 
-def constant_tke_update_function(
-    tke_value: float) -> step_updater.StatesUpdateFn:
+def constant_tke_update_function(tke_value: float) -> StatesUpdateFn:
   """Generates an update function for TKE with a constant value.
 
   Args:
@@ -92,10 +88,10 @@ def constant_tke_update_function(
       kernel_op: get_kernel_fn.ApplyKernelOp,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: model_function.StatesMap,
-      additional_states: model_function.StatesMap,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
       params: grid_parametrization.GridParametrization,
-  ) -> model_function.StatesMap:
+  ) -> FlowFieldMap:
     """Updates 'tke' in `additional_states`."""
     del kernel_op, replica_id, replicas, states, params
 
@@ -118,7 +114,7 @@ def constant_tke_update_function(
   return additional_states_update_fn
 
 
-def algebraic_tke_update_function() -> step_updater.StatesUpdateFn:
+def algebraic_tke_update_function() -> StatesUpdateFn:
   """Generates an function that updates TKE algebraically.
 
   With this model, the TKE is computed with velocity fluctuations estimated by
@@ -133,10 +129,10 @@ def algebraic_tke_update_function() -> step_updater.StatesUpdateFn:
       kernel_op: get_kernel_fn.ApplyKernelOp,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: model_function.StatesMap,
-      additional_states: model_function.StatesMap,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
       params: grid_parametrization.GridParametrization,
-  ) -> model_function.StatesMap:
+  ) -> FlowFieldMap:
     """Updates 'tke' in `additional_states`."""
     del kernel_op, replica_id, replicas, params
 
@@ -162,8 +158,7 @@ def algebraic_tke_update_function() -> step_updater.StatesUpdateFn:
   return additional_states_update_fn
 
 
-def turbulent_viscosity_tke_update_function(
-) -> step_updater.StatesUpdateFn:
+def turbulent_viscosity_tke_update_function() -> StatesUpdateFn:
   """Generates a function that updates TKE from turbulent viscosity.
 
   Reference to the model:
@@ -186,10 +181,10 @@ def turbulent_viscosity_tke_update_function(
       kernel_op: get_kernel_fn.ApplyKernelOp,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: model_function.StatesMap,
-      additional_states: model_function.StatesMap,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
       params: grid_parametrization.GridParametrization,
-  ) -> model_function.StatesMap:
+  ) -> FlowFieldMap:
     """Updates 'tke' in `additional_states`."""
     del kernel_op, replica_id, replicas, states
 
@@ -216,9 +211,7 @@ def turbulent_viscosity_tke_update_function(
   return additional_states_update_fn
 
 
-def tke_update_fn_manager(
-    tke_update_option: TkeUpdateOption
-) -> step_updater.StatesUpdateFn:
+def tke_update_fn_manager(tke_update_option: TkeUpdateOption) -> StatesUpdateFn:
   """Generates the TKE update function requested by `tke_update_option`.
 
   Args:

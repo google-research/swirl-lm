@@ -7,7 +7,7 @@ from google3.research.simulation.tensorflow.fluid.models.incompressible_structur
 
 TF_DTYPE = thermodynamics_generic.TF_DTYPE
 
-FlowFieldVar = thermodynamics_generic.FlowFieldVar
+FlowFieldVal = thermodynamics_generic.FlowFieldVal
 FlowFieldMap = thermodynamics_generic.FlowFieldMap
 
 
@@ -28,7 +28,7 @@ class ConstantDensity(thermodynamics_generic.ThermodynamicModel):
       self,
       states: FlowFieldMap,
       additional_states: FlowFieldMap,
-  ) -> FlowFieldVar:
+  ) -> FlowFieldVal:
     """Updates the density with the ideal gas law."""
     del additional_states
     return [

@@ -1,7 +1,7 @@
 # coding=utf-8
 """Library of the convection scheme in the Navier-Stokes solver."""
 
-from typing import List, Optional, Sequence, Text, Tuple
+from typing import Optional, Text, Tuple
 
 import numpy as np
 from swirl_lm.boundary_condition import boundary_condition_utils
@@ -9,15 +9,21 @@ from swirl_lm.equations import common
 from swirl_lm.numerics import numerics_pb2  # pylint: disable=line-too-long
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
+from swirl_lm.utility import types
 import tensorflow as tf
 
 ConvectionScheme = numerics_pb2.ConvectionScheme
+FlowFieldVal = types.FlowFieldVal
 
 
-def first_order_upwinding(kernel_op: get_kernel_fn.ApplyKernelOp,
-                          f: Sequence[tf.Tensor], f_plus: Sequence[tf.Tensor],
-                          velocity_in_dim: Sequence[tf.Tensor],
-                          grid_spacing: float, dim: int) -> List[tf.Tensor]:
+def first_order_upwinding(
+    kernel_op: get_kernel_fn.ApplyKernelOp,
+    f: FlowFieldVal,
+    f_plus: FlowFieldVal,
+    velocity_in_dim: FlowFieldVal,
+    grid_spacing: float,
+    dim: int,
+) -> FlowFieldVal:
   """Computes the first order derivative of a variable in the convection term.
 
   The derivative to be computed for a variable `f` in the convection term takes
@@ -67,8 +73,8 @@ def first_order_upwinding(kernel_op: get_kernel_fn.ApplyKernelOp,
   ]
 
 
-def central2(kernel_op: get_kernel_fn.ApplyKernelOp, f: Sequence[tf.Tensor],
-             grid_spacing: float, dim: int) -> List[tf.Tensor]:
+def central2(kernel_op: get_kernel_fn.ApplyKernelOp, f: FlowFieldVal,
+             grid_spacing: float, dim: int) -> FlowFieldVal:
   """Computes the first order derivative using second order centered difference.
 
   Args:
@@ -94,8 +100,8 @@ def central2(kernel_op: get_kernel_fn.ApplyKernelOp, f: Sequence[tf.Tensor],
   return [d_f / (2.0 * grid_spacing) for d_f in grad_fn[dim](f)]
 
 
-def central4(kernel_op: get_kernel_fn.ApplyKernelOp, f: Sequence[tf.Tensor],
-             grid_spacing: float, dim: int) -> List[tf.Tensor]:
+def central4(kernel_op: get_kernel_fn.ApplyKernelOp, f: FlowFieldVal,
+             grid_spacing: float, dim: int) -> FlowFieldVal:
   """Computes the first order derivative using fourth order centered difference.
 
   Args:
@@ -125,8 +131,8 @@ def face_interpolation(
     kernel_op: get_kernel_fn.ApplyKernelOp,
     replica_id: tf.Tensor,
     replicas: np.ndarray,
-    state: Sequence[tf.Tensor],
-    pressure: Sequence[tf.Tensor],
+    state: FlowFieldVal,
+    pressure: FlowFieldVal,
     dx: float,
     dt: float,
     dim: int,
@@ -136,9 +142,9 @@ def face_interpolation(
                         boundary_condition_utils.BoundaryType.UNKNOWN),
     varname: Optional[Text] = None,
     halo_width: Optional[int] = None,
-    src: Optional[Sequence[tf.Tensor]] = None,
+    src: Optional[FlowFieldVal] = None,
     apply_correction: bool = True,
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   """Interpolates `state` from cells onto faces with the Rhie-Chow correction.
 
   The Rhie-Chow correction is enforced to remove the numerical fluctuation due
@@ -268,9 +274,9 @@ def face_interpolation(
 def face_flux_quick(
     replica_id: tf.Tensor,
     replicas: np.ndarray,
-    state: Sequence[tf.Tensor],
-    rhou: Sequence[tf.Tensor],
-    pressure: Sequence[tf.Tensor],
+    state: FlowFieldVal,
+    rhou: FlowFieldVal,
+    pressure: FlowFieldVal,
     dx: float,
     dt: float,
     dim: int,
@@ -280,9 +286,9 @@ def face_flux_quick(
                         boundary_condition_utils.BoundaryType.UNKNOWN),
     varname: Optional[Text] = None,
     halo_width: Optional[int] = None,
-    src: Optional[Sequence[tf.Tensor]] = None,
+    src: Optional[FlowFieldVal] = None,
     apply_correction: bool = True,
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   """Computes the face flux of `state` normal to `dim` with QUICK scheme.
 
   The QUICK scheme is retrieved from the following reference:
@@ -352,9 +358,9 @@ def convection_quick(
     kernel_op: get_kernel_fn.ApplyKernelOp,
     replica_id: tf.Tensor,
     replicas: np.ndarray,
-    state: Sequence[tf.Tensor],
-    rhou: Sequence[tf.Tensor],
-    pressure: Sequence[tf.Tensor],
+    state: FlowFieldVal,
+    rhou: FlowFieldVal,
+    pressure: FlowFieldVal,
     dx: float,
     dt: float,
     dim: int,
@@ -364,9 +370,9 @@ def convection_quick(
                         boundary_condition_utils.BoundaryType.UNKNOWN),
     varname: Optional[Text] = None,
     halo_width: Optional[int] = None,
-    src: Optional[Sequence[tf.Tensor]] = None,
+    src: Optional[FlowFieldVal] = None,
     apply_correction: bool = True,
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   """Computes the convection term for convservative variables with QUICK scheme.
 
   Args:
@@ -418,9 +424,9 @@ def convection_upwinding_1(
     kernel_op: get_kernel_fn.ApplyKernelOp,
     replica_id: tf.Tensor,
     replicas: np.ndarray,
-    state: Sequence[tf.Tensor],
-    rhou: Sequence[tf.Tensor],
-    pressure: Sequence[tf.Tensor],
+    state: FlowFieldVal,
+    rhou: FlowFieldVal,
+    pressure: FlowFieldVal,
     dx: float,
     dt: float,
     dim: int,
@@ -430,8 +436,8 @@ def convection_upwinding_1(
                         boundary_condition_utils.BoundaryType.UNKNOWN),
     varname: Optional[Text] = None,
     halo_width: Optional[int] = None,
-    src: Optional[Sequence[tf.Tensor]] = None,
-) -> List[tf.Tensor]:
+    src: Optional[FlowFieldVal] = None,
+) -> FlowFieldVal:
   """Computes the convection term with first order upwinding scheme.
 
   Args:
@@ -482,13 +488,13 @@ def convection_upwinding_1(
 
 def convection_central_2(
     kernel_op: get_kernel_fn.ApplyKernelOp,
-    state: Sequence[tf.Tensor],
-    rhou: Sequence[tf.Tensor],
-    pressure: Sequence[tf.Tensor],
+    state: FlowFieldVal,
+    rhou: FlowFieldVal,
+    pressure: FlowFieldVal,
     dx: float,
     dt: float,
     dim: int,
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   """Compute the convection term with the second order central scheme.
 
   Args:
@@ -518,9 +524,9 @@ def convection_term(
     kernel_op: get_kernel_fn.ApplyKernelOp,
     replica_id: tf.Tensor,
     replicas: np.ndarray,
-    state: Sequence[tf.Tensor],
-    rhou: Sequence[tf.Tensor],
-    pressure: Sequence[tf.Tensor],
+    state: FlowFieldVal,
+    rhou: FlowFieldVal,
+    pressure: FlowFieldVal,
     dx: float,
     dt: float,
     dim: int,
@@ -531,9 +537,9 @@ def convection_term(
     varname: Optional[Text] = None,
     halo_width: Optional[int] = None,
     scheme: ConvectionScheme = ConvectionScheme.CONVECTION_SCHEME_QUICK,
-    src: Optional[Sequence[tf.Tensor]] = None,
+    src: Optional[FlowFieldVal] = None,
     apply_correction: bool = True,
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   """Computes the convection term df/dx with selected scheme.
 
   Args:

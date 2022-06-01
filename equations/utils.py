@@ -1,13 +1,17 @@
 """Utility functions that are commonly used in different equations."""
 
-from typing import Callable, Dict, List, Mapping, Optional, Sequence, Text, Union
+from typing import Callable, Dict, Optional, Text
 import numpy as np
 from swirl_lm.boundary_condition import monin_obukhov_similarity_theory
 from swirl_lm.numerics import calculus
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
+from swirl_lm.utility import types
 import tensorflow as tf
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
+
+FlowFieldVal = types.FlowFieldVal
+FlowFieldMap = types.FlowFieldMap
 
 # Parameters required by source terms due to subsidence velocity. Reference:
 # Siebesma, A. Pier, A. Pier Siebesma, Christopher S. Bretherton, Andrew Brown,
@@ -25,21 +29,18 @@ _Z_F5 = 2100.0
 # Monthly Weather Review 133 (6): 1443–62.
 _D = 3.75e-6
 
-FlowFieldVar = Union[List[tf.Tensor], tf.Tensor]
-FlowFieldMap = Mapping[Text, FlowFieldVar]
-
 
 def shear_stress(
     kernel_op: get_kernel_fn.ApplyKernelOp,
-    mu: Sequence[tf.Tensor],
+    mu: FlowFieldVal,
     dx: float,
     dy: float,
     dz: float,
-    u: Sequence[tf.Tensor],
-    v: Sequence[tf.Tensor],
-    w: Sequence[tf.Tensor],
-    shear_bc_update_fn: Optional[Dict[Text, Callable[[Sequence[tf.Tensor]],
-                                                     List[tf.Tensor]]]] = None,
+    u: FlowFieldVal,
+    v: FlowFieldVal,
+    w: FlowFieldVal,
+    shear_bc_update_fn: Optional[Dict[Text, Callable[[FlowFieldVal],
+                                                     FlowFieldVal]]] = None,
 ) -> FlowFieldMap:
   """Computes the viscous shear stress.
 
@@ -153,14 +154,14 @@ def shear_flux(params: incompressible_structured_mesh_config
       kernel_op: get_kernel_fn.ApplyKernelOp,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      mu: Sequence[tf.Tensor],
+      mu: FlowFieldVal,
       dx: float,
       dy: float,
       dz: float,
-      u: Sequence[tf.Tensor],
-      v: Sequence[tf.Tensor],
-      w: Sequence[tf.Tensor],
-      helper_variables: Optional[Dict[Text, Sequence[tf.Tensor]]] = None,
+      u: FlowFieldVal,
+      v: FlowFieldVal,
+      w: FlowFieldVal,
+      helper_variables: Optional[FlowFieldMap] = None,
   ) -> FlowFieldMap:
     """Computes the viscous shear stress on the cell faces.
 
@@ -201,7 +202,7 @@ def shear_flux(params: incompressible_structured_mesh_config
       width 1 are invalid.
     """
 
-    def interp(f: Sequence[tf.Tensor], dim: int) -> List[tf.Tensor]:
+    def interp(f: FlowFieldVal, dim: int) -> FlowFieldVal:
       """Interpolates `value` in `dim` onto faces (i - 1/2 stored at i)."""
       if dim == 0:
         df = kernel_op.apply_kernel_op_x(f, 'ksx')
@@ -214,7 +215,7 @@ def shear_flux(params: incompressible_structured_mesh_config
 
       return [df_i / 2.0 for df_i in df]
 
-    def grad_n(f: Sequence[tf.Tensor], dim: int, h: float) -> List[tf.Tensor]:
+    def grad_n(f: FlowFieldVal, dim: int, h: float) -> FlowFieldVal:
       """Computes gradient of `value` in `dim` on nodes."""
       if dim == 0:
         df = kernel_op.apply_kernel_op_x(f, 'kDx')
@@ -227,7 +228,7 @@ def shear_flux(params: incompressible_structured_mesh_config
 
       return [df_i / (2.0 * h) for df_i in df]
 
-    def grad_f(f: Sequence[tf.Tensor], dim: int, h: float) -> List[tf.Tensor]:
+    def grad_f(f: FlowFieldVal, dim: int, h: float) -> FlowFieldVal:
       """Computes gradient of `value` in `dim` on faces."""
       if dim == 0:
         df = kernel_op.apply_kernel_op_x(f, 'kdx')
@@ -240,8 +241,8 @@ def shear_flux(params: incompressible_structured_mesh_config
 
       return [df_i / h for df_i in df]
 
-    def grad_interp(f: Sequence[tf.Tensor], grad_dim: int, interp_dim: int,
-                    h: float) -> List[tf.Tensor]:
+    def grad_interp(f: FlowFieldVal, grad_dim: int, interp_dim: int,
+                    h: float) -> FlowFieldVal:
       """Computes gradient of `value` in `grad_dim` on faces in `interp_dim`."""
       return interp(grad_n(f, grad_dim, h), interp_dim)
 
@@ -383,7 +384,7 @@ def shear_flux(params: incompressible_structured_mesh_config
   return shear_flux_fn
 
 
-def subsidence_velocity_stevens(zz: Sequence[tf.Tensor]) -> List[tf.Tensor]:
+def subsidence_velocity_stevens(zz: FlowFieldVal) -> FlowFieldVal:
   """Computes the subsidence velocity following the Stevens' [1] formulation.
 
   Reference:
@@ -401,7 +402,7 @@ def subsidence_velocity_stevens(zz: Sequence[tf.Tensor]) -> List[tf.Tensor]:
   return [-_D * z for z in zz]
 
 
-def subsidence_velocity_siebesma(zz: Sequence[tf.Tensor]) -> List[tf.Tensor]:
+def subsidence_velocity_siebesma(zz: FlowFieldVal) -> FlowFieldVal:
   """Computes the subsidence velocity following the Siebesma's [1] formulation.
 
   Reference:
@@ -429,12 +430,12 @@ def subsidence_velocity_siebesma(zz: Sequence[tf.Tensor]) -> List[tf.Tensor]:
 
 def source_by_subsidence_velocity(
     kernel_op: get_kernel_fn.ApplyKernelOp,
-    rho: Sequence[tf.Tensor],
-    height: Sequence[tf.Tensor],
+    rho: FlowFieldVal,
+    height: FlowFieldVal,
     h: float,
-    field: Sequence[tf.Tensor],
+    field: FlowFieldVal,
     vertical_dim: int,
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   """Computes the source term for `field` due to subsidence velocity.
 
   Args:

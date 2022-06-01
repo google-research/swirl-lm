@@ -1,7 +1,7 @@
 """A library of the immersed boundary method."""
 
 import itertools
-from typing import Callable, Dict, List, Optional, Sequence, Text
+from typing import Callable, Dict, Optional, Text
 
 from absl import logging
 import numpy as np
@@ -9,25 +9,27 @@ from swirl_lm.boundary_condition import immersed_boundary_method_pb2
 from swirl_lm.communication import halo_exchange
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
+from swirl_lm.utility import types
 import tensorflow as tf
 
 from google3.research.simulation.tensorflow.fluid.framework import initializer
-from google3.research.simulation.tensorflow.fluid.framework.tf1 import model_function
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 
-InterpFnType = Callable[[Sequence[tf.Tensor]], List[tf.Tensor]]
+FlowFieldVal = types.FlowFieldVal
+FlowFieldMap = types.FlowFieldMap
+InterpFnType = Callable[[FlowFieldVal], FlowFieldVal]
 InitFn = initializer.ValueFunction
 ThreeIntTuple = initializer.ThreeIntTuple
 
 
 def _apply_3d_kernel(
-    f: List[tf.Tensor],
+    f: FlowFieldVal,
     kernel_op: get_kernel_fn.ApplyKernelOp,
     kernel_name_x: Text,
     kernel_name_y: Text,
     kernel_name_z: Text,
     kernel_name_zsh: Text,
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   """Applies the kernel to `f` in 3 dimensions and returns the summed result.
 
   NB: This function assumes that the input tensors already have the correct
@@ -55,14 +57,14 @@ def _apply_3d_kernel(
 
 
 def update_cartesian_grid_method_boundary_coefficients(
-    boundary: List[tf.Tensor],
-    interior_mask: List[tf.Tensor],
+    boundary: FlowFieldVal,
+    interior_mask: FlowFieldVal,
     kernel_op: get_kernel_fn.ApplyKernelOp,
     kernel_name_x: Text = 'kSx',
     kernel_name_y: Text = 'kSy',
     kernel_name_z: Text = 'kSz',
     kernel_name_zsh: Text = 'kSzsh',
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   """Updates the non-zero values of `boundary` with the correct coefficients.
 
   Helper function to update the non-zero values in the boundary layer mask
@@ -106,9 +108,9 @@ def get_fluid_solid_interface_z(
     kernel_op: get_kernel_fn.ApplyKernelOp,
     replica_id: tf.Tensor,
     replicas: np.ndarray,
-    ib_interior_mask: Sequence[tf.Tensor],
+    ib_interior_mask: FlowFieldVal,
     halo_width: int,
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   """Generates a mask for the fluid layer in contact with the solid in z.
 
   Args:
@@ -162,8 +164,8 @@ def get_fluid_solid_interface_z(
 
 def get_fluid_solid_interface_value_z(
     replicas: np.ndarray,
-    value: Sequence[tf.Tensor],
-    ib_boundary_mask: Sequence[tf.Tensor],
+    value: FlowFieldVal,
+    ib_boundary_mask: FlowFieldVal,
 ) -> tf.Tensor:
   """Retrieves values from the fluid layer that contacts solid in z.
 
@@ -209,10 +211,10 @@ class ImmersedBoundaryMethod(object):
       kernel_op: get_kernel_fn.ApplyKernelOp,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: model_function.StatesMap,
-      additional_states: model_function.StatesMap,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
       boundary_conditions: Dict[Text, halo_exchange.BoundaryConditionsSpec],
-  ) -> model_function.StatesMap:
+  ) -> FlowFieldMap:
     """Updates `states` in the immersed boundary at each sub-iteration."""
     if self._ib_params.WhichOneof('type') == 'cartesian_grid':
       return self._apply_cartesian_grid_method(kernel_op, replica_id, replicas,
@@ -234,9 +236,9 @@ class ImmersedBoundaryMethod(object):
       kernel_op: get_kernel_fn.ApplyKernelOp,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: model_function.StatesMap,
-      additional_states: model_function.StatesMap,
-  ) -> model_function.StatesMap:
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
+  ) -> FlowFieldMap:
     """Updates `additional_states` at the beginning of each time step."""
     if (self._ib_params.WhichOneof('type') == 'cartesian_grid' or
         self._ib_params.WhichOneof('type') == 'mac' or
@@ -255,9 +257,9 @@ class ImmersedBoundaryMethod(object):
       kernel_op: get_kernel_fn.ApplyKernelOp,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: model_function.StatesMap,
-      additional_states: model_function.StatesMap,
-  ) -> model_function.StatesMap:
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
+  ) -> FlowFieldMap:
     """Updates `additional_states` during each subiteration."""
     del kernel_op, replica_id, replicas
 
@@ -276,7 +278,7 @@ class ImmersedBoundaryMethod(object):
       coordinates: ThreeIntTuple,
       ib_flow_field_mask_fn: InitFn,
       ib_boundary_mask_fn: Optional[InitFn] = None,
-  ) -> model_function.StatesMap:
+  ) -> FlowFieldMap:
     """Generates initial states required by the IB model requested.
 
     Args:
@@ -363,13 +365,13 @@ class ImmersedBoundaryMethod(object):
 
   def _update_state_in_solid(
       self,
-      f: List[tf.Tensor],
-      boundary_mask: List[tf.Tensor],
-      interior_mask: List[tf.Tensor],
+      f: FlowFieldVal,
+      boundary_mask: FlowFieldVal,
+      interior_mask: FlowFieldVal,
       sign: float,
       masked_value: float,
       interp_fn: InterpFnType,
-  ) -> List[tf.Tensor]:
+  ) -> FlowFieldVal:
     """Updates states `f` inside the solid body and the solid-fluid interface.
 
     The values inside the solid are set to `masked_value`, and the values on the
@@ -431,13 +433,13 @@ class ImmersedBoundaryMethod(object):
       kernel_op: get_kernel_fn.ApplyKernelOp,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: model_function.StatesMap,
-      additional_states: model_function.StatesMap,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
       boundary_conditions: Dict[Text, halo_exchange.BoundaryConditionsSpec],
-  ) -> model_function.StatesMap:
+  ) -> FlowFieldMap:
     """Updates states inside the solid body and the solid-fluid interface."""
 
-    def fluid_node_avg(val: Sequence[tf.Tensor]) -> List[tf.Tensor]:
+    def fluid_node_avg(val: FlowFieldVal) -> FlowFieldVal:
       """Computes the average of neiboring fluid nodes at the boundary."""
       # Mask out the values inside the solid.
       val = [
@@ -479,13 +481,13 @@ class ImmersedBoundaryMethod(object):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: model_function.StatesMap,
-      additional_states: model_function.StatesMap,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
       boundary_conditions: Dict[Text, halo_exchange.BoundaryConditionsSpec],
-  ) -> model_function.StatesMap:
+  ) -> FlowFieldMap:
     """Applies the marker-and-cell method."""
 
-    def neumann_z(val: Sequence[tf.Tensor]) -> List[tf.Tensor]:
+    def neumann_z(val: FlowFieldVal) -> FlowFieldVal:
       """Shifts `val` down by 1 index to mimik Neumann BC in z direction."""
       return list(val[1:]) + [
           tf.zeros_like(val[0], dtype=val[0].dtype),
@@ -548,9 +550,9 @@ class ImmersedBoundaryMethod(object):
       kernel_op: get_kernel_fn.ApplyKernelOp,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: model_function.StatesMap,
-      additional_states: model_function.StatesMap,
-  ) -> model_function.StatesMap:
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
+  ) -> FlowFieldMap:
     """Generates the Rayleigh Damping forcing term inside the solid."""
     del kernel_op, replica_id
 
@@ -610,9 +612,9 @@ class ImmersedBoundaryMethod(object):
 
   def _apply_direct_forcing_method(
       self,
-      states: model_function.StatesMap,
-      additional_states: model_function.StatesMap,
-  ) -> model_function.StatesMap:
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
+  ) -> FlowFieldMap:
     """Updates the equation right hand side with the direct forcing method.
 
     Reference:
@@ -639,12 +641,12 @@ class ImmersedBoundaryMethod(object):
       raise ValueError('"ib_interor_mask" is not found in `additional_states`.')
 
     def update_rhs(
-        value: Sequence[tf.Tensor],
+        value: FlowFieldVal,
         target_value: tf.Tensor,
         damping_coeff: float,
-        rhs: Sequence[tf.Tensor],
-        mask: Sequence[tf.Tensor],
-    ) -> List[tf.Tensor]:
+        rhs: FlowFieldVal,
+        mask: FlowFieldVal,
+    ) -> FlowFieldVal:
       """Updates the right hand side function with direct forcing."""
       terms = zip(value, rhs, mask)
       coeff = np.power(damping_coeff * self._params.dt, -1)

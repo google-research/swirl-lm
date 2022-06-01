@@ -28,6 +28,7 @@ _TF_DTYPE = types.TF_DTYPE
 
 MONITOR_KEY_TEMPLATE = 'MONITOR_{module}_{statistic_type}_{metric_name}'
 MonitorDataType = Dict[Text, tf.Tensor]
+FlowFieldMap = types.FlowFieldMap
 
 
 class StatisticType(enum.Enum):
@@ -108,25 +109,30 @@ class Monitor(object):
       self,
       state_name: Text,
       spec: monitor_pb2.AnalyticsSpec,
-      states: Dict[Text, tf.Tensor],
-      replicas: np.ndarray):
+      states: FlowFieldMap,
+      replicas: np.ndarray,
+  ):
     """Computes the moment statistic for a specified field."""
     order = spec.moment_statistic.order
     halos = [self._params.halo_width] * 3
     second_state = None
     if spec.moment_statistic.HasField('second_state'):
       second_state = states[spec.moment_statistic.second_state]
-    moment = analytics_util.moments(states[state_name], [order], halos,
-                                    self._params.periodic_dims, replicas,
-                                    f2=second_state)[0]
+    moment = analytics_util.moments(
+        states[state_name], [order],
+        halos,
+        self._params.periodic_dims,
+        replicas,
+        f2=second_state)[0]
     return tf.stack(moment)
 
   def _raw_state(
       self,
       state_name: Text,
       spec: monitor_pb2.AnalyticsSpec,
-      states: Dict[Text, tf.Tensor],
-      replicas: np.ndarray):
+      states: FlowFieldMap,
+      replicas: np.ndarray,
+  ):
     """Stacks a list of 2D tensors containing a subgrid field."""
     del spec, replicas
     return tf.stack(states[state_name])
@@ -145,10 +151,8 @@ class Monitor(object):
     """Initializes a tensor for the subiter scalar statistic."""
     return tf.zeros(shape=(self._params.corrector_nit), dtype=_TF_DTYPE)
 
-  def _make_analytics_processor(
-      self,
-      state_name: Text,
-      spec: monitor_pb2.AnalyticsSpec):
+  def _make_analytics_processor(self, state_name: Text,
+                                spec: monitor_pb2.AnalyticsSpec):
     """Creates a function that computes analytics as specified by `spec`."""
     processor = None
     if spec.WhichOneof('spec') == 'moment_statistic':
@@ -171,7 +175,7 @@ class Monitor(object):
 
   def compute_analytics(
       self,
-      states: Dict[Text, tf.Tensor],
+      states: FlowFieldMap,
       replicas: np.ndarray,
       step: tf.Tensor = None,
   ) -> MonitorDataType:  # pytype: disable=annotation-type-mismatch
@@ -186,6 +190,7 @@ class Monitor(object):
     Returns:
       A dict containing all the updated monitor variables for the given module.
     """
+
     def should_time_filter():
       """Checks that the step should be included in the time average."""
       if not self._time_averaging or step is None:
@@ -196,21 +201,18 @@ class Monitor(object):
       return tf.math.logical_and(check_lower_bound, check_upper_bound)
 
     def apply_time_filter(
-        statistic: tf.Tensor,
-        prev_stat: tf.Tensor,
-    ) -> tf.Tensor:
+        statistic: Union[tf.Tensor, Sequence[tf.Tensor]],
+        prev_stat: Union[tf.Tensor, Sequence[tf.Tensor]]) -> tf.Tensor:
       """Applies the time filter to the analytics value."""
       if step is None:
         return statistic
       valid_count = tf.cast(
           step - self._averaging_start_step + 1, dtype=_TF_DTYPE)
-      if isinstance(statistic, list):
-        statistic = [
-            prev_stat_i + (statistic_i - prev_stat_i) / valid_count
-            for prev_stat_i, statistic_i in zip(prev_stat, statistic)
-        ]
-      else:
-        statistic = prev_stat + (statistic - prev_stat) / valid_count
+      statistic = tf.nest.map_structure(
+          lambda prev_stat, statistic: prev_stat +  # pylint:disable=g-long-lambda
+          (statistic - prev_stat) / valid_count,
+          prev_stat,
+          statistic)
       return statistic
 
     monitor_vars = {}
@@ -266,8 +268,8 @@ class Monitor(object):
       else:
         # Statistic is a scalar.
         vars_dict[varname] = tf.constant(0, dtype=_TF_DTYPE)
-    logging.info('Initialization of monitor data: monitor vars: %s', str(
-        vars_dict))
+    logging.info('Initialization of monitor data: monitor vars: %s',
+                 str(vars_dict))
 
     vars_dict_from_spec = self.monitor_var_init_from_spec()
     vars_dict.update(vars_dict_from_spec)

@@ -27,7 +27,7 @@ pytype_strict_library(
     srcs_version = "PY3",
     deps = [
         "//third_party/py/swirl_lm/utility:common_ops",
-        "//third_party/py/tensorflow",
+        "//third_party/py/swirl_lm/utility:types",
     ],
 )
 
@@ -37,6 +37,7 @@ pytype_strict_library(
     srcs_version = "PY3",
     deps = [
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
+        "//third_party/py/swirl_lm/utility:types",
         "//third_party/py/tensorflow",
     ],
 )
@@ -115,6 +116,7 @@ tf1_and_tf2_test(
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
         "//third_party/py/swirl_lm/utility:tf_test_util",
         "//third_party/py/swirl_lm/utility:tf_tpu_test_util",
+        "//third_party/py/swirl_lm/utility:types",
         "//third_party/py/tensorflow",
     ],
 )
@@ -159,6 +161,7 @@ pytype_strict_library(
         "//third_party/py/swirl_lm/numerics:numerics_proto_py_pb2",
         "//third_party/py/swirl_lm/utility:common_ops",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
+        "//third_party/py/swirl_lm/utility:types",
         "//third_party/py/tensorflow",
     ],
 )
@@ -181,6 +184,7 @@ pytype_strict_library(
         "//third_party/py/swirl_lm/physics:constants",
         "//third_party/py/swirl_lm/utility:common_ops",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
+        "//third_party/py/swirl_lm/utility:types",
         "//third_party/py/tensorflow",
     ],
 )
@@ -196,6 +200,7 @@ pytype_strict_library(
     ],
     deps = [
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
+        "//third_party/py/swirl_lm/utility:types",
         "//third_party/py/tensorflow",
     ],
 )
@@ -213,6 +218,7 @@ pytype_strict_library(
         ":algebra",
         "//third_party/py/numpy",
         "//third_party/py/swirl_lm/utility:common_ops",
+        "//third_party/py/swirl_lm/utility:types",
         "//third_party/py/tensorflow",
     ],
 )
@@ -223,7 +229,7 @@ pytype_strict_library(
     srcs_version = "PY3",
     deps = [
         ":numerics_proto_py_pb2",
-        "//third_party/py/tensorflow",
+        "//third_party/py/swirl_lm/utility:types",
     ],
 )
 

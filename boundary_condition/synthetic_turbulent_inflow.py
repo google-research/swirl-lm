@@ -1,6 +1,6 @@
 """A library of boundary conditions to be used in fluid simulations."""
 
-from typing import List, Mapping, Optional, Sequence, Text, Tuple
+from typing import List, Optional, Text, Tuple
 
 import numpy as np
 from swirl_lm.communication import halo_exchange
@@ -8,15 +8,16 @@ from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import types
 import tensorflow as tf
-from google3.research.simulation.tensorflow.fluid.framework.tf1 import model_function
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import physical_variable_keys_manager
+
+FloatSequence = types.FloatSequence
+IntSequence = types.IntSequence
+FlowFieldVal = types.FlowFieldVal
+FlowFieldMap = types.FlowFieldMap
+
 
 _TF_DTYPE = types.TF_DTYPE
 _MAX_SEED_NUM = 1024
-
-FloatSequence = Sequence[float]
-IntSequence = Sequence[int]
-TensorSequence = Sequence[tf.Tensor]
 
 
 def _gen_stateless_seed():
@@ -251,12 +252,12 @@ class SyntheticTurbulentInflow(object):
   def compute_inflow_velocity(
       self,
       r: List[tf.Tensor],
-      velocity_mean: TensorSequence,
-      velocity_rms: TensorSequence,
+      velocity_mean: FlowFieldVal,
+      velocity_rms: FlowFieldVal,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
       seed: Optional[Tuple[int, int]] = None,
-  ) -> Mapping[Text, List[tf.Tensor]]:
+  ) -> FlowFieldMap:
     """Computes the inflow velocity with synthetic turbulence.
 
     Args:
@@ -377,10 +378,10 @@ class SyntheticTurbulentInflow(object):
       kernel_op: get_kernel_fn.ApplyKernelOp,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: model_function.StatesMap,
-      additional_states: model_function.StatesMap,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
       params: grid_parametrization.GridParametrization,
-  ) -> model_function.StatesMap:
+  ) -> FlowFieldMap:
     """Updates the inflow boundary condition with synthetic turbulence."""
     del kernel_op, states
 

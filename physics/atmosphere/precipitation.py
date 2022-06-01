@@ -32,13 +32,13 @@ class Precipitation(object):
 
   def rain_evaporation_rate_kw1978(
       self,
-      rho: water.FlowFieldVar,
-      temperature: water.FlowFieldVar,
-      q_r: water.FlowFieldVar,
-      q_v: water.FlowFieldVar,
-      q_l: water.FlowFieldVar,
-      q_c: water.FlowFieldVar,
-  ) -> water.FlowFieldVar:
+      rho: water.FlowFieldVal,
+      temperature: water.FlowFieldVal,
+      q_r: water.FlowFieldVal,
+      q_v: water.FlowFieldVal,
+      q_l: water.FlowFieldVal,
+      q_c: water.FlowFieldVal,
+  ) -> water.FlowFieldVal:
     r"""The rain evaporation rate.
 
     This is based on J. B. Klemp and R. B. Wilhelmson, 1978: `The Simulation of
@@ -101,9 +101,9 @@ class Precipitation(object):
 
   def cloud_liquid_to_rain_conversion_rate_kw1978(
       self,
-      q_r: water.FlowFieldVar,
-      q_l: water.FlowFieldVar,
-  ) -> water.FlowFieldVar:
+      q_r: water.FlowFieldVal,
+      q_l: water.FlowFieldVal,
+  ) -> water.FlowFieldVal:
     r"""The conversion rate from cloud liquid humidity to rain water.
 
     This is based on J. B. Klemp and R. B. Wilhelmson, 1978: `The Simulation of
@@ -149,10 +149,10 @@ class Precipitation(object):
 
   def rain_water_terminal_velocity_kw1978(
       self,
-      rho: water.FlowFieldVar,
-      q_r: water.FlowFieldVar,
+      rho: water.FlowFieldVal,
+      q_r: water.FlowFieldVal,
       rho_ref: float = 1.15,
-  ) -> water.FlowFieldVar:
+  ) -> water.FlowFieldVal:
     r"""Terminal velocity used for rain water convection term.
 
 

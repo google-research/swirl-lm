@@ -10,7 +10,7 @@ description:
 third_party {
   url {
     type: PIPER
-    value: "http://google3/third_party/py/swirl-lm/"
+    value: "http://google3/third_party/py/swirl_lm/"
   }
 }
 presubmit: {

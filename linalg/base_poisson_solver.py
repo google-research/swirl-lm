@@ -20,7 +20,7 @@ in a distributed setting.
 """
 
 import abc
-from typing import Callable, Dict, List, Mapping, Optional, Sequence, Text, Tuple, Union
+from typing import Callable, Dict, Mapping, Optional, Sequence, Text, Tuple, Union
 
 import numpy as np
 import six
@@ -32,18 +32,19 @@ from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import types
 import tensorflow as tf
 
-_TF_DTYPE = types.TF_DTYPE
-
-_HaloUpdateFn = Callable[[Sequence[tf.Tensor]], List[tf.Tensor]]
-
 PoissonSolverSolution = Dict[Text, Union[float, tf.Tensor, Sequence[tf.Tensor]]]
+FlowFieldVal = types.FlowFieldVal
 
 X = 'x'
+
 RESIDUAL_L2_NORM = 'residual_l2_norm'
 COMPONENT_WISE_DISTANCE = 'component_wise_distance_from_rhs'
 ITERATIONS = 'iterations'
 
 NormType = common_ops.NormType
+
+_TF_DTYPE = types.TF_DTYPE
+_HaloUpdateFn = Callable[[FlowFieldVal], FlowFieldVal]
 
 
 def _halo_update_homogeneous_neumann(
@@ -65,7 +66,7 @@ def _halo_update_homogeneous_neumann(
   bc_p = [[(halo_exchange.BCType.NEUMANN, 0.),
            (halo_exchange.BCType.NEUMANN, 0.)]] * 3
 
-  def halo_update_fn(p: Sequence[tf.Tensor]) -> List[tf.Tensor]:
+  def halo_update_fn(p: FlowFieldVal) -> FlowFieldVal:
     """Updates the halos with homogeneous Neumann boundary condition."""
     return halo_exchange.inplace_halo_exchange(
         [p_i for p_i in p],
@@ -108,10 +109,10 @@ class PoissonSolver(object):
 
   def _laplacian_terms(
       self,
-      f: Sequence[tf.Tensor],
+      f: FlowFieldVal,
       halo_update: Optional[_HaloUpdateFn] = None,
       indices: Optional[Sequence[int]] = None,
-  ) -> Tuple[List[tf.Tensor]]:
+  ) -> Tuple[FlowFieldVal]:
     """Computes the Laplacian terms of `f`, in 3 directions respectively."""
     f = halo_update(f) if halo_update else f
 
@@ -140,9 +141,9 @@ class PoissonSolver(object):
 
   def _laplacian(
       self,
-      f: Sequence[tf.Tensor],
+      f: FlowFieldVal,
       halo_update: Optional[_HaloUpdateFn] = None,
-  ) -> List[tf.Tensor]:
+  ) -> FlowFieldVal:
     """Computes the Laplacian of `f`."""
     return [
         ddx_ + ddy_ + ddz_ for ddx_, ddy_, ddz_ in zip(  # pytype: disable=bad-unpacking
@@ -154,8 +155,8 @@ class PoissonSolver(object):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      f: Sequence[tf.Tensor],
-      rhs: Sequence[tf.Tensor],
+      f: FlowFieldVal,
+      rhs: FlowFieldVal,
       norm_types: Sequence[NormType] = (NormType.L_INF,),
       halo_width: int = 2,
       halo_update_fn: Optional[_HaloUpdateFn] = None,
@@ -233,8 +234,8 @@ class PoissonSolver(object):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      rhs: Sequence[tf.Tensor],
-      p0: Sequence[tf.Tensor],
+      rhs: FlowFieldVal,
+      p0: FlowFieldVal,
       halo_update_fn: Optional[_HaloUpdateFn] = None,
       internal_dtype: Optional[tf.dtypes.DType] = None,
       additional_states: Optional[Mapping[Text, tf.Tensor]] = None,

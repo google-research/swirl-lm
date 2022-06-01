@@ -18,7 +18,7 @@ Reference:
    Simulation of Moist Mountain Waves.” Monthly Weather Review 111 (12):
    2341–61.
 """
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Text, Union
+from typing import Dict, Iterable, Mapping, Optional, Sequence, Text, Union
 
 from absl import logging
 import numpy as np
@@ -26,18 +26,21 @@ from swirl_lm.boundary_condition import rayleigh_damping_layer_pb2
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
+from swirl_lm.utility import types
 import tensorflow as tf
 
 from google3.research.simulation.tensorflow.fluid.framework import initializer
-from google3.research.simulation.tensorflow.fluid.framework.tf1 import model_function
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
+
+FlowFieldVal = types.FlowFieldVal
+FlowFieldMap = types.FlowFieldMap
+BoolMap = types.BoolMap
+TargetValueLib = Dict[Text, Optional[Union[float, Text]]]
 
 _InitFn = initializer.ValueFunction
 _Orientation = rayleigh_damping_layer_pb2.RayleighDampingLayer.Orientation
 _SpongeInfo = rayleigh_damping_layer_pb2.RayleighDampingLayer.VariableInfo
 _PeriodicDimensionInfo = incompressible_structured_mesh_parameters_pb2.PeriodicDimensions
-TargetStatusLib = Dict[Text, bool]
-TargetValueLib = Dict[Text, Optional[Union[float, Text]]]
 
 
 def get_sponge_force_name(varname: Text) -> Text:
@@ -89,7 +92,7 @@ def target_value_lib_from_proto(
 
 
 def variable_type_lib_from_proto(
-    sponge: rayleigh_damping_layer_pb2.RayleighDampingLayer) -> TargetStatusLib:
+    sponge: rayleigh_damping_layer_pb2.RayleighDampingLayer) -> BoolMap:
   """Generates a library for the type of the variable from the proto.
 
   Args:
@@ -104,7 +107,7 @@ def variable_type_lib_from_proto(
 
 
 def target_status_lib_from_proto(
-    sponge: rayleigh_damping_layer_pb2.RayleighDampingLayer) -> TargetStatusLib:
+    sponge: rayleigh_damping_layer_pb2.RayleighDampingLayer) -> BoolMap:
   """Generates a sponge forcing status library from the proto.
 
   Args:
@@ -250,10 +253,10 @@ class RayleighDampingLayer(object):
   def _get_sponge_force(
       self,
       replicas: np.ndarray,
-      field: Sequence[tf.Tensor],
-      beta: Sequence[tf.Tensor],
-      target_state: Optional[Union[float, Sequence[tf.Tensor]]] = None,
-  ) -> List[tf.Tensor]:
+      field: FlowFieldVal,
+      beta: FlowFieldVal,
+      target_state: Optional[Union[float, FlowFieldVal]] = None,
+  ) -> FlowFieldVal:
     """Computes the sponge forcing term.
 
     Args:
@@ -322,10 +325,10 @@ class RayleighDampingLayer(object):
       kernel_op: get_kernel_fn.ApplyKernelOp,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: model_function.StatesMap,
-      additional_states: model_function.StatesMap,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
       params: grid_parametrization.GridParametrization,
-  ) -> model_function.StatesMap:
+  ) -> FlowFieldMap:
     """Updates the forcing term due to the sponge layer.
 
     The forcing term will replace or add to the existing forcing term in
@@ -361,8 +364,8 @@ class RayleighDampingLayer(object):
 
     def add_to_additional_states(
         name: Text,
-        value: Sequence[tf.Tensor],
-    ) -> List[tf.Tensor]:
+        value: FlowFieldVal,
+    ) -> FlowFieldVal:
       """Adds two states elementwise."""
       return [
           state_1 + state_2

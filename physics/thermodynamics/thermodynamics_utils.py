@@ -1,14 +1,15 @@
 """Utility functions to compute thermodynamic related quantities."""
 
-from typing import List, Mapping, Text, Union
+from typing import Mapping, Text
 from swirl_lm.physics import constants
 from swirl_lm.utility import types
 import tensorflow as tf
 
 TF_DTYPE = types.TF_DTYPE
 
-FlowFieldVar = List[tf.Tensor]
-FlowFieldMap = Mapping[Text, Union[float, FlowFieldVar]]
+FlowFieldVal = types.FlowFieldVal
+FlowFieldMap = types.FlowFieldMap
+_MolecularWeightMap = Mapping[Text, float]
 
 # TODO(b/180362111): Store all constant in a standalone library.
 # Universal gas constant, in units of J/mol/K.
@@ -22,7 +23,7 @@ G = constants.G
 INERT_SPECIES = 'ambient'
 
 
-def regularize_scalar_bound(phi: FlowFieldVar) -> FlowFieldVar:
+def regularize_scalar_bound(phi: FlowFieldVal) -> FlowFieldVal:
   """Enforces a bound of [0, 1] on the scalar `phi`.
 
   Args:
@@ -68,7 +69,7 @@ def regularize_scalar_sum(phi: FlowFieldMap) -> FlowFieldMap:
   return sc_reg
 
 
-def compute_ambient_air_fraction(phi: FlowFieldMap) -> FlowFieldVar:
+def compute_ambient_air_fraction(phi: FlowFieldMap) -> FlowFieldVal:
   """Computes the mass fraction of the ambient air.
 
   The total mass fraction at each grid point for all scalars should be 1.
@@ -91,8 +92,8 @@ def compute_ambient_air_fraction(phi: FlowFieldMap) -> FlowFieldVar:
 
 
 def compute_mixture_molecular_weight(
-    molecular_weights: FlowFieldMap,
-    massfractions: FlowFieldMap) -> FlowFieldVar:
+    molecular_weights: _MolecularWeightMap,
+    massfractions: FlowFieldMap) -> FlowFieldVal:
   """Computes the mixture molecular weight based on species' massfractions.
 
   Args:

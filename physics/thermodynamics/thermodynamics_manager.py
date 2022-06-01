@@ -1,6 +1,6 @@
 """The manager of thermodyanmics models."""
 
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 from swirl_lm.communication import halo_exchange
@@ -15,11 +15,11 @@ from swirl_lm.physics.thermodynamics import water
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 import tensorflow as tf
-from google3.research.simulation.tensorflow.fluid.framework.tf1 import model_function
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 
 DensityUpdateOption = incompressible_structured_mesh_config.DensityUpdateOption
-FlowFieldVar = thermodynamics_utils.FlowFieldVar
+FlowFieldVal = thermodynamics_utils.FlowFieldVal
+FlowFieldMap = thermodynamics_utils.FlowFieldMap
 
 
 class ThermodynamicsManager(object):
@@ -45,11 +45,11 @@ class ThermodynamicsManager(object):
     """Returns the mode of the thermodynamics model."""
     return self._model_params.solver_mode
 
-  def rho_ref(self, zz: Optional[FlowFieldVar] = None) -> FlowFieldVar:
+  def rho_ref(self, zz: Optional[FlowFieldVal] = None) -> FlowFieldVal:
     """Generates the reference density."""
     return self.model.rho_ref(zz)
 
-  def p_ref(self, zz: Optional[FlowFieldVar] = None) -> FlowFieldVar:
+  def p_ref(self, zz: Optional[FlowFieldVal] = None) -> FlowFieldVal:
     """Generates the reference pressure."""
     return self.model.p_ref(zz)
 
@@ -58,10 +58,10 @@ class ThermodynamicsManager(object):
       kernel_op: get_kernel_fn.ApplyKernelOp,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: model_function.StatesMap,
-      additional_states: model_function.StatesMap,
-      states_0: Optional[model_function.StatesMap] = None,
-  ) -> Tuple[List[tf.Tensor], List[tf.Tensor]]:
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
+      states_0: Optional[FlowFieldMap] = None,
+  ) -> Tuple[FlowFieldVal, FlowFieldVal]:
     """Updates the density based on field values provided.
 
     Args:

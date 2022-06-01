@@ -89,14 +89,20 @@ TODO(b/148241302): Introduce '-' for schemes with stencils biased towards the
 left.
 kf2x: Second-order flux reconstruction on the face of the mesh cell in x in the
   upwind condition, i.e. u_{i, j} > 0,
-  f_{i, j} = -0.125 * u_{i-2, j} + 0.75 * u_{i-1, j} + 0.375 * u_{i, j}
+  f_{i, j} = -0.125 * u_{i-1, j} + 0.75 * u_{i, j} + 0.375 * u_{i+1, j}
   NB: The left face of node `i` is stored at the `i - 1` index in the tensor,
-  and the right face of node `i` is stored at the `i` index.
+  and the right face of node `i` is stored at the `i` index. So in this context,
+  we would be interested in:
+   f_{i-1, j} =  -0.125 * u_{i-2, j} + 0.75 * u_{i-1, j} + 0.375 * u_{i, j},
+  which is equivalent to the above expression.
 kf2y: Second-order flux reconstruction on the face of the mesh cell in y in the
   upwind condition, i.e. u_{i, j} > 0,
-  f_{i, j} = -0.125 * u_{i, j-2} + 0.75 * u_{i, j-1} + 0.375 * u_{i, j}
+  f_{i, j} = -0.125 * u_{i, j-1} + 0.75 * u_{i, j} + 0.375 * u_{i, j+1}
   NB: The left face of node `j` is stored at the `j - 1` index in the tensor,
-  and the right face of node `j` is stored at the `j` index.
+  and the right face of node `j` is stored at the `j` index. So in this context,
+  we would be interested in:
+   f_{i, j-1} =  -0.125 * u_{i, j-2} + 0.75 * u_{i, j-1} + 0.375 * u_{i, j},
+  which is equivalent to the above expression.
 kf2x+: Second-order flux reconstruction on the face of the mesh cell in x in the
   downwind condition, i.e. u_{i, j} < 0,
   f_{i, j} = 0.375 * u_{i-1, j} + 0.75 * u_{i, j} - 0.125 * u_{i+1, j}
@@ -122,7 +128,7 @@ k4d2y: Central second order finite difference for the fourth order derivative.
 """
 
 import abc
-from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Text, Tuple, Union
+from typing import Callable, Dict, Mapping, Optional, Sequence, Text, Tuple, Union
 
 import numpy as np
 import six
@@ -137,6 +143,8 @@ KernelType = Union[np.ndarray, Sequence[float], Callable[[tf.Tensor],
 KernelDictType = Dict[Text, KernelType]
 # The type of the input for customizing a kernel.
 ExternalDictKernelType = Mapping[Text, Tuple[Sequence[float], int]]
+# The operand type of a kernel.
+FlowFieldVal = types.FlowFieldVal
 
 _NP_DTYPE = types.NP_DTYPE
 _TF_DTYPE = types.TF_DTYPE
@@ -192,6 +200,7 @@ def _validate_offset_and_stencil(offset, stencil):
   Args:
     offset: Index of an element of the stencil.
     stencil: List of stencil coefficients.
+
   Returns:
     A valid index of an element of the stencil.
   Raises:
@@ -202,7 +211,7 @@ def _validate_offset_and_stencil(offset, stencil):
 
   if offset < 0 or offset >= len(stencil):
     raise ValueError('Offset must be positive and strictly less than '
-                     'the length of the stencil, not %d.'% (offset,))
+                     'the length of the stencil, not %d.' % (offset,))
   return offset
 
 
@@ -214,9 +223,10 @@ def _make_banded_matrix(stencil, banded_matrix_size, offset=None):
   Args:
     stencil: List of coefficients in the diagonal band.
     banded_matrix_size: The integer size of the banded matrix.
-    offset: Index of the element of the stencil at which to start,
-      such that the top-first element of the banded matrix is
-      `stencil[offset]`. Defaults to the middle element of the stencil.
+    offset: Index of the element of the stencil at which to start, such that the
+      top-first element of the banded matrix is `stencil[offset]`. Defaults to
+      the middle element of the stencil.
+
   Returns:
     A banded matrix numpy array with shape
     (banded_matrix_size, banded_matrix_size) and type _NP_DTYPE.
@@ -228,9 +238,10 @@ def _make_banded_matrix(stencil, banded_matrix_size, offset=None):
   padded_stencil = np.concatenate((padding, stencil, padding))
   strides = padded_stencil.strides[0]
   strided = np.lib.stride_tricks.as_strided
-  return strided(padded_stencil[banded_matrix_size - 1 + offset:],
-                 shape=(banded_matrix_size, banded_matrix_size),
-                 strides=(-strides, strides))
+  return strided(
+      padded_stencil[banded_matrix_size - 1 + offset:],
+      shape=(banded_matrix_size, banded_matrix_size),
+      strides=(-strides, strides))
 
 
 def _make_backward_banded_matrix(
@@ -270,11 +281,11 @@ def _make_convop_kernel(stencil, kernel_size, offset=None):
     kernel_size: The integer size of the kernel (only square kernels are
       supported).
     offset: Index of the element of the stencil at which the operator is
-      centered.
-      Typically, for centered difference, this would be the middle element.
-      For backward difference, this would be the last element of the stencil.
-      For forward difference, this would be the first element of the stencil.
-      Defaults to the middle element of the stencil.
+      centered. Typically, for centered difference, this would be the middle
+      element. For backward difference, this would be the last element of the
+      stencil. For forward difference, this would be the first element of the
+      stencil. Defaults to the middle element of the stencil.
+
   Returns:
     A convolutional finite difference operator.
   """
@@ -285,30 +296,35 @@ def _make_convop_kernel(stencil, kernel_size, offset=None):
   reversed_stencil = stencil[::-1]
 
   if left_width > 0:
-    upper_triangle = np.concatenate(
-        [np.zeros([kernel_size - left_width, kernel_size], dtype=_NP_DTYPE),
-         np.concatenate([
-             _make_banded_matrix(reversed_stencil, left_width,
-                                 len(stencil) - 1),
-             np.zeros([left_width, kernel_size - left_width], dtype=_NP_DTYPE)
-         ], axis=1)])
+    upper_triangle = np.concatenate([
+        np.zeros([kernel_size - left_width, kernel_size], dtype=_NP_DTYPE),
+        np.concatenate([
+            _make_banded_matrix(reversed_stencil, left_width,
+                                len(stencil) - 1),
+            np.zeros([left_width, kernel_size - left_width], dtype=_NP_DTYPE)
+        ],
+                       axis=1)
+    ])
   else:
     upper_triangle = np.zeros([kernel_size, kernel_size], dtype=_NP_DTYPE)
 
   if right_width > 0:
-    lower_triangle = np.concatenate(
-        [np.concatenate(
-            [np.zeros([right_width, kernel_size - right_width],
-                      dtype=_NP_DTYPE),
-             _make_banded_matrix(reversed_stencil, right_width, 0)], axis=1),
-         np.zeros([kernel_size - right_width, kernel_size], dtype=_NP_DTYPE)])
+    lower_triangle = np.concatenate([
+        np.concatenate([
+            np.zeros([right_width, kernel_size - right_width], dtype=_NP_DTYPE),
+            _make_banded_matrix(reversed_stencil, right_width, 0)
+        ],
+                       axis=1),
+        np.zeros([kernel_size - right_width, kernel_size], dtype=_NP_DTYPE)
+    ])
   else:
     lower_triangle = np.zeros([kernel_size, kernel_size], dtype=_NP_DTYPE)
 
-  return np.stack([upper_triangle,
-                   _make_banded_matrix(reversed_stencil, kernel_size,
-                                       right_width),
-                   lower_triangle])
+  return np.stack([
+      upper_triangle,
+      _make_banded_matrix(reversed_stencil, kernel_size, right_width),
+      lower_triangle
+  ])
 
 
 def _make_backward_convop_kernel(
@@ -345,11 +361,11 @@ def _make_slice_kernel(u, stencil, axis, offset=None):
     stencil: List of coefficients in the operator stencil.
     axis: The axis along which to apply the operator, must be either 'x' or 'y'.
     offset: Index of the element of the stencil at which the operator is
-      centered.
-      Typically, for centered difference, this would be the middle element.
-      For backward difference, this would be the last element of the stencil.
-      For forward difference, this would be the first element of the stencil.
-      Defaults to the middle element of the stencil.
+      centered. Typically, for centered difference, this would be the middle
+      element. For backward difference, this would be the last element of the
+      stencil. For forward difference, this would be the first element of the
+      stencil. Defaults to the middle element of the stencil.
+
   Returns:
     A slice-based finite difference operator.
   Raises:
@@ -373,7 +389,7 @@ def _make_slice_kernel(u, stencil, axis, offset=None):
       kernel += stencil[i] * tf.pad(
           u[:, i - offset:], paddings=[[0, 0], [0, i - offset]])
   else:
-    raise ValueError("axis must be either 'x' or 'y', not %d."% (axis,))
+    raise ValueError("axis must be either 'x' or 'y', not %d." % (axis,))
   return kernel
 
 
@@ -381,7 +397,7 @@ def _make_backward_slice_kernel(
     stencil: Sequence[float],
     n: int,
     axis: Text,
-    offset: Optional[int],
+    offset: Optional[int] = None,
 ) -> Callable[[tf.Tensor], tf.Tensor]:
   """Generates a slice kernel with `stencil` as weights.
 
@@ -398,11 +414,11 @@ def _make_backward_slice_kernel(
   Returns:
     A slice-based finite difference operator.
   """
-  del n, offset
+  del n
 
   def kernel_fn(u: tf.Tensor) -> tf.Tensor:
     """The kernel function that performs slicing operation."""
-    return _make_slice_kernel(u, stencil, axis)
+    return _make_slice_kernel(u, stencil, axis, offset)
 
   return kernel_fn
 
@@ -415,9 +431,9 @@ def _z_kernel_dict(
 
   Args:
     custom_kernel_dict: A dictionary that stores the weights of kernels and
-      their offsets. The keys of the dictionary are the names of the kernel,
-      the first argument in the tuple value is the weights of the kernel, and
-      the second argument in the tuple value is the offset of the kernel.
+      their offsets. The keys of the dictionary are the names of the kernel, the
+      first argument in the tuple value is the weights of the kernel, and the
+      second argument in the tuple value is the offset of the kernel.
 
   Returns:
     A dictionary of kernels that is used to perform the kernel operations. The
@@ -510,8 +526,7 @@ class ApplyKernelOp(object):
 
   def __init__(
       self,
-      custom_kernel_dict: Optional[ExternalDictKernelType] = None
-  ) -> None:
+      custom_kernel_dict: Optional[ExternalDictKernelType] = None) -> None:
     """Initializes the kernel dictionary in the z dimension.
 
     Args:
@@ -523,17 +538,13 @@ class ApplyKernelOp(object):
     self._z_kernel_dict = _z_kernel_dict(custom_kernel_dict)
 
   @abc.abstractmethod
-  def apply_kernel_op_x(self,
-                        tiles: Iterable[tf.Tensor],
-                        name: Text) -> List[tf.Tensor]:
-    """Applies a kernel op in x on a given collection of 2D Tensors."""
+  def apply_kernel_op_x(self, tiles: FlowFieldVal, name: Text) -> FlowFieldVal:
+    """Applies a kernel op in x on a given FlowFieldVal input."""
     raise NotImplementedError('Calling an abstract method.')
 
   @abc.abstractmethod
-  def apply_kernel_op_y(self,
-                        tiles: Iterable[tf.Tensor],
-                        name: Text) -> List[tf.Tensor]:
-    """Applies a kernel op in y on a given collection of 2D Tensors."""
+  def apply_kernel_op_y(self, tiles: FlowFieldVal, name: Text) -> FlowFieldVal:
+    """Applies a kernel op in y on a given FlowFieldVal input."""
     raise NotImplementedError('Calling an abstract method.')
 
   @abc.abstractmethod
@@ -554,10 +565,10 @@ class ApplyKernelOp(object):
     self._add_kernel(custom_kernel_dict)
 
   def apply_kernel_op_z(self,
-                        tiles: Sequence[tf.Tensor],
+                        tiles: FlowFieldVal,
                         name: Text,
-                        shift: Optional[Text] = None) -> List[tf.Tensor]:
-    """Applies a kernel op in z on a given collection of 2D Tensors."""
+                        shift: Optional[Text] = None) -> FlowFieldVal:
+    """Applies a kernel op in z on a given FlowFieldVal input."""
     if (name not in self._z_kernel_dict or
         (shift and shift not in self._z_kernel_dict)):
       raise ValueError('Invalid kernel name requested.')
@@ -565,17 +576,19 @@ class ApplyKernelOp(object):
                                  self._z_kernel_dict[shift])  # pytype: disable=wrong-arg-types
 
 
-def _mulop_kernel_dict(
-    nx, ny, custom_kernel_dict: Optional[ExternalDictKernelType] = None):
+def _mulop_kernel_dict(nx,
+                       ny,
+                       custom_kernel_dict: Optional[
+                           ExternalDictKernelType] = None):
   """Defines the kernel for matrix multiplications.
 
   Args:
     nx: The number of grid points in the x direction.
     ny: The number of grid points in the y direction.
     custom_kernel_dict: A dictionary that stores the weights of kernels and
-      their offsets. The keys of the dictionary are the names of the kernel,
-      the first argument in the tuple value is the weights of the kernel, and
-      the second argument in the tuple value is the offset of the kernel.
+      their offsets. The keys of the dictionary are the names of the kernel, the
+      first argument in the tuple value is the weights of the kernel, and the
+      second argument in the tuple value is the offset of the kernel.
 
   Returns:
     The matrix kernel that is used in the apply kernel operation. The returned
@@ -586,35 +599,45 @@ def _mulop_kernel_dict(
     standard kernel dict.
   """
   kernel_dict = {
-      'kSx': _make_banded_matrix(COEFFS['centered_sum'], nx),
-      'kSy': _make_banded_matrix(COEFFS['centered_sum'], ny),
-      'ksx': _make_banded_matrix(COEFFS['backward_sum'], nx),
-      'ksy': _make_banded_matrix(COEFFS['backward_sum'], ny, offset=0),
-      'kDx': _make_banded_matrix(COEFFS['centered_difference_1'], nx),
-      'kDy': _make_banded_matrix(COEFFS['centered_difference_1'][::-1], ny),
-      'kD4x': _make_banded_matrix(COEFFS['centered_difference_1_order_4'], nx),
-      'kD4y': _make_banded_matrix(
-          COEFFS['centered_difference_1_order_4'][::-1], ny),
-      'kdx': _make_banded_matrix(
-          COEFFS['backward_difference_1'], nx, offset=1),
-      'kdy': _make_banded_matrix(
-          COEFFS['backward_difference_1'][::-1], ny, offset=0),
-      'kdx+': _make_banded_matrix(
-          COEFFS['forward_difference_1'], nx, offset=0),
-      'kdy+': _make_banded_matrix(
-          COEFFS['forward_difference_1'][::-1], ny, offset=1),
-      'kddx': _make_banded_matrix(
-          COEFFS['centered_difference_2_order_2'], nx),
-      'kddy': _make_banded_matrix(
-          COEFFS['centered_difference_2_order_2'], ny),
-      'kdd8x': _make_banded_matrix(
-          COEFFS['centered_difference_2_order_8'], nx),
-      'kdd8y': _make_banded_matrix(
-          COEFFS['centered_difference_2_order_8'], ny),
-      'kdd16x': _make_banded_matrix(
-          COEFFS['centered_difference_2_order_16'], nx),
-      'kdd16y': _make_banded_matrix(
-          COEFFS['centered_difference_2_order_16'], ny),
+      'kSx':
+          _make_banded_matrix(COEFFS['centered_sum'], nx),
+      'kSy':
+          _make_banded_matrix(COEFFS['centered_sum'], ny),
+      'ksx':
+          _make_banded_matrix(COEFFS['backward_sum'], nx),
+      'ksy':
+          _make_banded_matrix(COEFFS['backward_sum'], ny, offset=0),
+      'kDx':
+          _make_banded_matrix(COEFFS['centered_difference_1'], nx),
+      'kDy':
+          _make_banded_matrix(COEFFS['centered_difference_1'][::-1], ny),
+      'kD4x':
+          _make_banded_matrix(COEFFS['centered_difference_1_order_4'], nx),
+      'kD4y':
+          _make_banded_matrix(COEFFS['centered_difference_1_order_4'][::-1],
+                              ny),
+      'kdx':
+          _make_banded_matrix(COEFFS['backward_difference_1'], nx, offset=1),
+      'kdy':
+          _make_banded_matrix(
+              COEFFS['backward_difference_1'][::-1], ny, offset=0),
+      'kdx+':
+          _make_banded_matrix(COEFFS['forward_difference_1'], nx, offset=0),
+      'kdy+':
+          _make_banded_matrix(
+              COEFFS['forward_difference_1'][::-1], ny, offset=1),
+      'kddx':
+          _make_banded_matrix(COEFFS['centered_difference_2_order_2'], nx),
+      'kddy':
+          _make_banded_matrix(COEFFS['centered_difference_2_order_2'], ny),
+      'kdd8x':
+          _make_banded_matrix(COEFFS['centered_difference_2_order_8'], nx),
+      'kdd8y':
+          _make_banded_matrix(COEFFS['centered_difference_2_order_8'], ny),
+      'kdd16x':
+          _make_banded_matrix(COEFFS['centered_difference_2_order_16'], nx),
+      'kdd16y':
+          _make_banded_matrix(COEFFS['centered_difference_2_order_16'], ny),
       'kf2x':
           _make_banded_matrix(COEFFS['face_flux_quick'], nx),
       'kf2y':
@@ -649,11 +672,10 @@ def _mulop_kernel_dict(
 class ApplyKernelMulOp(ApplyKernelOp):
   """Applies a kernel op using matrix multiplication."""
 
-  def __init__(
-      self,
-      nx: int,
-      ny: int,
-      custom_kernel_dict: Optional[ExternalDictKernelType] = None):
+  def __init__(self,
+               nx: int,
+               ny: int,
+               custom_kernel_dict: Optional[ExternalDictKernelType] = None):
     """Initializes the matrix multiplication kernel operators.
 
     Args:
@@ -684,14 +706,10 @@ class ApplyKernelMulOp(ApplyKernelOp):
           kernel_generation_fn=_make_backward_banded_matrix,
           n=n)
 
-  def apply_kernel_op_x(self,
-                        tiles: Iterable[tf.Tensor],
-                        name: Text) -> List[tf.Tensor]:
+  def apply_kernel_op_x(self, tiles: FlowFieldVal, name: Text) -> FlowFieldVal:
     return common_ops.apply_op_x(tiles, self._get_kernel(name))  # pytype: disable=wrong-arg-types
 
-  def apply_kernel_op_y(self,
-                        tiles: Iterable[tf.Tensor],
-                        name: Text) -> List[tf.Tensor]:
+  def apply_kernel_op_y(self, tiles: FlowFieldVal, name: Text) -> FlowFieldVal:
     return common_ops.apply_op_y(tiles, self._get_kernel(name))  # pytype: disable=wrong-arg-types
 
 
@@ -702,9 +720,9 @@ def _convop_kernel_dict(
   Args:
     n: The integer size of the kernel (only square kernels are supported).
     custom_kernel_dict: A dictionary that stores the weights of kernels and
-      their offsets. The keys of the dictionary are the names of the kernel,
-      the first argument in the tuple value is the weights of the kernel, and
-      the second argument in the tuple value is the offset of the kernel.
+      their offsets. The keys of the dictionary are the names of the kernel, the
+      first argument in the tuple value is the weights of the kernel, and the
+      second argument in the tuple value is the offset of the kernel.
 
   Returns:
     A dictionary of convolutional finite difference operators. The returned dict
@@ -778,8 +796,7 @@ class ApplyKernelConvOp(ApplyKernelOp):
   def __init__(
       self,
       kernel_size: int,
-      custom_kernel_dict: Optional[ExternalDictKernelType] = None
-  ) -> None:
+      custom_kernel_dict: Optional[ExternalDictKernelType] = None) -> None:
     """Initializes kernels of convolutional finite-difference operators.
 
     Args:
@@ -809,23 +826,17 @@ class ApplyKernelConvOp(ApplyKernelOp):
         for key, value in numpy_kernels.items()
     })
 
-  def apply_kernel_op_x(self,
-                        tiles: Iterable[tf.Tensor],
-                        name: Text) -> List[tf.Tensor]:
+  def apply_kernel_op_x(self, tiles: FlowFieldVal, name: Text) -> FlowFieldVal:
+    dtype = (
+        tiles.dtype if isinstance(tiles, tf.Tensor) else list(tiles)[0].dtype)
     return common_ops.apply_convolutional_op_x(
-        tiles,
-        tf.cast(
-            self._get_kernel(name),
-            list(tiles)[0].dtype if tiles else _TF_DTYPE))
+        tiles, tf.cast(self._get_kernel(name), dtype))
 
-  def apply_kernel_op_y(self,
-                        tiles: Iterable[tf.Tensor],
-                        name: Text) -> List[tf.Tensor]:
+  def apply_kernel_op_y(self, tiles: FlowFieldVal, name: Text) -> FlowFieldVal:
+    dtype = (
+        tiles.dtype if isinstance(tiles, tf.Tensor) else list(tiles)[0].dtype)
     return common_ops.apply_convolutional_op_y(
-        tiles,
-        tf.cast(
-            self._get_kernel(name),
-            list(tiles)[0].dtype if tiles else _TF_DTYPE))
+        tiles, tf.cast(self._get_kernel(name), dtype))
 
 
 # TODO(b/131841635): Implement kernels via a spec-based identifier to make it
@@ -839,9 +850,9 @@ def _slice_kernel_dict(
 
   Args:
     custom_kernel_dict: A dictionary that stores the weights of kernels and
-      their offsets. The keys of the dictionary are the names of the kernel,
-      the first argument in the tuple value is the weights of the kernel, and
-      the second argument in the tuple value is the offset of the kernel.
+      their offsets. The keys of the dictionary are the names of the kernel, the
+      first argument in the tuple value is the weights of the kernel, and the
+      second argument in the tuple value is the offset of the kernel.
 
   Returns:
     A dictionary of convolutional finite difference operators.
@@ -850,6 +861,7 @@ def _slice_kernel_dict(
     ValueError if any of the keys in `custom_kernel_dict` already exists in the
     standard kernel dict.
   """
+
   def ksx(u):
     return tf.pad(
         u[1:, :], paddings=[[0, 1], [0, 0]]) + tf.pad(
@@ -1002,8 +1014,7 @@ class ApplyKernelSliceOp(ApplyKernelOp):
 
   def __init__(
       self,
-      custom_kernel_dict: Optional[ExternalDictKernelType] = None
-  ) -> None:
+      custom_kernel_dict: Optional[ExternalDictKernelType] = None) -> None:
     """Initializes kernels of slice-based finite-difference operators.
 
     Args:
@@ -1024,12 +1035,8 @@ class ApplyKernelSliceOp(ApplyKernelOp):
           axis,
           kernel_generation_fn=_make_backward_slice_kernel)
 
-  def apply_kernel_op_x(self,
-                        tiles: Iterable[tf.Tensor],
-                        name: Text) -> List[tf.Tensor]:
+  def apply_kernel_op_x(self, tiles: FlowFieldVal, name: Text) -> FlowFieldVal:
     return common_ops.apply_slice_op_x(tiles, self._get_kernel(name))  # pytype: disable=wrong-arg-types
 
-  def apply_kernel_op_y(self,
-                        tiles: Iterable[tf.Tensor],
-                        name: Text) -> List[tf.Tensor]:
+  def apply_kernel_op_y(self, tiles: FlowFieldVal, name: Text) -> FlowFieldVal:
     return common_ops.apply_slice_op_y(tiles, self._get_kernel(name))  # pytype: disable=wrong-arg-types

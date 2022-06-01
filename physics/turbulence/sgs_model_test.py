@@ -282,8 +282,8 @@ class SgsModelTest(tf.test.TestCase, parameterized.TestCase):
     nu_t_val = self.evaluate(nu_t)
 
     self.assertLen(nu_t_val, 16)
-    # Compare to result computed externally.
-    self.assertAlmostEqual(nu_t_val[8][8, 8], 0.0039159027, 6)
+    # Compare to result computed externally (http://go/dynamic_sgs_validation).
+    self.assertAlmostEqual(nu_t_val[8][8, 8], 0.005617779, 6)
 
   @test_util.run_in_graph_and_eager_modes
   def testDynamicSmagorinskySGSModelProducesCorrectTurbulentDiffusivity(self):
@@ -298,8 +298,8 @@ class SgsModelTest(tf.test.TestCase, parameterized.TestCase):
     nu_t_val = self.evaluate(nu_t)
 
     self.assertLen(nu_t_val, 16)
-    # Compare to result computed externally.
-    self.assertAlmostEqual(nu_t_val[8][8, 8], 0.022984568, 6)
+    # Compare to result computed externally (http://go/dynamic_sgs_validation).
+    self.assertAlmostEqual(nu_t_val[8][8, 8], 0.053236455, 6)
 
   _REPLICAS = [
       np.array([[[0], [1]]]),

@@ -45,19 +45,21 @@ References:
 """
 
 import functools
-from typing import List, Optional, Sequence, Union
+from typing import Optional
 
 import numpy as np
 from swirl_lm.numerics import time_integration
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
+from swirl_lm.utility import composite_types
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import types
 import tensorflow as tf
-from google3.research.simulation.tensorflow.fluid.framework.tf1 import model_function  # pylint: disable=line-too-long
-from google3.research.simulation.tensorflow.fluid.framework.tf1 import step_updater
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 
+FlowFieldVal = types.FlowFieldVal
+FlowFieldMap = types.FlowFieldMap
+StatesUpdateFn = composite_types.StatesUpdateFn
 # The Stefan-Boltzman constant, in unit of W/m^2/K^4.
 _SIGMA = 5.67e-8
 # Effective stoichiometric coefficients for fuel and oxidizer.
@@ -75,10 +77,10 @@ _TF_DTYPE = types.TF_DTYPE
 
 
 def _bound_scalar(
-    phi: Union[tf.Tensor, Sequence[tf.Tensor]],
+    phi: FlowFieldVal,
     minval: float = 0.0,
     maxval: Optional[float] = None,
-) -> Union[tf.Tensor, Sequence[tf.Tensor]]:
+) -> FlowFieldVal:
   """Applies physical bounds to the scalar `phi`.
 
   Combustion related scalars, such as mass/mole fractions, are typically bounded
@@ -192,7 +194,7 @@ def _evaporation(
     rho_m: tf.Tensor,
     dt: float,
     c_w: float,
-) -> Sequence[tf.Tensor]:
+) -> FlowFieldVal:
   """Computes the evaporation rate and update the moisture CDF in fuel.
 
   Args:
@@ -238,9 +240,9 @@ def _src_fuel(f_f: tf.Tensor) -> tf.Tensor:
 
 
 def _theta(
-    rho_f: Sequence[tf.Tensor],
-    rho_f_init: Optional[Sequence[tf.Tensor]] = None,
-) -> List[tf.Tensor]:
+    rho_f: FlowFieldVal,
+    rho_f_init: Optional[FlowFieldVal] = None,
+) -> FlowFieldVal:
   """Computes the fraction of heat feedback to solid after combustion.
 
   Args:
@@ -263,9 +265,9 @@ def _theta(
 
 
 def _localize_by_fuel(
-    rho_f: Sequence[tf.Tensor],
-    src: Sequence[tf.Tensor],
-) -> List[tf.Tensor]:
+    rho_f: FlowFieldVal,
+    src: FlowFieldVal,
+) -> FlowFieldVal:
   """Sets source term to zero where there is no fuel.
 
   Args:
@@ -283,9 +285,9 @@ def _localize_by_fuel(
 
 
 def _compute_mid_state(
-    state_old: Sequence[tf.Tensor],
-    state_new: Sequence[tf.Tensor],
-) -> Sequence[tf.Tensor]:
+    state_old: FlowFieldVal,
+    state_new: FlowFieldVal,
+) -> FlowFieldVal:
   """Computes the states at the middle step with linear interpolation.
 
   Args:
@@ -476,8 +478,8 @@ class Wood(object):
 
   def dry_wood_update_fn(
       self,
-      rho_f_init: Optional[Sequence[tf.Tensor]] = None,
-  ) -> step_updater.StatesUpdateFn:
+      rho_f_init: Optional[FlowFieldVal] = None,
+  ) -> StatesUpdateFn:
     """Generates an update function for states in dry wood combustion.
 
     In this function, the water content is assumed to be zero. The governing
@@ -501,10 +503,10 @@ class Wood(object):
         kernel_op: get_kernel_fn.ApplyKernelOp,
         replica_id: tf.Tensor,
         replicas: np.ndarray,
-        states: model_function.StatesMap,
-        additional_states: model_function.StatesMap,
+        states: FlowFieldMap,
+        additional_states: FlowFieldMap,
         params: grid_parametrization.GridParametrization,
-    ) -> model_function.StatesMap:
+    ) -> FlowFieldMap:
       """Updates 'rho_f', 'T_s', 'src_rho', 'src_T', and 'src_Y_O'."""
 
       def rhs_solid_phase(rho_f, t_s, t_g, y_o):
@@ -627,8 +629,8 @@ class Wood(object):
 
   def moist_wood_update_fn(
       self,
-      rho_f_init: Optional[Sequence[tf.Tensor]] = None,
-  ) -> step_updater.StatesUpdateFn:
+      rho_f_init: Optional[FlowFieldVal] = None,
+  ) -> StatesUpdateFn:
     """Generates an update function for states in wood combustion with moisture.
 
     The governing equations for the solid phase are [2]:
@@ -655,10 +657,10 @@ class Wood(object):
         kernel_op: get_kernel_fn.ApplyKernelOp,
         replica_id: tf.Tensor,
         replicas: np.ndarray,
-        states: model_function.StatesMap,
-        additional_states: model_function.StatesMap,
+        states: FlowFieldMap,
+        additional_states: FlowFieldMap,
         params: grid_parametrization.GridParametrization,
-    ) -> model_function.StatesMap:
+    ) -> FlowFieldMap:
       """Updates wood combustion associated states."""
 
       evaporation = functools.partial(

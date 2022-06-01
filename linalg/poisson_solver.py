@@ -20,7 +20,7 @@ in a distributed setting.
 """
 
 import functools
-from typing import Any, Callable, List, Mapping, Optional, Sequence, Text
+from typing import Any, Callable, Mapping, Optional, Sequence, Text
 
 import numpy as np
 import scipy as sp
@@ -46,13 +46,13 @@ PoissonSolver = base_poisson_solver.PoissonSolver
 
 _TF_DTYPE = types.TF_DTYPE
 
-_HaloUpdateFn = Callable[[Sequence[tf.Tensor]], List[tf.Tensor]]
+_HaloUpdateFn = Callable[[types.FlowFieldVal], types.FlowFieldVal]
 _PoissonSolverSolution = base_poisson_solver.PoissonSolverSolution
 
 X = base_poisson_solver.X
 RESIDUAL_L2_NORM = base_poisson_solver.RESIDUAL_L2_NORM
 ITERATIONS = base_poisson_solver.ITERATIONS
-
+FlowFieldVal = types.FlowFieldVal
 
 NormType = common_ops.NormType
 
@@ -144,8 +144,8 @@ class FastDiagonalization(PoissonSolver):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      rhs: Sequence[tf.Tensor],
-      p0: Sequence[tf.Tensor],
+      rhs: FlowFieldVal,
+      p0: FlowFieldVal,
       halo_update_fn: Optional[_HaloUpdateFn] = None,
       internal_dtype: Optional[tf.dtypes.DType] = None,
       additional_states: Optional[Mapping[Text, tf.Tensor]] = None,
@@ -253,8 +253,8 @@ class ConjugateGradient(PoissonSolver):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      rhs: Sequence[tf.Tensor],
-      p0: Sequence[tf.Tensor],
+      rhs: FlowFieldVal,
+      p0: FlowFieldVal,
       halo_update_fn: Optional[_HaloUpdateFn] = None,
       internal_dtype: Optional[tf.dtypes.DType] = None,
       additional_states: Optional[Mapping[Text, tf.Tensor]] = None,
@@ -289,7 +289,7 @@ class ConjugateGradient(PoissonSolver):
     num_replicas = np.prod(computation_shape)
     group_assignment = np.array([range(num_replicas)], dtype=np.int32)
 
-    def dot(vec1: Sequence[tf.Tensor], vec2: Sequence[tf.Tensor]) -> tf.Tensor:
+    def dot(vec1: FlowFieldVal, vec2: FlowFieldVal) -> tf.Tensor:
       """Performs the dot product between `vec1` and `vec2` excluding halos."""
       vec1 = halo_exchange.clear_halos(vec1, self._halo_width)
       vec2 = halo_exchange.clear_halos(vec2, self._halo_width)
@@ -329,7 +329,7 @@ class ConjugateGradient(PoissonSolver):
     if (cg.HasField('preconditioner') and
         cg.preconditioner.HasField('band_preconditioner')):
 
-      def preconditioner_fn(nested_rhs: Sequence[tf.Tensor]):
+      def preconditioner_fn(nested_rhs: FlowFieldVal):
         """Precondtioner for CG, an approximation for Laplacian inverse."""
         nested_rhs = halo_update(nested_rhs)
 
@@ -341,7 +341,7 @@ class ConjugateGradient(PoissonSolver):
         kernel_op = get_kernel_fn.ApplyKernelConvOp(8, kernel_dict)
 
         def band_matrix_terms(
-            f: Sequence[tf.Tensor],
+            f: FlowFieldVal,
             indices: Optional[Sequence[int]] = None,
         ):
           r"""Applies cutomized kernel with the band matrix as preconditioner.
@@ -546,8 +546,8 @@ class Multigrid(PoissonSolver):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      rhs: Sequence[tf.Tensor],
-      p: Sequence[tf.Tensor],
+      rhs: FlowFieldVal,
+      p: FlowFieldVal,
       halo_update_fn: Optional[_HaloUpdateFn] = None,
       internal_dtype: Optional[tf.dtypes.DType] = None,
       additional_states: Optional[Mapping[Text, tf.Tensor]] = None,

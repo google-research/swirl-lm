@@ -11,7 +11,7 @@ from google3.research.simulation.tensorflow.fluid.models.incompressible_structur
 
 TF_DTYPE = thermodynamics_utils.TF_DTYPE
 
-FlowFieldVar = thermodynamics_utils.FlowFieldVar
+FlowFieldVal = thermodynamics_utils.FlowFieldVal
 FlowFieldMap = thermodynamics_utils.FlowFieldMap
 
 
@@ -30,8 +30,8 @@ class ThermodynamicModel(object):
 
   def rho_ref(
       self,
-      zz: Optional[FlowFieldVar] = None,
-  ) -> FlowFieldVar:
+      zz: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldVal:
     """Generates the reference density.
 
     The default reference density is a constant whose value is specified in the
@@ -49,8 +49,8 @@ class ThermodynamicModel(object):
 
   def p_ref(
       self,
-      zz: FlowFieldVar,
-  ) -> FlowFieldVar:
+      zz: FlowFieldVal,
+  ) -> FlowFieldVal:
     """Generates the reference pressure.
 
     The default reference pressure is a constant whose value is specified in the
@@ -72,7 +72,7 @@ class ThermodynamicModel(object):
       self,
       states: FlowFieldMap,
       additional_states: FlowFieldMap,
-  ) -> FlowFieldVar:
+  ) -> FlowFieldVal:
     """Defines a pure virtual interface for the density update function."""
     raise NotImplementedError(
         'A thermodynamic model needs to provide a definition for the density '

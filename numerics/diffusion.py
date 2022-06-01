@@ -35,15 +35,19 @@ from swirl_lm.numerics import numerics_pb2
 from swirl_lm.physics import constants
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
+from swirl_lm.utility import types
 import tensorflow as tf
 
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
+
+FlowFieldVal = types.FlowFieldVal
+FlowFieldMap = types.FlowFieldMap
 
 
 def diffusion_scalar(
     params: incompressible_structured_mesh_config
     .IncompressibleNavierStokesParameters,
-) -> Callable[..., List[List[tf.Tensor]]]:
+) -> Callable[..., List[FlowFieldVal]]:
   """Generates a function that computes the scalar diffusion term.
 
   Args:
@@ -66,13 +70,13 @@ def diffusion_scalar(
       kernel_op: get_kernel_fn.ApplyKernelOp,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      phi: Sequence[tf.Tensor],
-      rho: Sequence[tf.Tensor],
-      diffusivity: Sequence[tf.Tensor],
+      phi: FlowFieldVal,
+      rho: FlowFieldVal,
+      diffusivity: FlowFieldVal,
       grid_spacing: Tuple[float, float, float],
       scalar_name: Optional[Text] = None,
-      helper_variables: Optional[Dict[Text, Sequence[tf.Tensor]]] = None,
-  ) -> List[List[tf.Tensor]]:
+      helper_variables: Optional[Dict[Text, FlowFieldVal]] = None,
+  ) -> List[FlowFieldVal]:
     """Computes the diffusion term for the conservative scalar.
 
     Args:
@@ -184,10 +188,10 @@ def diffusion_scalar(
 
 def _diffusion_momentum_stencil_3(
     kernel_op: get_kernel_fn.ApplyKernelOp,
-    mu: eq_utils.FlowFieldVar,
+    mu: FlowFieldVal,
     grid_spacing: Tuple[float, float, float],
-    velocity: eq_utils.FlowFieldMap,
-) -> Dict[Text, Sequence[eq_utils.FlowFieldVar]]:
+    velocity: FlowFieldMap,
+) -> Dict[Text, Sequence[FlowFieldVal]]:
   """Computes diffusion terms of momentum equations with 3-node stencil.
 
   Args:
@@ -310,7 +314,7 @@ def _diffusion_momentum_stencil_3(
 def diffusion_momentum(
     params: incompressible_structured_mesh_config
     .IncompressibleNavierStokesParameters,
-) -> Callable[..., Dict[Text, Sequence[eq_utils.FlowFieldVar]]]:
+) -> Callable[..., Dict[Text, Sequence[FlowFieldVal]]]:
   """Generates a function that computes the scalar diffusion term.
 
   Args:
@@ -328,13 +332,13 @@ def diffusion_momentum(
       replica_id: tf.Tensor,
       replicas: np.ndarray,
       scheme: numerics_pb2.DiffusionScheme,
-      mu: eq_utils.FlowFieldVar,
+      mu: FlowFieldVal,
       grid_spacing: Tuple[float, float, float],
-      velocity: eq_utils.FlowFieldMap,
-      tau_bc_update_fn: Optional[Dict[Text, Callable[[Sequence[tf.Tensor]],
-                                                     List[tf.Tensor]]]] = None,
-      helper_variables: Optional[Dict[Text, Sequence[tf.Tensor]]] = None,
-  ) -> Dict[Text, Sequence[eq_utils.FlowFieldVar]]:
+      velocity: FlowFieldMap,
+      tau_bc_update_fn: Optional[Dict[Text, Callable[[FlowFieldVal],
+                                                     FlowFieldVal]]] = None,
+      helper_variables: Optional[FlowFieldMap] = None,
+  ) -> Dict[Text, Sequence[FlowFieldVal]]:
     """Computes the diffusion term in momentum equations of u, v, and w.
 
     Args:

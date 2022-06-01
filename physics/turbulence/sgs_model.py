@@ -3,7 +3,7 @@
 
 import functools
 import itertools
-from typing import List, Optional, Sequence
+from typing import Optional, Sequence
 
 from absl import logging
 import numpy as np
@@ -11,11 +11,13 @@ from swirl_lm.numerics import calculus
 from swirl_lm.numerics import filters
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
+from swirl_lm.utility import types
 import tensorflow as tf
 
-from google3.research.simulation.tensorflow.fluid.framework.tf1 import model_function
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2  # pylint: disable=line-too-long
 
+FlowFieldVal = types.FlowFieldVal
+FlowFieldMap = types.FlowFieldMap
 
 # The originally proposed value for the Smagorinsky constant (dimensionless)
 # with turbulence being isotropic and homogeneous.
@@ -24,7 +26,7 @@ _CS_CLASSICAL = 0.18
 _G = 9.81
 
 
-def _test_filter(value: Sequence[tf.Tensor]) -> List[tf.Tensor]:
+def _test_filter(value: FlowFieldVal) -> FlowFieldVal:
   """Filter `value` with twice the filter width `delta`.
 
   Args:
@@ -41,7 +43,7 @@ def _test_filter(value: Sequence[tf.Tensor]) -> List[tf.Tensor]:
       value, dummy_halo_update, filter_width=3, num_iter=1)
 
 
-def _dot(u_i: Sequence[tf.Tensor], u_j: Sequence[tf.Tensor]) -> List[tf.Tensor]:
+def _dot(u_i: FlowFieldVal, u_j: FlowFieldVal) -> FlowFieldVal:
   """Computes the dot product between two 3D tensors.
 
   Args:
@@ -55,9 +57,8 @@ def _dot(u_i: Sequence[tf.Tensor], u_j: Sequence[tf.Tensor]) -> List[tf.Tensor]:
 
 
 def _einsum_ij(
-    u: Sequence[Sequence[Sequence[tf.Tensor]]],
-    v: Sequence[Sequence[Sequence[tf.Tensor]]]
-) -> Sequence[Sequence[Sequence[tf.Tensor]]]:
+    u: Sequence[Sequence[FlowFieldVal]],
+    v: Sequence[Sequence[FlowFieldVal]]) -> Sequence[Sequence[FlowFieldVal]]:
   """Performs Einstein sum u_i,j v_i,j.
 
   Note that operations are performed elementwise here. A possible improvement to
@@ -89,7 +90,7 @@ def _einsum_ij(
 
 
 def _strain_rate_magnitude(
-    strain_rate: Sequence[Sequence[Sequence[tf.Tensor]]]) -> List[tf.Tensor]:
+    strain_rate: Sequence[Sequence[FlowFieldVal]]) -> FlowFieldVal:
   """Computes the magnitude of the strain rate tensor."""
   strain_rate_prod = [
       tf.zeros_like(s_i) for s_i in strain_rate[0][0]
@@ -106,8 +107,8 @@ def _strain_rate_magnitude(
 
 
 def _strain_rate_tensor(
-    du_dx: Sequence[Sequence[Sequence[tf.Tensor]]]
-) -> Sequence[Sequence[Sequence[tf.Tensor]]]:
+    du_dx: Sequence[Sequence[FlowFieldVal]]
+) -> Sequence[Sequence[FlowFieldVal]]:
   """Computes the strain rate tensor based on velocity gradients.
 
   The strain rate is defined as Sₖₗ = 0.5 * (𝜕uₖ/𝜕xₗ + 𝜕uₗ/𝜕xₖ) - 1/3 𝛁u.
@@ -127,7 +128,7 @@ def _strain_rate_tensor(
       for du_11, du_22, du_33 in zip(du_dx[0][0], du_dx[1][1], du_dx[2][2])
   ]
 
-  def remove_divergence(value: Sequence[tf.Tensor]) -> Sequence[tf.Tensor]:
+  def remove_divergence(value: FlowFieldVal) -> FlowFieldVal:
     """Remove 1/3 of the divergence from `value`."""
     return [value_i - div_i / 3.0 for value_i, div_i in zip(value, div)]
 
@@ -137,10 +138,10 @@ def _strain_rate_tensor(
 
 
 def _germano_averaging(
-    value: Sequence[tf.Tensor],
+    value: FlowFieldVal,
     periodic_dims: Sequence[bool],
     replicas: np.ndarray,
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   """Computes the Germano averaging across all periodic directions."""
   cx, cy, cz = replicas.shape
   nz = len(value)
@@ -225,11 +226,11 @@ class SgsModel(object):
 
   def turbulent_diffusivity(
       self,
-      field_vars: Sequence[Sequence[tf.Tensor]],
-      velocity: Optional[Sequence[Sequence[tf.Tensor]]] = None,
+      field_vars: Sequence[FlowFieldVal],
+      velocity: Optional[Sequence[FlowFieldVal]] = None,
       replicas: Optional[np.ndarray] = None,
-      additional_states: Optional[model_function.StatesMap] = None,
-  ) -> List[tf.Tensor]:
+      additional_states: Optional[FlowFieldMap] = None,
+  ) -> FlowFieldVal:
     """Computes the turbulent diffusivity for `field_vars`.
 
     Args:
@@ -311,10 +312,10 @@ class SgsModel(object):
 
   def turbulent_viscosity(
       self,
-      field_vars: Sequence[Sequence[tf.Tensor]],
+      field_vars: Sequence[FlowFieldVal],
       replicas: Optional[np.ndarray] = None,
-      additional_states: Optional[model_function.StatesMap] = None,
-  ) -> List[tf.Tensor]:
+      additional_states: Optional[FlowFieldMap] = None,
+  ) -> FlowFieldVal:
     """Computes the turbulent viscosity for `field_vars`.
 
     Args:
@@ -372,10 +373,10 @@ class SgsModel(object):
 
   def smagorinsky(
       self,
-      field_vars: Sequence[Sequence[tf.Tensor]],
+      field_vars: Sequence[FlowFieldVal],
       delta: Sequence[float],
-      c_s_in: Optional[Sequence[tf.Tensor]] = None,
-  ) -> List[tf.Tensor]:
+      c_s_in: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldVal:
     """Computes the turbulent viscosity from the Smagorinsky model [1].
 
     The turbulent viscosity is computed as:
@@ -391,9 +392,9 @@ class SgsModel(object):
         `field_vars` can be an arbitrary number. If the length of `field_vars`
         is three, it is assumed that `field_vars` is the velocity. If
         `field_vars` is treated as velocity, then the SGS term is computed based
-        on strain rate Sₖₗ, which is a 3x3 tensor; otherwise `field_vars`
-        will be treated as individual scalars, and the SGS term is computed
-        based on the magnitude of the gradient vector.
+        on strain rate Sₖₗ, which is a 3x3 tensor; otherwise `field_vars` will
+        be treated as individual scalars, and the SGS term is computed based on
+        the magnitude of the gradient vector.
       delta: The filter widths/grid spacing in three dimensions, which is a
         sequence of length 3.
       c_s_in: The Smagorinsky constant.
@@ -434,9 +435,9 @@ class SgsModel(object):
       delta: Sequence[float],
       periodic_dims: Sequence[bool],
       replicas: np.ndarray,
-      velocity: Sequence[Sequence[tf.Tensor]],
-      scalar: Optional[Sequence[tf.Tensor]] = None,
-  ) -> List[tf.Tensor]:
+      velocity: Sequence[FlowFieldVal],
+      scalar: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldVal:
     """Computes the turbulent viscosity using the dynamic Smagorinsky model.
 
     The Smagorinsky constant is determined from the Germano dynamic procedure.
@@ -519,10 +520,32 @@ class SgsModel(object):
       return _einsum_ij(l_ij, m_ij), _einsum_ij(m_ij, m_ij)
 
     lm, mm = lm_mm_momentum() if not scalar else lm_mm_scalar()
+    # The 2 halos are invalid values and should not be included in the
+    # average.
+    def germano_avg_exclude_halos(m):
+      """Computes the Germano average without using halos."""
+      # This is the width consistent with the hard-coded filter width and the
+      # gradient calculation. If flexible halo widths support is needed, the
+      # best approach will be rewrite the class to incorporate all needed
+      # information of the grid config.
+      halo_width = 2
+      m_inner = common_ops.strip_halos(m, (halo_width, halo_width, halo_width))
+      m_avg_inner = _germano_averaging(m_inner, periodic_dims, replicas)
+      z_pad = [
+          # These are in the halos and can be set to any values. Although they
+          # might enter (temporarily) into the point-wise time advancement step
+          # , the contribution will not accumulate as the values in the halos
+          # will be reset/replaced every step. Here we choose 0 for simplicity.
+          tf.zeros_like(m_avg_inner[0]),
+      ] * halo_width
+      m_avg_inner = z_pad + m_avg_inner + z_pad
+      return tf.nest.map_structure(
+          lambda inner: tf.pad(  # pylint: disable=g-long-lambda
+              inner, [[halo_width, halo_width], [halo_width, halo_width]],
+              constant_values=1.0), m_avg_inner)
 
-    lm_avg = _germano_averaging(lm, periodic_dims, replicas)
-    mm_avg = _germano_averaging(mm, periodic_dims, replicas)
-
+    lm_avg = germano_avg_exclude_halos(lm)
+    mm_avg = germano_avg_exclude_halos(mm)
     lm_mm = zip(lm_avg, mm_avg)
 
     c_s_square = [
@@ -538,13 +561,13 @@ class SgsModel(object):
 
   def smagorinsky_lilly(
       self,
-      field_vars: Sequence[Sequence[tf.Tensor]],
-      velocity: Sequence[Sequence[tf.Tensor]],
-      temperature: Sequence[tf.Tensor],
+      field_vars: Sequence[FlowFieldVal],
+      velocity: Sequence[FlowFieldVal],
+      temperature: FlowFieldVal,
       delta: Sequence[float],
       c_s: float,
       pr_t: float,
-  ) -> List[tf.Tensor]:
+  ) -> FlowFieldVal:
     """Computes the turbulent viscosity from the Smagorinsky-Lilly model.
 
     Reference:
@@ -556,9 +579,9 @@ class SgsModel(object):
         `field_vars` can be an arbitrary number. If the length of `field_vars`
         is three, it is assumed that `field_vars` is the velocity. If
         `field_vars` is treated as velocity, then the SGS term is computed based
-        on strain rate Sₖₗ, which is a 3x3 tensor; otherwise `field_vars`
-        will be treated as individual scalars, and the SGS term is computed
-        based on the magnitude of the gradient vector.
+        on strain rate Sₖₗ, which is a 3x3 tensor; otherwise `field_vars` will
+        be treated as individual scalars, and the SGS term is computed based on
+        the magnitude of the gradient vector.
       velocity: A list of 3D tensors representing the 3 velocity components.
         Required in the dynamic Smagorinsky model.
       temperature: A 3D tensor of the temperature field.
@@ -619,10 +642,10 @@ class SgsModel(object):
 
   def vreman(
       self,
-      velocity: Sequence[Sequence[tf.Tensor]],
+      velocity: Sequence[FlowFieldVal],
       delta: Sequence[float],
       c_s: float,
-  ) -> List[tf.Tensor]:
+  ) -> FlowFieldVal:
     """Computes the turbulent viscosity from the Vreman model.
 
     Reference:
@@ -642,7 +665,7 @@ class SgsModel(object):
     """
     alpha = calculus.grad(self._kernel_op, velocity, delta)
 
-    def beta(i: int, j: int) -> Sequence[tf.Tensor]:
+    def beta(i: int, j: int) -> FlowFieldVal:
       """Computes the beta coefficient in the Vreman SGS model."""
       beta_ij = [[
           delta[m]**2 * a_mi * a_mj

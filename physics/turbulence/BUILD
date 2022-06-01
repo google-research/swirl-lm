@@ -15,7 +15,6 @@ pytype_strict_library(
     srcs = ["sgs_model.py"],
     srcs_version = "PY3",
     deps = [
-        "//research/simulation/tensorflow/fluid/framework/tf1:model_function",
         "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_parameters_py_pb2",
         "//third_party/py/absl/logging",
         "//third_party/py/numpy",
@@ -23,6 +22,7 @@ pytype_strict_library(
         "//third_party/py/swirl_lm/numerics:filters",
         "//third_party/py/swirl_lm/utility:common_ops",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
+        "//third_party/py/swirl_lm/utility:types",
         "//third_party/py/tensorflow",
     ],
 )

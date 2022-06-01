@@ -2,15 +2,13 @@
 
 from typing import List, Sequence, Tuple
 from swirl_lm.utility import common_ops
-import tensorflow as tf
+from swirl_lm.utility import types
 
-# 3D tensor is a list of 2D tensors.
-Field = List[tf.Tensor]
-Fields = Sequence[List[tf.Tensor]]
-OutputFields = List[List[tf.Tensor]]
-
+FlowFieldVal = types.FlowFieldVal
+Fields = Sequence[FlowFieldVal]
+OutputFields = List[FlowFieldVal]
 # A matrix of Fields.
-FieldMatrix = Sequence[Sequence[List[tf.Tensor]]]
+FieldMatrix = Sequence[Sequence[FlowFieldVal]]
 
 
 def _validate_matrix_shape(matrix: FieldMatrix, shape: Tuple[int, int]):
@@ -27,7 +25,7 @@ def _validate_matrix_shape(matrix: FieldMatrix, shape: Tuple[int, int]):
           % (len(m), shape))
 
 
-def det_2x2(matrix: FieldMatrix) -> Field:
+def det_2x2(matrix: FieldMatrix) -> FlowFieldVal:
   r"""Computes determinant for 2x2 matrices elementwise in 3D tensors.
 
   M is a matrix of 3D tensors, with rows being the matrix rows, and columns
@@ -56,7 +54,7 @@ def det_2x2(matrix: FieldMatrix) -> Field:
       common_ops.multiply(a, d), common_ops.multiply(b, c))
 
 
-def det_3x3(matrix: FieldMatrix) -> Field:
+def det_3x3(matrix: FieldMatrix) -> FlowFieldVal:
   r"""Computes determinant for 3x3 matrices elementwise in 3D tensors.
 
   M is a matrix of 3D tensors:
@@ -88,7 +86,8 @@ def det_3x3(matrix: FieldMatrix) -> Field:
   return [a_i - b_i + c_i for a_i, b_i, c_i in zip(*terms)]
 
 
-def solve_2x2(matrix: FieldMatrix, rhs: Fields) -> OutputFields:
+def solve_2x2(matrix: FieldMatrix,
+              rhs: Fields) -> OutputFields:
   """Solves a linear system of 2x2 for each cube in 3D tensors.
 
   M * x = rhs elementwise for each cube, and one can refer to `det_2x2` for `M`
@@ -125,7 +124,8 @@ def solve_2x2(matrix: FieldMatrix, rhs: Fields) -> OutputFields:
   ]
 
 
-def solve_3x3(matrix: FieldMatrix, rhs: Fields) -> OutputFields:
+def solve_3x3(matrix: FieldMatrix,
+              rhs: Fields) -> OutputFields:
   """Solves a linear system of 3x3 for each cube in 3D tensors.
 
   M * x = rhs elementwise for each cube, and one can refer to `det_2x2` for `M`

@@ -10,9 +10,10 @@ from swirl_lm.utility import types
 import tensorflow as tf
 from google3.research.simulation.tensorflow.fluid.framework import initializer
 from google3.research.simulation.tensorflow.fluid.framework.post_processing import data_processing
-from google3.research.simulation.tensorflow.fluid.framework.tf1 import model_function
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 
+FlowFieldVal = types.FlowFieldVal
+FlowFieldMap = types.FlowFieldMap
 _DTYPE = tf.float32
 
 
@@ -84,10 +85,10 @@ class Probe(object):
       replica_id: tf.Tensor,
       replicas: np.ndarray,
       step_id: tf.Tensor,
-      states: model_function.StatesMap,
-      additional_states: model_function.StatesMap,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
       params: grid_parametrization.GridParametrization,
-  ) -> model_function.StatesMap:
+  ) -> FlowFieldMap:
     """Updates values in tables of the probes.
 
     Args:

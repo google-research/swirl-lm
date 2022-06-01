@@ -1,14 +1,16 @@
 """Vector calculus operations."""
 
-from typing import List, Sequence, Union
+from typing import Sequence, Union
 
 from swirl_lm.utility import get_kernel_fn
+from swirl_lm.utility import types
 import tensorflow as tf
 
+FlowFieldVal = types.FlowFieldVal
 
-def _grad_impl(kernel_op: get_kernel_fn.ApplyKernelOp,
-               state: Sequence[tf.Tensor], dim: int,
-               grid_spacing: float) -> List[tf.Tensor]:
+
+def _grad_impl(kernel_op: get_kernel_fn.ApplyKernelOp, state: FlowFieldVal,
+               dim: int, grid_spacing: float) -> FlowFieldVal:
   """Computes gradient of `value` in `dim` with 2nd order central scheme."""
   if dim == 0:
     d_state = kernel_op.apply_kernel_op_x(state, 'kDx')
@@ -22,9 +24,9 @@ def _grad_impl(kernel_op: get_kernel_fn.ApplyKernelOp,
 
 def grad(
     kernel_op: get_kernel_fn.ApplyKernelOp,
-    field_vars: Union[Sequence[tf.Tensor], Sequence[Sequence[tf.Tensor]]],
+    field_vars: Union[FlowFieldVal, Sequence[FlowFieldVal]],
     delta: Sequence[float],
-) -> Sequence[Sequence[Sequence[tf.Tensor]]]:
+) -> Sequence[Sequence[FlowFieldVal]]:
   """Computes the gradient for all variables in `field_vars`.
 
   Args:
@@ -54,15 +56,15 @@ def grad(
 
 def divergence(
     kernel_op: get_kernel_fn.ApplyKernelOp,
-    field_var: Sequence[Sequence[tf.Tensor]],
+    field_var: Sequence[FlowFieldVal],
     delta: Sequence[float],
-) -> Sequence[tf.Tensor]:
+) -> FlowFieldVal:
   """Computes the divergence of `field_var`.
 
   Args:
     kernel_op: Kernel operators that perform finite difference operations.
-    field_var: A sequence of 3D tensor variables. The length of the sequence
-      has to be 3.
+    field_var: A sequence of 3D tensor variables. The length of the sequence has
+      to be 3.
     delta: The grid spacing in three dimensions, which is a sequence of length
       3.
 
@@ -89,8 +91,8 @@ def divergence(
   return [ddx + ddy + ddz for ddx, ddy, ddz in zip(*gradients)]
 
 
-def laplacian(kernel_op: get_kernel_fn.ApplyKernelOp, f: Sequence[tf.Tensor],
-              nu: float, dx: float, dy: float, dz: float) -> List[tf.Tensor]:
+def laplacian(kernel_op: get_kernel_fn.ApplyKernelOp, f: FlowFieldVal,
+              nu: float, dx: float, dy: float, dz: float) -> FlowFieldVal:
   """Computes ν times the Laplacian of `f`.
 
   Args:

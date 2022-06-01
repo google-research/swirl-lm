@@ -158,7 +158,6 @@ pytype_strict_library(
     srcs_version = "PY3",
     deps = [
         ":pressure_py_pb2",
-        ":utils",
         "//net/proto2/python/public",
         "//research/simulation/tensorflow/fluid/framework:util",
         "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
@@ -205,6 +204,7 @@ pytype_strict_library(
         "//third_party/py/swirl_lm/utility:common_ops",
         "//third_party/py/swirl_lm/utility:components_debug",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
+        "//third_party/py/swirl_lm/utility:types",
         "//third_party/py/tensorflow",
     ],
 )
@@ -220,6 +220,7 @@ pytype_strict_library(
         "//third_party/py/swirl_lm/numerics:calculus",
         "//third_party/py/swirl_lm/utility:common_ops",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
+        "//third_party/py/swirl_lm/utility:types",
         "//third_party/py/tensorflow",
     ],
 )
@@ -230,7 +231,6 @@ pytype_strict_library(
     srcs_version = "PY3",
     deps = [
         ":common",
-        ":utils",
         "//research/simulation/tensorflow/fluid/framework:util",
         "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
         "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:physical_variable_keys_manager",
@@ -250,6 +250,7 @@ pytype_strict_library(
         "//third_party/py/swirl_lm/utility:components_debug",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
         "//third_party/py/swirl_lm/utility:monitor",
+        "//third_party/py/swirl_lm/utility:types",
         "//third_party/py/tensorflow",
     ],
 )

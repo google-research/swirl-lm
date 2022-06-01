@@ -1,22 +1,19 @@
-"""Library for common operations.
-
-TODO(yusef): Refactor over time so this does not become a catch-all spot.
-"""
+"""Library for common operations."""
 import collections
 import enum
 import functools
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Text, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Text, Tuple, Union
 
 import numpy as np
 from swirl_lm.utility import types
 import tensorflow as tf
 import tensorflow.compat.v1 as tf1
 
-from google3.research.simulation.tensorflow.fluid.framework.tf1 import fluid
-
-StateVariable = Union[tf.Tensor, Sequence[tf.Tensor]]
-Dot = Callable[[StateVariable, StateVariable], tf.Tensor]
-LinearOp = Callable[[StateVariable], StateVariable]
+FlowFieldVal = types.FlowFieldVal
+Dot = Callable[[FlowFieldVal, FlowFieldVal], tf.Tensor]
+LinearOp = Callable[[FlowFieldVal], FlowFieldVal]
+TensorMap = types.TensorMap
+MutableTensorMap = types.MutableTensorMap
 
 _DTYPE = types.TF_DTYPE
 
@@ -32,11 +29,11 @@ class NormType(enum.Enum):
 
 
 def tensor_scatter_1d_update(
-    tensor: List[tf.Tensor],
+    tensor: FlowFieldVal,
     dim: int,
     index: int,
-    updates: Union[Sequence[tf.Tensor], float],
-) -> List[tf.Tensor]:
+    updates: Union[FlowFieldVal, float],
+) -> FlowFieldVal:
   """Updates a plane in a 3D tensor represented as a list of `tf.Tensor`.
 
   This is not an in-place update. A new tensor will be created.
@@ -46,7 +43,7 @@ def tensor_scatter_1d_update(
     dim: The dimension of the plane normal to.
     index: The index of the plane to be updated in `dim`.
     updates: The new values to be assigned in the plane specified by `dim` and
-      `index`. If it's a `Sequence[tf.Tensor]`, its shape must be the same as
+      `index`. If it's a `FlowFieldVal`, its shape must be the same as
       the plane to be updated; if it's a floating point number, the value of the
       plane will be set to this number.
 
@@ -119,12 +116,12 @@ def tensor_scatter_1d_update(
 def tensor_scatter_1d_update_global(
     replica_id: tf.Tensor,
     replicas: np.ndarray,
-    tensor: List[tf.Tensor],
+    tensor: FlowFieldVal,
     dim: int,
     core_index: int,
     plane_index: int,
-    updates: Union[Sequence[tf.Tensor], float],
-) -> List[tf.Tensor]:
+    updates: Union[FlowFieldVal, float],
+) -> FlowFieldVal:
   """Updates a plane in a 3D tensor represented as a list of `tf.Tensor`.
 
   This is not an in-place update. A new tensor will be created.
@@ -138,7 +135,7 @@ def tensor_scatter_1d_update_global(
       updated. The 3D tensor with other indices will remain unchanged.
     plane_index: The local index of the plane to be updated in `dim`.
     updates: The new values to be assigned in the plane specified by `dim` and
-      `index`. If it's a `Sequence[tf.Tensor]`, its shape must be the same as
+      `index`. If it's a `FlowFieldVal`, its shape must be the same as
       the plane to be updated; if it's a floating point number, the value of the
       plane will be set to this number.
 
@@ -160,7 +157,7 @@ def tensor_scatter_1d_update_global(
       false_fn=lambda: tf.nest.map_structure(tf.identity, tensor))
 
 
-def tf_cast(tensor: Sequence[tf.Tensor], dtype) -> List[tf.Tensor]:
+def tf_cast(tensor: FlowFieldVal, dtype) -> FlowFieldVal:
   """Casts a sequence of tensors to desired dtype."""
   if dtype is None:
     return list(tensor)
@@ -169,10 +166,10 @@ def tf_cast(tensor: Sequence[tf.Tensor], dtype) -> List[tf.Tensor]:
 
 
 def scaled_sum(
-    lhs: Sequence[tf.Tensor],
-    rhs: Sequence[tf.Tensor],
+    lhs: FlowFieldVal,
+    rhs: FlowFieldVal,
     scale: float,
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   """Utility function to add tensors: `+` and then apply a scaling factor."""
   return [(lhs_i + rhs_i) * scale for lhs_i, rhs_i in zip(lhs, rhs)]
 
@@ -182,11 +179,11 @@ average = functools.partial(scaled_sum, scale=0.5)
 
 
 def linear_combination(
-    lhs: Union[float, Sequence[tf.Tensor]],
-    rhs: Union[float, Sequence[tf.Tensor]],
+    lhs: Union[float, FlowFieldVal],
+    rhs: Union[float, FlowFieldVal],
     scale_lhs: float,
     scale_rhs: float,
-) -> Union[float, List[tf.Tensor]]:
+) -> Union[float, FlowFieldVal]:
   """Utility function to compute linear combination of 2 tensors."""
   if isinstance(lhs, float) and isinstance(rhs, float):
     return lhs * scale_lhs + rhs * scale_rhs
@@ -201,25 +198,25 @@ def linear_combination(
 
 
 def subtract(
-    lhs: Sequence[tf.Tensor],
-    rhs: Sequence[tf.Tensor],
-) -> List[tf.Tensor]:
+    lhs: FlowFieldVal,
+    rhs: FlowFieldVal,
+) -> FlowFieldVal:
   """Utility function to compute difference of tensors: `-`."""
   return [lhs_i - rhs_i for lhs_i, rhs_i in zip(lhs, rhs)]
 
 
 def multiply(
-    lhs: Sequence[tf.Tensor],
-    rhs: Sequence[tf.Tensor],
-) -> List[tf.Tensor]:
+    lhs: FlowFieldVal,
+    rhs: FlowFieldVal,
+) -> FlowFieldVal:
   """Utility function to multiply tensors: `*`."""
   return [lhs_i * rhs_i for lhs_i, rhs_i in zip(lhs, rhs)]
 
 
 def divide(
-    lhs: Sequence[tf.Tensor],
-    rhs: Sequence[tf.Tensor],
-) -> List[tf.Tensor]:
+    lhs: FlowFieldVal,
+    rhs: FlowFieldVal,
+) -> FlowFieldVal:
   """Utility function to divide tensors: `/`.
 
   Args:
@@ -233,9 +230,9 @@ def divide(
 
 
 def divide_no_nan(
-    lhs: Sequence[tf.Tensor],
-    rhs: Sequence[tf.Tensor],
-) -> List[tf.Tensor]:
+    lhs: FlowFieldVal,
+    rhs: FlowFieldVal,
+) -> FlowFieldVal:
   """Utility function to divide tensors: `/`."""
   return [tf.math.divide_no_nan(lhs_i, rhs_i) for lhs_i, rhs_i in zip(lhs, rhs)]
 
@@ -253,12 +250,12 @@ def gen_field(
     ny: int,
     nz: int,
     dtype: tf.dtypes.DType = _DTYPE,
-) -> fluid.TensorMap:
+) -> TensorMap:
   return {field_name: tf.zeros([nz, nx, ny], dtype)}
 
 
 def _get_field_range(
-    state: fluid.TensorMap,
+    state: TensorMap,
     field_name: Text,
     nz_start: int,
     nz_end: int,
@@ -271,10 +268,10 @@ def get_range_results(
     start: int,
     end: int,
     inputs: Any,
-    keyed_queue_elements: fluid.TensorMap,
-    state: fluid.TensorMap,
+    keyed_queue_elements: TensorMap,
+    state: TensorMap,
     replicas: np.ndarray,
-) -> Tuple[tf.Tensor, fluid.TensorMap]:
+) -> Tuple[tf.Tensor, TensorMap]:
   """Get the slices of a specific range from the sequence of Tensor slices."""
   _ = inputs
   _ = keyed_queue_elements
@@ -283,10 +280,10 @@ def get_range_results(
 
 
 def get_field(
-    state: fluid.TensorMap,
+    state: TensorMap,
     field_name: Text,
     nz: int,
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   return [state[get_tile_name(field_name, i)] for i in range(nz)]
 
 
@@ -398,11 +395,11 @@ def prep_step_by_chunk_fn(
     field_name: Text,
     z_begin: int,
     z_end: int,
-    inputs: Sequence[tf.Tensor],
-    keyed_queue_elements: fluid.TensorMap,
-    state: fluid.MutableTensorMap,
+    inputs: FlowFieldVal,
+    keyed_queue_elements: TensorMap,
+    state: MutableTensorMap,
     replicas: np.ndarray,
-) -> Tuple[List[tf.Tensor], fluid.MutableTensorMap]:
+) -> Tuple[FlowFieldVal, MutableTensorMap]:
   """Does an in-place update of replica states.
 
   Run once per-field and per-chunk. The necessary init values passed are in
@@ -434,7 +431,7 @@ def prep_step_by_chunk_fn(
 def apply_op_x(
     tile_list: Iterable[tf.Tensor],
     mulop: tf.Operation,
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   """Apply op in x."""
   if mulop.shape.as_list()[0] != mulop.shape.as_list()[1]:
     raise RuntimeError(
@@ -456,7 +453,7 @@ def apply_op_x(
 def apply_op_y(
     tile_list: Iterable[tf.Tensor],
     mulop: tf.Operation,
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   """Apply op in y."""
   if mulop.shape.as_list()[0] != mulop.shape.as_list()[1]:
     raise RuntimeError(
@@ -476,10 +473,10 @@ def apply_op_y(
 
 
 def apply_op_z(
-    tile_list: Sequence[tf.Tensor],
+    tile_list: FlowFieldVal,
     z_op_list: Sequence[tf.Operation],
     shift: Optional[Sequence[int]] = None,
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   """Apply op in z."""
   if len(tile_list) < len(z_op_list):
     raise RuntimeError('apply_op_z requires tile_list length ({}) be greater '
@@ -505,7 +502,7 @@ def apply_op_z(
 def apply_convolutional_op_x(
     tiles: Iterable[tf.Tensor],
     convop: tf.Operation,
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   r"""Apply convolutional op in x.
 
   Here, the convop (filter) is expected to be a 3D tensor, according to the
@@ -573,7 +570,7 @@ def apply_convolutional_op_x(
 def apply_convolutional_op_y(
     tiles: Iterable[tf.Tensor],
     convop: tf.Operation,
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   """Apply convolutional op in y.
 
   A detailed explanation can be found in the documentation for
@@ -605,7 +602,7 @@ def apply_convolutional_op_y(
 def _apply_slice_op(
     tiles: Iterable[tf.Tensor],
     op: Callable[[Iterable[tf.Tensor]], tf.Tensor],
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   """Helper to apply a slice op."""
   return [op(tile) for tile in tiles]
 
@@ -613,7 +610,7 @@ def _apply_slice_op(
 def apply_slice_op_x(
     tiles: Iterable[tf.Tensor],
     sliceop: Callable[[Iterable[tf.Tensor]], tf.Tensor],
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   """Apply slice op in x.
 
   Args:
@@ -630,7 +627,7 @@ def apply_slice_op_x(
 def apply_slice_op_y(
     tiles: Iterable[tf.Tensor],
     sliceop: Callable[[Iterable[tf.Tensor]], tf.Tensor],
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   """Apply slice op in y.
 
   Args:
@@ -645,10 +642,10 @@ def apply_slice_op_y(
 
 
 def split_state_in_z(
-    state: fluid.TensorMap,
+    state: TensorMap,
     state_keys: Iterable[Text],
     nz: int,
-) -> fluid.MutableTensorMap:
+) -> MutableTensorMap:
   """Splits state in z, assuming that z is in the first dimension.
 
   Args:
@@ -670,10 +667,10 @@ def split_state_in_z(
 
 
 def merge_state_in_z(
-    state: fluid.TensorMap,
+    state: TensorMap,
     state_keys: Iterable[Text],
     nz: int,
-) -> fluid.MutableTensorMap:
+) -> MutableTensorMap:
   """Merges state in z, assuming that z is in the first dimension.
 
   Args:
@@ -696,8 +693,8 @@ def merge_state_in_z(
 
 
 def local_dot(
-    vec1: StateVariable,
-    vec2: StateVariable,
+    vec1: FlowFieldVal,
+    vec2: FlowFieldVal,
 ) -> tf.Tensor:
   """Computes the dot product of two local vectors.
 
@@ -721,8 +718,8 @@ def local_dot(
 
 
 def local_vdot(
-    vec1: StateVariable,
-    vec2: StateVariable,
+    vec1: FlowFieldVal,
+    vec2: FlowFieldVal,
 ) -> tf.Tensor:
   """Computes the dot product of two local complex tensors.
 
@@ -742,8 +739,8 @@ def local_vdot(
 
 
 def global_dot(
-    vec1: StateVariable,
-    vec2: StateVariable,
+    vec1: FlowFieldVal,
+    vec2: FlowFieldVal,
     group_assignment: np.ndarray,
 ) -> tf.Tensor:
   """Computes the dot product of two distributed vectors.
@@ -766,11 +763,11 @@ def global_dot(
 
 
 def global_mean(
-    f: Sequence[tf.Tensor],
+    f: FlowFieldVal,
     replicas: np.ndarray,
     halos: Sequence[int] = (0, 0, 0),
     axis: Optional[Union[Sequence[int], int]] = None,
-) -> StateVariable:
+) -> FlowFieldVal:
   """Computes the mean of the tensor in a distributed setting.
 
   The 3D tensor in the input argument is represented as a list of `tf.Tensor`.
@@ -861,10 +858,10 @@ def global_reduce(
 
 
 def remove_global_mean(
-    f: Sequence[tf.Tensor],
+    f: FlowFieldVal,
     replicas: np.ndarray,
     halo_width: int,
-) -> List[tf.Tensor]:
+) -> FlowFieldVal:
   """Removes the mean (excluding halos) of the tensor in a distributed setting.
 
   Args:
@@ -883,7 +880,7 @@ def remove_global_mean(
 
 
 def compute_norm(
-    v: Union[Sequence[tf.Tensor], tf.Tensor],
+    v: Union[FlowFieldVal, tf.Tensor],
     norm_types: Sequence[NormType],
     replicas: np.ndarray,
 ) -> Dict[Text, tf.Tensor]:
@@ -968,9 +965,9 @@ def get_core_coordinate(
 
 
 def validate_fields(
-    u: Sequence[tf.Tensor],
-    v: Sequence[tf.Tensor],
-    w: Sequence[tf.Tensor],
+    u: FlowFieldVal,
+    v: FlowFieldVal,
+    w: FlowFieldVal,
 ) -> None:
   """Validates the components of the input field have the same shape."""
   u_nx, u_ny, u_nz = get_field_shape(u)
@@ -987,7 +984,7 @@ def validate_fields(
                       w_nz, str((w_nx, w_nz))))
 
 
-def get_field_shape(u: Sequence[tf.Tensor]) -> Tuple[int, int, int]:
+def get_field_shape(u: FlowFieldVal) -> Tuple[int, int, int]:
   """Gets the 3D volume shape of the sequence of Tensor represents."""
   nz = len(u)
   nx = u[0].shape.as_list()[0]
@@ -1085,7 +1082,7 @@ def get_spectral_index_grid(
   }
 
 
-def get_tensor_shape(state: Sequence[tf.Tensor]) -> Tuple[int, int, int]:
+def get_tensor_shape(state: FlowFieldVal) -> Tuple[int, int, int]:
   """Retrieves the shape of a 3D tensor represented as a stack of 2D tf.Tensor.
 
   Args:
@@ -1114,10 +1111,10 @@ def get_tensor_shape(state: Sequence[tf.Tensor]) -> Tuple[int, int, int]:
 def integration_in_dim(
     replica_id: tf.Tensor,
     replicas: np.ndarray,
-    f: Sequence[tf.Tensor],
+    f: FlowFieldVal,
     h: float,
     dim: int,
-) -> Tuple[List[tf.Tensor], List[tf.Tensor]]:
+) -> Tuple[FlowFieldVal, FlowFieldVal]:
   """Computes the integration of `f` along the z dimension.
 
   Integration with definite integrals is performed for `f` along the list
@@ -1245,9 +1242,9 @@ def integration_in_dim(
 
 
 def strip_halos(
-    f: Sequence[tf.Tensor],
+    f: FlowFieldVal,
     halos: Sequence[int],
-) -> Sequence[tf.Tensor]:
+) -> FlowFieldVal:
   """Removes the halos from the input field component.
 
   Args:
@@ -1275,11 +1272,11 @@ def strip_halos(
 
 
 def get_field_inner(
-    u: Sequence[tf.Tensor],
-    v: Sequence[tf.Tensor],
-    w: Sequence[tf.Tensor],
+    u: FlowFieldVal,
+    v: FlowFieldVal,
+    w: FlowFieldVal,
     halos: Sequence[int],
-) -> Tuple[Sequence[tf.Tensor], Sequence[tf.Tensor], Sequence[tf.Tensor]]:
+) -> Tuple[FlowFieldVal, FlowFieldVal, FlowFieldVal]:
   """Validates and removes the halos of the input field components.
 
   Args:
@@ -1314,7 +1311,7 @@ def get_field_inner(
   return u_inner, v_inner, w_inner
 
 
-def cross_replica_gather(x: tf.Tensor, num_replicas: int) -> List[tf.Tensor]:
+def cross_replica_gather(x: tf.Tensor, num_replicas: int) -> FlowFieldVal:
   """Cross-replica gather of tensors.
 
   Args:
@@ -1340,10 +1337,10 @@ def cross_replica_gather(x: tf.Tensor, num_replicas: int) -> List[tf.Tensor]:
 
 
 def pad(
-    f: Sequence[tf.Tensor],
+    f: FlowFieldVal,
     paddings: Sequence[Sequence[int]],
     value: float = 0.0,
-) -> Sequence[tf.Tensor]:
+) -> FlowFieldVal:
   """Pads the input field with a given value.
 
   Args:

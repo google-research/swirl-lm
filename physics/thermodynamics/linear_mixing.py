@@ -8,7 +8,7 @@ from google3.research.simulation.tensorflow.fluid.models.incompressible_structur
 
 TF_DTYPE = thermodynamics_generic.TF_DTYPE
 
-FlowFieldVar = thermodynamics_generic.FlowFieldVar
+FlowFieldVal = thermodynamics_generic.FlowFieldVal
 FlowFieldMap = thermodynamics_generic.FlowFieldMap
 
 INERT_SPECIES = thermodynamics_utils.INERT_SPECIES
@@ -37,7 +37,7 @@ class LinearMixing(thermodynamics_generic.ThermodynamicModel):
       self,
       states: FlowFieldMap,
       additional_states: FlowFieldMap,
-  ) -> FlowFieldVar:
+  ) -> FlowFieldVal:
     """Updates the density with the linear mixing rule."""
     del additional_states
     scalars = {

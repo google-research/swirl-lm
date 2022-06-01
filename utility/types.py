@@ -26,12 +26,20 @@ TF_COMPLEX_DTYPE = tf.complex64
 NP_DTYPE = np.float32
 NP_COMPLEX_DTYPE = np.complex64
 
-FlowFieldValues = Union[int, float, complex, Text, bool, np.ndarray, tf.Tensor]
-FlowFieldMap = Mapping[Text, FlowFieldValues]
+FlowFieldVal = Union[tf.Tensor, Sequence[tf.Tensor]]
+FlowFieldMap = Mapping[Text, FlowFieldVal]
+VectorField = Tuple[FlowFieldVal, FlowFieldVal, FlowFieldVal]
 ReplicaCoordinates = Tuple[int, int, int]
+
 InitFn = Callable[[Union[int, tf.Tensor], ReplicaCoordinates], FlowFieldMap]
+
 TensorMap = Mapping[Text, tf.Tensor]
+BoolMap = Mapping[Text, bool]
 MutableTensorMap = MutableMapping[Text, tf.Tensor]
+
+FloatSequence = Sequence[float]
+IntSequence = Sequence[int]
+
 FnOutput = Tuple[List[tf.Tensor], MutableTensorMap]
 StepOutput = List[List[tf.Tensor]]
 StepInfeedHandle = NamedTuple(

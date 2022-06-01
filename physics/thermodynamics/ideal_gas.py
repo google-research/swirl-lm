@@ -10,7 +10,7 @@ from google3.research.simulation.tensorflow.fluid.models.incompressible_structur
 
 TF_DTYPE = thermodynamics_generic.TF_DTYPE
 
-FlowFieldVar = thermodynamics_generic.FlowFieldVar
+FlowFieldVal = thermodynamics_generic.FlowFieldVal
 FlowFieldMap = thermodynamics_generic.FlowFieldMap
 
 INERT_SPECIES = thermodynamics_utils.INERT_SPECIES
@@ -78,9 +78,9 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
 
   def _potential_temperature_to_temperature(
       self,
-      theta: FlowFieldVar,
-      zz: Optional[FlowFieldVar] = None,
-  ) -> FlowFieldVar:
+      theta: FlowFieldVal,
+      zz: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldVal:
     """Converts the potential temperature to temperature.
 
     Reference: https://glossary.ametsoc.org/wiki/Potential_temperature
@@ -104,9 +104,9 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
 
   def temperature_to_potential_temperature(
       self,
-      t: FlowFieldVar,
-      zz: Optional[FlowFieldVar] = None,
-  ) -> FlowFieldVar:
+      t: FlowFieldVal,
+      zz: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldVal:
     """Converts the potential temperature to temperature.
 
     Reference: https://glossary.ametsoc.org/wiki/Potential_temperature
@@ -128,7 +128,7 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
         for t_i, p_i in zip(t, self.p_ref(zz))
     ]
 
-  def p_ref(self, zz: FlowFieldVar) -> FlowFieldVar:
+  def p_ref(self, zz: FlowFieldVal) -> FlowFieldVal:
     """Computes the reference pressure considering the geopotential.
 
     Assuming the virtual temperature profile takes the form:
@@ -175,7 +175,7 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
     return ([pressure(zz_i) for zz_i in zz] if self._const_theta is None else
             [pressure_const_theta(zz_i) for zz_i in zz])
 
-  def t_ref(self, zz: Optional[FlowFieldVar] = None) -> FlowFieldVar:
+  def t_ref(self, zz: Optional[FlowFieldVal] = None) -> FlowFieldVal:
     """Generates the reference temperature considering the geopotential.
 
     The virtual temperature profile is assumed to take the form if the potential
@@ -193,13 +193,13 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
         tf.constant(0, dtype=TF_DTYPE),
     ] * self._params.nz if zz is None else zz
 
-    def temperature() -> FlowFieldVar:
+    def temperature() -> FlowFieldVal:
       """Computes the reference temperature following the presumed profile."""
       return [
           self._t_s - self._delta_t * tf.math.tanh(z / self._height) for z in zz
       ]
 
-    def temperature_const_theta() -> FlowFieldVar:
+    def temperature_const_theta() -> FlowFieldVal:
       """Computes reference temperature for constant potential temperature."""
       return self._potential_temperature_to_temperature([
           self._const_theta,
@@ -210,8 +210,8 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
 
   def rho_ref(
       self,
-      zz: Optional[FlowFieldVar] = None,
-  ) -> FlowFieldVar:
+      zz: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldVal:
     """Generates the reference density considering the geopotential.
 
     Args:
@@ -232,7 +232,7 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
       self,
       states: FlowFieldMap,
       additional_states: FlowFieldMap,
-  ) -> FlowFieldVar:
+  ) -> FlowFieldVal:
     """Updates the density with the ideal gas law."""
     zz = additional_states.get('zz', [tf.constant(0, dtype=TF_DTYPE)] *
                                self._params.nz)

@@ -25,14 +25,13 @@
 """
 
 import functools
-from typing import List, Optional, Sequence, Text
+from typing import Optional, Sequence, Text
 
 import numpy as np
 from swirl_lm.boundary_condition import boundary_condition_utils
 from swirl_lm.boundary_condition import immersed_boundary_method
 from swirl_lm.communication import halo_exchange
 from swirl_lm.equations import common
-from swirl_lm.equations import utils as eq_utils
 from swirl_lm.numerics import convection
 from swirl_lm.numerics import diffusion
 from swirl_lm.numerics import filters
@@ -45,12 +44,16 @@ from swirl_lm.utility import common_ops
 from swirl_lm.utility import components_debug
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import monitor
+from swirl_lm.utility import types
 import tensorflow as tf
 
 from google3.research.simulation.tensorflow.fluid.framework import util
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import physical_variable_keys_manager
 
+
+FlowFieldVal = types.FlowFieldVal
+FlowFieldMap = types.FlowFieldMap
 
 _GRAVITY = 9.81
 # A small number that's used as the threshold for the gravity vector. If the
@@ -60,9 +63,6 @@ _G_THRESHOLD = 1e-6
 
 _ConvectionScheme = numerics_pb2.ConvectionScheme
 _DiffusionScheme = numerics_pb2.DiffusionScheme
-
-_FlowFieldVar = eq_utils.FlowFieldVar
-_FlowFieldMap = eq_utils.FlowFieldMap
 
 # Density keys.
 _KEY_RHO = common.KEY_RHO
@@ -167,11 +167,11 @@ class Velocity(object):
 
   def exchange_velocity_halos(
       self,
-      f: List[tf.Tensor],
+      f: FlowFieldVal,
       name: Text,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-  ) -> List[tf.Tensor]:
+  ) -> FlowFieldVal:
     """Performs halo exchange for velocity `f` and updates it's halos.
 
     Note that the boundary condition will be adjusted prior to the halo
@@ -196,11 +196,11 @@ class Velocity(object):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      additional_states: _FlowFieldMap,
-      mu: Sequence[tf.Tensor],
-      p: Sequence[tf.Tensor],
-      rho_mix: Optional[Sequence[tf.Tensor]] = None,
-      forces: Sequence[Optional[List[tf.Tensor]]] = (None, None, None),
+      additional_states: FlowFieldMap,
+      mu: FlowFieldVal,
+      p: FlowFieldVal,
+      rho_mix: Optional[FlowFieldVal] = None,
+      forces: Sequence[Optional[FlowFieldVal]] = (None, None, None),
       dbg: bool = False,
   ):
     """Provides a function that computes the RHS of the momentum equation.
@@ -244,9 +244,9 @@ class Velocity(object):
     ]
     rho_ref = self._thermodynamics.rho_ref(zz)
 
-    def momentum_function(rho_u: List[tf.Tensor], rho_v: List[tf.Tensor],
-                          rho_w: List[tf.Tensor], u: List[tf.Tensor],
-                          v: List[tf.Tensor], w: List[tf.Tensor]):
+    def momentum_function(rho_u: FlowFieldVal, rho_v: FlowFieldVal,
+                          rho_w: FlowFieldVal, u: FlowFieldVal, v: FlowFieldVal,
+                          w: FlowFieldVal):
       """Computes the functional RHS for the three momentum equations.
 
       NB: values in `halo_width` <= 2 returned by this function are invalid.
@@ -266,7 +266,7 @@ class Velocity(object):
           condition.
 
       Returns:
-        A stack of `List[tf.Tensor]` of size three, each representing the RHS
+        A stack of `FlowFieldVal` of size three, each representing the RHS
         of the momentum equation in the x, y, and z dimension.
 
       Raises:
@@ -405,7 +405,7 @@ class Velocity(object):
 
   def _update_wall_bc(
       self,
-      states: _FlowFieldMap,
+      states: FlowFieldMap,
   ) -> None:
     """Updates the boundary conditions for velocity at walls.
 
@@ -461,9 +461,9 @@ class Velocity(object):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: _FlowFieldMap,
-      states_0: _FlowFieldMap,
-  ) -> _FlowFieldMap:
+      states: FlowFieldMap,
+      states_0: FlowFieldMap,
+  ) -> FlowFieldMap:
     """Updates halos for u, v, and w.
 
     Args:
@@ -492,9 +492,9 @@ class Velocity(object):
 
   def _update_helper_variables(
       self,
-      states: _FlowFieldMap,
-      additional_states: _FlowFieldMap,
-  ) -> ...:
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
+  ) ->...:
     """Generates a dictionary of helper variables for term closures.
 
     Args:
@@ -546,7 +546,7 @@ class Velocity(object):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      additional_states: _FlowFieldMap,
+      additional_states: FlowFieldMap,
   ) -> None:
     """Updates additional information required for velocity step.
 
@@ -586,10 +586,10 @@ class Velocity(object):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: _FlowFieldMap,
-      states_0: _FlowFieldMap,
-      additional_states: _FlowFieldMap,
-  ) -> _FlowFieldMap:
+      states: FlowFieldMap,
+      states_0: FlowFieldMap,
+      additional_states: FlowFieldMap,
+  ) -> FlowFieldMap:
     """Predicts the velocity from the momentum equation.
 
     Args:
@@ -694,10 +694,10 @@ class Velocity(object):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: _FlowFieldMap,
-      states_0: _FlowFieldMap,
-      additional_states: _FlowFieldMap,
-  ) -> _FlowFieldMap:
+      states: FlowFieldMap,
+      states_0: FlowFieldMap,
+      additional_states: FlowFieldMap,
+  ) -> FlowFieldMap:
     """Updates the momentum and velocity from the pressure correction.
 
     Args:

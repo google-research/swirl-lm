@@ -10,11 +10,46 @@ from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import tf_test_util as test_util
 import tensorflow as tf
 
+from google3.net.proto2.python.public import text_format
+from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
+from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
+
 FLAGS = flags.FLAGS
+
+PARAMS = (R'thermodynamics { '
+          R'  ideal_gas_law {} '
+          R'} '
+          R'p_thermal: 1.013e5 '
+          R'scalars { '
+          R'  name: "Y_O" '
+          R'  molecular_weight: 0.032 '
+          R'} '
+          R'scalars { '
+          R'  name: "Y_F" '
+          R'  molecular_weight: 0.016 '
+          R'} '
+          R'scalars { '
+          R'  name: "ambient" '
+          R'  molecular_weight: 0.08 '
+          R'  solve_scalar: false '
+          R'} ')
 
 
 @test_util.run_all_in_graph_and_eager_modes
 class OnestepTest(tf.test.TestCase):
+
+  def setUp(self):
+    """Prepares common variables to be used in this test."""
+    super().setUp()
+
+    params = text_format.Parse(
+        PARAMS,
+        incompressible_structured_mesh_parameters_pb2
+        .IncompressibleNavierStokesParameters())
+
+    self.config = (
+        incompressible_structured_mesh_config
+        .IncompressibleNavierStokesParameters(params))
 
   def testOnestepReactionSource(self):
     """Checks if the onestep reaction source is correctly computed."""
@@ -80,10 +115,8 @@ class OnestepTest(tf.test.TestCase):
     cp = 1200.0
     w_f = 0.016
     w_o = 0.032
-    w_p = 0.08
     nu_f = 1.0
     nu_o = 2.0
-    p_thermal = 1.013e5
     nt = 100
     FLAGS.dt = 1e-3
 
@@ -107,8 +140,18 @@ class OnestepTest(tf.test.TestCase):
     params = grid_parametrization.GridParametrization()
 
     update_fn = onestep.integrated_reaction_source_update_fn(
-        a_cst, coeff_f, coeff_o, e_a, q, cp, w_f, w_o, w_p, nu_f, nu_o,
-        p_thermal, nt)
+        params=self.config,
+        a_cst=a_cst,
+        coeff_f=coeff_f,
+        coeff_o=coeff_o,
+        e_a=e_a,
+        q=q,
+        cp=cp,
+        w_f=w_f,
+        w_o=w_o,
+        nu_f=nu_f,
+        nu_o=nu_o,
+        nt=nt)
 
     reaction_source = self.evaluate(
         update_fn(kernel_op, replica_id, replicas, states, additional_states,
@@ -138,10 +181,8 @@ class OnestepTest(tf.test.TestCase):
     cp = 1200.0
     w_f = 0.016
     w_o = 0.032
-    w_p = 0.08
     nu_f = 1.0
     nu_o = 2.0
-    p_thermal = 1.013e5
     t_end = 1e-2
     delta_t = 1e-3
     nt = 100
@@ -152,6 +193,7 @@ class OnestepTest(tf.test.TestCase):
 
     states_new = functools.partial(
         onestep.one_step_reaction_integration,
+        params=self.config,
         delta_t=delta_t,
         a_cst=a_cst,
         coeff_f=coeff_f,
@@ -161,11 +203,11 @@ class OnestepTest(tf.test.TestCase):
         cp=cp,
         w_f=w_f,
         w_o=w_o,
-        w_p=w_p,
         nu_f=nu_f,
         nu_o=nu_o,
-        p_thermal=p_thermal,
         nt=nt)
+    if tf.executing_eagerly():
+      states_new = tf.function(states_new)
 
     # Expected values are computed from a homogeneous reactor with the same
     # set of parameters.
@@ -185,7 +227,8 @@ class OnestepTest(tf.test.TestCase):
     ]
 
     for i in range(int(t_end / delta_t)):
-      y_f, y_o, temperature = self.evaluate(states_new(y_f, y_o, temperature))
+      y_f, y_o, temperature, _ = self.evaluate(
+          states_new(y_f=y_f, y_o=y_o, temperature=temperature))
 
       self.assertAllClose(y_f[0][0, 0], expected[0][i])
       self.assertAllClose(y_o[0][0, 0], expected[1][i])

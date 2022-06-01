@@ -11,11 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 """Helper library for performing Halo exchanges."""
 
 import collections
-from typing import List, Optional, Sequence
+from typing import Optional, Sequence, Union
 
 import numpy as np
 from six.moves import range
@@ -27,10 +26,11 @@ from google3.third_party.tensorflow.contrib.tpu.python.ops import tpu_ops  # pyl
 
 # TODO(b/130560256): Review nomenclature in this file for consistency.
 
-_DTYPE = types.TF_DTYPE
 BCType = halo_exchange_utils.BCType
 BoundaryConditionsSpec = halo_exchange_utils.BoundaryConditionsSpec
+FlowFieldVal = types.FlowFieldVal
 SideType = halo_exchange_utils.SideType
+_DTYPE = types.TF_DTYPE
 
 
 def _do_exchange(replicas, replica_dim, high_halo_for_predecessor,
@@ -52,9 +52,8 @@ def _do_exchange(replicas, replica_dim, high_halo_for_predecessor,
   else:
     padded_replicas = np.concatenate(
         (halo_exchange_utils.slice_in_dim(replicas, -1, None, replica_dim),
-         replicas,
-         halo_exchange_utils.slice_in_dim(replicas, 0, 1, replica_dim)),
-        replica_dim)
+         replicas, halo_exchange_utils.slice_in_dim(replicas, 0, 1,
+                                                    replica_dim)), replica_dim)
   predecessors = np.stack(
       (replicas,
        halo_exchange_utils.slice_in_dim(
@@ -86,9 +85,8 @@ def _replace_halo(plane, bc, dim, side=None):
       computational shape
 
   Args:
-    plane: A 2D tensor. The plane from the subgrid relevant in
-      applying boundary conditions (and to get the shape for Dirichlet
-      boundary conditions).
+    plane: A 2D tensor. The plane from the subgrid relevant in applying boundary
+      conditions (and to get the shape for Dirichlet boundary conditions).
     bc: The boundary conditions specification of the form [type, value]. See
       `inplace_halo_exchange` for full details about boundary condition
       specifications.
@@ -112,8 +110,8 @@ def _replace_halo(plane, bc, dim, side=None):
   # convert to a tensor of shape (nz, ny) or (nx, nz). nx, ny, nz are the number
   # of points along each axis of a (sub)grid. After this line, bc_value is
   # either a float or a 2D tensor.
-  bc_value = (tf.concat(bc_value, dim)
-              if isinstance(bc_value, list) else bc_value)
+  bc_value = (
+      tf.concat(bc_value, dim) if isinstance(bc_value, list) else bc_value)
 
   def neumann_value():
     sign = -1.0 if side == SideType.LOW else 1.0
@@ -141,19 +139,20 @@ def _sliced_tensor_fn(tensor, slices):
   return lambda: tensor[tuple(slices)]
 
 
-def _halo_from_self_dim_0_1(z_list, dim, plane_to_exchange,
-                            is_first, left_or_top_padding):
+def _halo_from_self_dim_0_1(z_list, dim, plane_to_exchange, is_first,
+                            left_or_top_padding):
   """Returns halos from the z_list given the dimension and plane to exchange."""
   if dim not in [0, 1]:
     raise ValueError("dim not in [0, 1]: {}".format(dim))
-  low_slices, low_slices_padded, high_slices = (
-      [slice(None)] * 2, [slice(None)] * 2, [slice(None)] * 2)
+  low_slices, low_slices_padded, high_slices = ([slice(None)] * 2,
+                                                [slice(None)] * 2,
+                                                [slice(None)] * 2)
   low_slices[dim] = slice(plane_to_exchange, plane_to_exchange + 1)
   low_slices_padded[dim] = slice(plane_to_exchange + left_or_top_padding,
                                  plane_to_exchange + left_or_top_padding + 1)
   shape = z_list[0].shape.as_list()[dim]
-  high_slices[dim] = slice(
-      shape - (plane_to_exchange + 1), shape - plane_to_exchange)
+  high_slices[dim] = slice(shape - (plane_to_exchange + 1),
+                           shape - plane_to_exchange)
 
   low_halo_from_self, high_halo_from_self = [], []
   for tensor in z_list:
@@ -177,11 +176,11 @@ def _plane_for_bc_dim_0_1(z_list, plane, dim, is_low, is_first,
   slices, slices_padded = [slice(None)] * 2, [slice(None)] * 2
   shape = z_list[0].shape.as_list()[dim]
   slices[dim] = (
-      slice(plane, plane + 1)
-      if is_low else slice(shape - (plane + 1), shape - plane))
+      slice(plane, plane + 1) if is_low else slice(shape - (plane + 1), shape -
+                                                   plane))
   slices_padded[dim] = (
-      slice(plane + left_or_top_padding, plane + left_or_top_padding + 1)
-      if is_low else slice(shape - (plane + 1), shape - plane))
+      slice(plane + left_or_top_padding, plane + left_or_top_padding +
+            1) if is_low else slice(shape - (plane + 1), shape - plane))
   plane_for_bc = []
   for tensor in z_list:
     plane = tf.cond(
@@ -248,19 +247,20 @@ def _inplace_halo_exchange_1d(z_list, dim, replica_id, replicas, replica_dim,
       "dim: %d, replica_dim: %d, bc_low: %s, bc_high: %s", dim, replica_dim,
       bc_low, bc_high)
 
-  is_first = halo_exchange_utils.is_first_replica(
-      replica_id, replicas, replica_dim)
-  is_last = halo_exchange_utils.is_last_replica(
-      replica_id, replicas, replica_dim)
+  is_first = halo_exchange_utils.is_first_replica(replica_id, replicas,
+                                                  replica_dim)
+  is_last = halo_exchange_utils.is_last_replica(replica_id, replicas,
+                                                replica_dim)
 
   def maybe_replace_halo_from_boundary_conditions(side):
     """Maybe return 2D plane from boundary conditions rather than neighbor."""
+
     def low_from_bc():
       if bc_low[0] == BCType.NO_TOUCH:
         return low_plane_for_outermost_slice
       elif bc_low[0] == BCType.ADDITIVE:
-        return _replace_halo(
-            low_plane_for_outermost_slice, bc_low, dim, SideType.LOW)
+        return _replace_halo(low_plane_for_outermost_slice, bc_low, dim,
+                             SideType.LOW)
       else:
         return _replace_halo(low_plane_for_neumann, bc_low, dim, SideType.LOW)
 
@@ -268,11 +268,11 @@ def _inplace_halo_exchange_1d(z_list, dim, replica_id, replicas, replica_dim,
       if bc_high[0] == BCType.NO_TOUCH:
         return high_plane_for_outermost_slice
       elif bc_high[0] == BCType.ADDITIVE:
-        return _replace_halo(
-            high_plane_for_outermost_slice, bc_high, dim, SideType.HIGH)
+        return _replace_halo(high_plane_for_outermost_slice, bc_high, dim,
+                             SideType.HIGH)
       else:
-        return _replace_halo(
-            high_plane_for_neumann, bc_high, dim, SideType.HIGH)
+        return _replace_halo(high_plane_for_neumann, bc_high, dim,
+                             SideType.HIGH)
 
     if side == SideType.LOW:
       # `tf.cond` is potentially expensive as it evaluates the input of both
@@ -325,8 +325,8 @@ def _inplace_halo_exchange_1d(z_list, dim, replica_id, replicas, replica_dim,
   low_plane_for_neumann = low_halo_from_self
   high_plane_for_neumann = high_halo_from_self
   low_plane_for_outermost_slice, high_plane_for_outermost_slice = (
-      _halo_from_self_dim_0_1(
-          z_list, dim, plane_to_exchange - 1, is_first, left_or_top_padding))
+      _halo_from_self_dim_0_1(z_list, dim, plane_to_exchange - 1, is_first,
+                              left_or_top_padding))
   if plane != width - 1:
     # NB: Saint-Venant is the only sim with padding, and it uses halo width 1,
     # so the following `_plane_for_bc_dim_0_1` calls are currently only made in
@@ -336,24 +336,24 @@ def _inplace_halo_exchange_1d(z_list, dim, replica_id, replicas, replica_dim,
     if left_or_top_padding:
       raise NotImplementedError("Padding with `width > 1` is not supported.")
     if bc_low and bc_low[0] == BCType.NEUMANN:
-      low_plane_for_neumann = _plane_for_bc_dim_0_1(
-          z_list, plane + 1, dim, True, is_first, left_or_top_padding)
-    if bc_low and (
-        bc_low[0] == BCType.NO_TOUCH or bc_low[0] == BCType.ADDITIVE):
+      low_plane_for_neumann = _plane_for_bc_dim_0_1(z_list, plane + 1, dim,
+                                                    True, is_first,
+                                                    left_or_top_padding)
+    if bc_low and (bc_low[0] == BCType.NO_TOUCH or
+                   bc_low[0] == BCType.ADDITIVE):
       low_plane_for_outermost_slice = _plane_for_bc_dim_0_1(
           z_list, plane, dim, True, is_first, left_or_top_padding)
     if bc_high and bc_high[0] == BCType.NEUMANN:
-      high_plane_for_neumann = _plane_for_bc_dim_0_1(
-          z_list, plane + 1, dim, False, is_first, left_or_top_padding)
-    if bc_high and (
-        bc_high[0] == BCType.NO_TOUCH or bc_high[0] == BCType.ADDITIVE):
+      high_plane_for_neumann = _plane_for_bc_dim_0_1(z_list, plane + 1, dim,
+                                                     False, is_first,
+                                                     left_or_top_padding)
+    if bc_high and (bc_high[0] == BCType.NO_TOUCH or
+                    bc_high[0] == BCType.ADDITIVE):
       high_plane_for_outermost_slice = _plane_for_bc_dim_0_1(
           z_list, plane, dim, False, is_first, left_or_top_padding)
 
-  low_edge = maybe_replace_halo_from_boundary_conditions(
-      SideType.LOW)
-  high_edge = maybe_replace_halo_from_boundary_conditions(
-      SideType.HIGH)
+  low_edge = maybe_replace_halo_from_boundary_conditions(SideType.LOW)
+  high_edge = maybe_replace_halo_from_boundary_conditions(SideType.HIGH)
 
   high_edges = _convert_2d_tensor_to_zlist(high_edge, dim)
   low_edges = _convert_2d_tensor_to_zlist(low_edge, dim)
@@ -367,8 +367,7 @@ def _inplace_halo_exchange_1d(z_list, dim, replica_id, replicas, replica_dim,
               pred=is_first,
               true_fn=_alias_inplace_update(x, plane_padded, low),
               false_fn=_alias_inplace_update(x, plane, low)),
-          x.shape.as_list()[0] - (plane + 1),
-          tf.squeeze(high))
+          x.shape.as_list()[0] - (plane + 1), tf.squeeze(high))
     else:
       x = tf.transpose(
           tf.alias_inplace_update(
@@ -378,8 +377,7 @@ def _inplace_halo_exchange_1d(z_list, dim, replica_id, replicas, replica_dim,
                       tf.transpose(x, perm=[1, 0]), plane_padded, low),
                   false_fn=_alias_inplace_update(
                       tf.transpose(x, perm=[1, 0]), plane, low)),
-              x.shape.as_list()[1] - (plane + 1),
-              tf.squeeze(high)),
+              x.shape.as_list()[1] - (plane + 1), tf.squeeze(high)),
           perm=[1, 0])
     result_list.append(x)
 
@@ -387,7 +385,7 @@ def _inplace_halo_exchange_1d(z_list, dim, replica_id, replicas, replica_dim,
 
 
 def inplace_halo_exchange(
-    z_list: List[tf.Tensor],
+    z_list: FlowFieldVal,
     dims: Sequence[int],
     replica_id: tf.Tensor,
     replicas: np.ndarray,
@@ -396,7 +394,7 @@ def inplace_halo_exchange(
     boundary_conditions: Optional[BoundaryConditionsSpec] = None,
     width: int = 1,
     left_padding: int = 0,
-    top_padding: int = 0) -> List[tf.Tensor]:
+    top_padding: int = 0) -> FlowFieldVal:
   """Performs a N-dimensional halo exchange.
 
   Args:
@@ -418,44 +416,31 @@ def inplace_halo_exchange(
     left_padding: The amount of left padding, referring the 2d plane formed by
       dims 0 and 1 (left is dim 1).
     top_padding: The amount of top padding, referring to the 2d plane formed by
-      dims 0 and 1 (top is dim 0).
-
-  If boundary_conditions is not `None` it must have the form
-
-          [
-           [(BCType for dim 0 lower bound,
-             value for dim 0 lower bound),
-            (BCType for dim 0 upper bound,
-             value for dim 0 upper bound)],
-           [(BCType for dim1 lower bound,
-             value for dim 1 lower bound),
-            (BCType for dim1 upper bound,
-             value for dim 1 upper bound)],
-           ...
-          ]
-
-   Note the innermost sequence can be `None`, in which case the corresponding
-   boundary will be set to zero. Also, boundary conditions only apply when the
-   corresponding dimension is not periodic. The value can be a float, or can be
-   a sequence of planes of length `width`. An element of this sequence is a
-   tensor if dim = 2 (z-axis) and a sequence if dim is 0 or 1. A z-axis boundary
-   plane is specified by a 2D tensor of shape (nx, ny). A 2D x- or y-axis
-   boundary plane is specified by a list of length nz of tensors of shape (1,
-   ny) or (nx, 1), respectively. The order of planes in the sequence is from low
-   to high along the dimension `dim`. This means for a low boundary the
-   innermost plane is the last or `width - 1` element in the sequence. For a
-   high boundary the innermost plane is the 0th element.
-
-   In the Neumann case the grid spacing is not taken into account, so the value
-   specified by the constant or the 2D plane(s) should take into account the
-   grid spacing as appropriate.
-
-   Halo exchange / applying boundary conditions is done one plane at a time for
-   performance reasons. If width > 1 a single tensor of shape (e.g.) (nx, ny,
-   width) could be exchanged. This was implemented but, when width = 1, was
-   found to be slow compared to the original width = 1 implementation. By doing
-   halo exchange plane by plane the performance is the same as the original
-   implementation in the most common and important width = 1 case.
+      dims 0 and 1 (top is dim 0).  If boundary_conditions is not `None` it must
+      have the form  [ [(BCType for dim 0 lower bound, value for dim 0 lower
+      bound), (BCType for dim 0 upper bound, value for dim 0 upper bound)],
+      [(BCType for dim1 lower bound, value for dim 1 lower bound), (BCType for
+      dim1 upper bound, value for dim 1 upper bound)], ... ]  Note the innermost
+      sequence can be `None`, in which case the corresponding boundary will be
+      set to zero. Also, boundary conditions only apply when the corresponding
+      dimension is not periodic. The value can be a float, or can be a sequence
+      of planes of length `width`. An element of this sequence is a tensor if
+      dim = 2 (z-axis) and a sequence if dim is 0 or 1. A z-axis boundary plane
+      is specified by a 2D tensor of shape (nx, ny). A 2D x- or y-axis boundary
+      plane is specified by a list of length nz of tensors of shape (1, ny) or
+      (nx, 1), respectively. The order of planes in the sequence is from low to
+      high along the dimension `dim`. This means for a low boundary the
+      innermost plane is the last or `width - 1` element in the sequence. For a
+      high boundary the innermost plane is the 0th element.  In the Neumann case
+      the grid spacing is not taken into account, so the value specified by the
+      constant or the 2D plane(s) should take into account the grid spacing as
+      appropriate.  Halo exchange / applying boundary conditions is done one
+      plane at a time for performance reasons. If width > 1 a single tensor of
+      shape (e.g.) (nx, ny, width) could be exchanged. This was implemented but,
+      when width = 1, was found to be slow compared to the original width = 1
+      implementation. By doing halo exchange plane by plane the performance is
+      the same as the original implementation in the most common and important
+      width = 1 case.
 
   Returns:
     The incoming z_list modified to include the result of halo exchange and
@@ -469,8 +454,9 @@ def inplace_halo_exchange(
   assert len(dims) == len(boundary_conditions)
 
   with tf.name_scope("HaloExchange"):
-    for (dim, replica_dim, periodic, bc) in zip(
-        dims, replica_dims, periodic_dims, boundary_conditions):
+    for (dim, replica_dim, periodic, bc) in zip(dims, replica_dims,
+                                                periodic_dims,
+                                                boundary_conditions):
       bc_low, bc_high = bc if bc else (None, None)
       _validate_boundary_condition(bc_low, z_list, dim, width)
       _validate_boundary_condition(bc_high, z_list, dim, width)
@@ -490,9 +476,9 @@ def inplace_halo_exchange(
           bc_low_plane = list(bc_low)
           # If the boundary condition is a list of planes select the relevant
           # one.
-          bc_low_plane[1] = (bc_low_plane[1]
-                             if isinstance(bc_low_plane[1], float)
-                             else bc_low_plane[1][plane])
+          bc_low_plane[1] = (
+              bc_low_plane[1]
+              if isinstance(bc_low_plane[1], float) else bc_low_plane[1][plane])
         else:
           bc_low_plane = None
         if bc_high:
@@ -500,15 +486,17 @@ def inplace_halo_exchange(
           bc_high_plane = list(bc_high)
           # If the boundary condition is a list of planes select the relevant
           # one.
-          bc_high_plane[1] = (bc_high_plane[1]
-                              if isinstance(bc_high_plane[1], float)
-                              else bc_high_plane[1][width - plane - 1])
+          bc_high_plane[1] = (
+              bc_high_plane[1] if isinstance(bc_high_plane[1], float) else
+              bc_high_plane[1][width - plane - 1])
         else:
           bc_high_plane = None
 
-        z_list = _inplace_halo_exchange_1d(
-            z_list, dim, replica_id, replicas, replica_dim, bool(periodic),
-            bc_low_plane, bc_high_plane, width, plane, left_or_top_padding)
+        z_list = _inplace_halo_exchange_1d(z_list, dim,
+                                           replica_id, replicas, replica_dim,
+                                           bool(periodic), bc_low_plane,
+                                           bc_high_plane, width, plane,
+                                           left_or_top_padding)
 
     return z_list
 
@@ -542,12 +530,12 @@ def _validate_boundary_condition(bc, z_list, dim, width):
 
   bc_type, bc_value = bc
 
-  if bc_type not in (
-      BCType.NEUMANN, BCType.DIRICHLET, BCType.NO_TOUCH, BCType.ADDITIVE):
+  if bc_type not in (BCType.NEUMANN, BCType.DIRICHLET, BCType.NO_TOUCH,
+                     BCType.ADDITIVE):
     raise ValueError("The first element of a boundary condition must be "
                      "BCType.NEUMANN, BCType.DIRICHLET, BCType.NO_TOUCH, or "
-                     "or BCType.ADDITIVE. Got {} (type {})."
-                     .format(bc_type, type(bc_type)))
+                     "or BCType.ADDITIVE. Got {} (type {}).".format(
+                         bc_type, type(bc_type)))
 
   # bc_value must be a float or a sequence.
   if isinstance(bc_value, float):
@@ -599,10 +587,11 @@ def _validate_boundary_condition(bc, z_list, dim, width):
                                dim, expected_shape, bc_tensor.shape))
 
 
-def get_edge_of_3d_field(z_list: Sequence[tf.Tensor],
-                         dim: int,
-                         side: SideType,
-                         width: int = 1) -> Sequence[tf.Tensor]:
+def get_edge_of_3d_field(
+    z_list: FlowFieldVal,
+    dim: int,
+    side: SideType,
+    width: int = 1) -> Union[FlowFieldVal, Sequence[FlowFieldVal]]:
   """Helper function that returns an edge of a 3D field.
 
   Args:
@@ -618,15 +607,12 @@ def get_edge_of_3d_field(z_list: Sequence[tf.Tensor],
       (1, ny) or (nx, 1)] if dim = 0 or 1, respectively.
   """
   if dim == 2:
-    return (
-        z_list[:width] if side == SideType.LOW
-        else z_list[-width:])
+    return (z_list[:width] if side == SideType.LOW else z_list[-width:])
 
   x_or_y_slice = [slice(None)] * 2
   wlist_of_zlist = []
   for plane in range(width):
-    slice_index = (
-        plane if side == SideType.LOW else plane - width)
+    slice_index = (plane if side == SideType.LOW else plane - width)
     slice_index_plus_1 = None if slice_index + 1 == 0 else slice_index + 1
     x_or_y_slice[dim] = slice(slice_index, slice_index_plus_1)
     zlist = [x[tuple(x_or_y_slice)] for x in z_list]
@@ -668,7 +654,7 @@ def _convert_2d_tensor_to_zlist(tensor, dim):
   return tf.split(tensor, nz, dim)
 
 
-def clear_halos(x: Sequence[tf.Tensor], halo_width: int) -> Sequence[tf.Tensor]:
+def clear_halos(x: FlowFieldVal, halo_width: int) -> FlowFieldVal:
   """Sets value inside halos to zero.
 
   Sets halo values to zero for a 3D field in each TPU core. It is needed in

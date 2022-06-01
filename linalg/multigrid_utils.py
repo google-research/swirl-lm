@@ -30,11 +30,10 @@ import scipy.linalg  # pylint: disable=unused-import
 from swirl_lm.communication import halo_exchange
 from swirl_lm.communication import halo_exchange_utils
 from swirl_lm.utility import grid_parametrization
-from swirl_lm.utility import types as dtypes
+from swirl_lm.utility import types
 import tensorflow as tf
 
 from google3.research.simulation.tensorflow.fluid.framework import initializer
-from google3.research.simulation.tensorflow.fluid.framework.tf1 import fluid
 
 BCType = halo_exchange_utils.BCType
 BoundaryConditionsSpec = halo_exchange_utils.BoundaryConditionsSpec
@@ -42,8 +41,6 @@ SideType = halo_exchange_utils.SideType
 TensorOrArray = initializer.TensorOrArray
 ValueFunction = initializer.ValueFunction
 
-TensorOrArray = Union[tf.Tensor, np.ndarray]
-TensorOrListOfTensors = Union[tf.Tensor, List[tf.Tensor]]
 ModifyTensorOrArrayFn = Callable[[TensorOrArray], TensorOrArray]
 ProlongRestrictMatrices = Tuple[Sequence[Sequence[Optional[TensorOrArray]]],
                                 Sequence[Sequence[Optional[TensorOrArray]]]]
@@ -53,8 +50,10 @@ ThreeIntTuple = Tuple[int, int, int]
 # `(x, b, full_grid_shape)`, the current iterate, right hand side, and full
 # shape, and returns the next iterate or the residual.
 SmootherTypeFn = Callable[[TensorOrArray, TensorOrArray], TensorOrArray]
+InitFn = types.InitFn
+FlowFieldVal = types.FlowFieldVal
 
-_NP_DTYPE = dtypes.NP_DTYPE
+_NP_DTYPE = types.NP_DTYPE
 
 
 def get_shape(x: TensorOrArray) -> Sequence[int]:
@@ -832,8 +831,7 @@ def get_full_grids_init_fn(
     params: grid_parametrization.GridParametrization,
     coarsest_subgrid_shape: Optional[Sequence[int]] = None,
     boundary_conditions: Optional[BoundaryConditionsSpec] = None,
-    a_operator: Optional[ModifyTensorOrArrayFn] = None
-) -> fluid.InitFn:
+    a_operator: Optional[ModifyTensorOrArrayFn] = None) -> InitFn:
   """An multigrid init function with full grid inputs.
 
   Args:
@@ -885,8 +883,7 @@ def get_init_fn_from_value_fn_for_homogeneous_bcs(
     params: grid_parametrization.GridParametrization,
     coarsest_subgrid_shape: Optional[Sequence[int]] = None,
     num_boundary_points: int = initializer.DEFAULT_NUM_BOUNDARY_POINTS,
-    perm: ThreeIntTuple = initializer.DEFAULT_PERMUTATION
-) -> fluid.InitFn:
+    perm: ThreeIntTuple = initializer.DEFAULT_PERMUTATION) -> InitFn:
   """An multigrid init function with value function input for `b`.
 
   This function is for the case of homogeneous boundary conditions.
@@ -1011,8 +1008,8 @@ def laplacian_matrix(
 
     for bc in boundary_conditions:
       if not bc: continue
-      types = [b[0] for b in bc]
-      if any([t not in allowed_bc_types for t in types]):
+      bc_types = [b[0] for b in bc]
+      if any([t not in allowed_bc_types for t in bc_types]):
         return False
 
     return True
@@ -1133,15 +1130,14 @@ def halo_exchange_step_fn(
     replica_id: tf.Tensor,
     replicas: np.ndarray,
     boundary_conditions: Optional[BoundaryConditionsSpec] = None,
-    halo_width: int = 1
-) -> Optional[Callable[[TensorOrListOfTensors], TensorOrListOfTensors]]:
+    halo_width: int = 1) -> Optional[Callable[[FlowFieldVal], FlowFieldVal]]:
   """Returns a halo exchange function for the given boundary conditions."""
   if boundary_conditions is None:
     return None
 
   subtract_mean = boundary_conditions_all_neumann(boundary_conditions)
 
-  def halo_exchange_fn(x: TensorOrListOfTensors) -> TensorOrListOfTensors:
+  def halo_exchange_fn(x: FlowFieldVal) -> FlowFieldVal:
     is_tensor = isinstance(x, tf.Tensor)
     shape = get_shape(x) if is_tensor else (*get_shape(x[0]), len(x))
     tiles = tf.unstack(x, axis=-1) if is_tensor else x

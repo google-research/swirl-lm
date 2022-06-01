@@ -3,8 +3,9 @@
 from typing import List, Sequence
 
 from swirl_lm.numerics import numerics_pb2
-import tensorflow as tf
+from swirl_lm.utility import types
 
+FlowFieldVal = types.FlowFieldVal
 
 TimeIntegrationScheme = numerics_pb2.TimeIntegrationScheme
 
@@ -16,8 +17,7 @@ TimeIntegrationScheme = numerics_pb2.TimeIntegrationScheme
 _RK3_COEFFS = {'c11': 0.75, 'c12': 0.25, 'c21': 1.0 / 3.0, 'c22': 2.0 / 3.0}
 
 
-def _rk3(rhs, dt: float,
-         var: Sequence[List[tf.Tensor]]) -> List[List[tf.Tensor]]:
+def _rk3(rhs, dt: float, var: Sequence[FlowFieldVal]) -> List[FlowFieldVal]:
   """Computes the time integration using the 3rd order Runge-Kutta method.
 
   The time integration of dvar / dt = rhs(var_0, var_n) is computed.
@@ -65,8 +65,8 @@ def _rk3(rhs, dt: float,
 
 
 def _crank_nickolson_explicit_subiteration(
-    rhs, dt: float, var_0: Sequence[List[tf.Tensor]],
-    var_n: Sequence[List[tf.Tensor]]) -> List[List[tf.Tensor]]:
+    rhs, dt: float, var_0: Sequence[FlowFieldVal],
+    var_n: Sequence[FlowFieldVal]) -> List[FlowFieldVal]:
   """Computes the time integration with the semi-implicit Crank-Nicolson method.
 
   The time integration of dvar / dt = rhs(var_0, var_n) is computed.
@@ -108,8 +108,8 @@ def _crank_nickolson_explicit_subiteration(
 
 def time_advancement_explicit(
     rhs, dt: float, scheme: TimeIntegrationScheme,
-    var_0: Sequence[List[tf.Tensor]],
-    var_n: Sequence[List[tf.Tensor]]) -> List[List[tf.Tensor]]:
+    var_0: Sequence[FlowFieldVal],
+    var_n: Sequence[FlowFieldVal]) -> List[FlowFieldVal]:
   """Computes the time integration using the selected explicit scheme.
 
   The time integration of dvar / dt = rhs(var_0, var_n) is computed.

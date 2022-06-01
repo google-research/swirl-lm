@@ -19,7 +19,7 @@ Methods presented here are used to solve the Poisson equation, i.e.
 in a distributed setting.
 """
 
-from typing import Callable, List, Mapping, Optional, Sequence, Text
+from typing import Callable, Optional, Sequence
 
 import numpy as np
 from swirl_lm.communication import halo_exchange
@@ -31,9 +31,10 @@ from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import types
 import tensorflow as tf
 
+FlowFieldVal = types.FlowFieldVal
+FlowFieldMap = types.FlowFieldMap
 _TF_DTYPE = types.TF_DTYPE
-
-_HaloUpdateFn = Callable[[Sequence[tf.Tensor]], List[tf.Tensor]]
+_HaloUpdateFn = Callable[[FlowFieldVal], FlowFieldVal]
 _PoissonSolverSolution = base_poisson_solver.PoissonSolverSolution
 
 X = base_poisson_solver.X
@@ -71,7 +72,7 @@ def halo_update_for_compatibility_fn(
     A function that updates the halos of the input 3D tensor.
   """
 
-  def halo_update_fn(p: Sequence[tf.Tensor]) -> List[tf.Tensor]:
+  def halo_update_fn(p: FlowFieldVal) -> FlowFieldVal:
     """Updates the halo following the divergence theorem."""
     nz = len(p)
     nx, ny = p[0].get_shape().as_list()
@@ -158,11 +159,11 @@ class JacobiSolver(base_poisson_solver.PoissonSolver):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      rhs: Sequence[tf.Tensor],
-      p0: Sequence[tf.Tensor],
+      rhs: FlowFieldVal,
+      p0: FlowFieldVal,
       halo_update_fn: Optional[_HaloUpdateFn] = None,
       internal_dtype: Optional[tf.dtypes.DType] = None,
-      additional_states: Optional[Mapping[Text, tf.Tensor]] = None,
+      additional_states: Optional[FlowFieldMap] = None,
   ) -> _PoissonSolverSolution:
     """Solves the Poisson equation with the Jacobi iterative method.
 

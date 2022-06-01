@@ -6,7 +6,7 @@
 """
 
 import functools
-from typing import List, Optional, Sequence, Text
+from typing import Optional, Text
 
 import numpy as np
 from swirl_lm.boundary_condition import immersed_boundary_method
@@ -26,9 +26,13 @@ from swirl_lm.physics.turbulence import sgs_model
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import components_debug
 from swirl_lm.utility import get_kernel_fn
+from swirl_lm.utility import types
 import tensorflow as tf
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import physical_variable_keys_manager
+
+FlowFieldVal = types.FlowFieldVal
+FlowFieldMap = types.FlowFieldMap
 
 # A small number that's used as the threshold for the gravity vector. If the
 # absolute value of a gravity component is less than this threshold, it is
@@ -48,9 +52,6 @@ _ALPHA_Z = 1.0
 _D = 3.75e-6
 # The initial height of the cloud, in units of m
 _ZI = 840.0
-
-_FlowFieldVar = eq_utils.FlowFieldVar
-_FlowFieldMap = eq_utils.FlowFieldMap
 
 # Density keys.
 _KEY_RHO = common.KEY_RHO
@@ -151,11 +152,11 @@ class Scalars(object):
 
   def exchange_scalar_halos(
       self,
-      f: List[tf.Tensor],
+      f: FlowFieldVal,
       name: Text,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-  ) -> List[tf.Tensor]:
+  ) -> FlowFieldVal:
     """Performs halo exchange with updated boundary conditions.
 
     Note that the boundary condition can be adjusted prior to the halo exchange.
@@ -180,17 +181,17 @@ class Scalars(object):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      phi: Sequence[tf.Tensor],
-      rho_u: Sequence[tf.Tensor],
-      p: Sequence[tf.Tensor],
-      rho: Sequence[tf.Tensor],
+      phi: FlowFieldVal,
+      rho_u: FlowFieldVal,
+      p: FlowFieldVal,
+      rho: FlowFieldVal,
       h: float,
       dt: float,
       dim: int,
       sc_name: Text,
-      zz: Optional[Sequence[tf.Tensor]] = None,
+      zz: Optional[FlowFieldVal] = None,
       apply_correction: bool = False,
-  ) -> List[tf.Tensor]:
+  ) -> FlowFieldVal:
     """Computes the convection term for the conservative scalar."""
     # Computes the gravitational force for the face flux correction.
     if np.abs(self._g_vec[dim]) < _G_THRESHOLD or not apply_correction:
@@ -225,8 +226,8 @@ class Scalars(object):
       replica_id: tf.Tensor,
       replicas: np.ndarray,
       scalar_name: Text,
-      states: _FlowFieldMap,
-      additional_states: _FlowFieldMap,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
       dbg: bool = False,
   ):
     """Provides a function that computes the RHS function of a generic scalar.
@@ -270,14 +271,14 @@ class Scalars(object):
         'w': states[_KEY_W],
     }
 
-    def scalar_function(phi: Sequence[tf.Tensor]):
+    def scalar_function(phi: FlowFieldVal):
       """Computes the functional RHS for the three momentum equations.
 
       Args:
         phi: The scalar field.
 
       Returns:
-        A `List[tf.Tensor]` representing the RHS of the scalar transport
+        A `FlowFieldVal` representing the RHS of the scalar transport
         equation.
       """
       conv = [
@@ -346,8 +347,8 @@ class Scalars(object):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: _FlowFieldMap,
-      additional_states: _FlowFieldMap,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
       dbg: bool = False,
   ):
     """Generates a functor that computes the RHS of the total energy equation.
@@ -426,10 +427,10 @@ class Scalars(object):
         self._g_dim is not None)
 
     def compute_rho_u_tau(
-        tau_0j: Sequence[tf.Tensor],
-        tau_1j: Sequence[tf.Tensor],
-        tau_2j: Sequence[tf.Tensor],
-    ) -> List[tf.Tensor]:
+        tau_0j: FlowFieldVal,
+        tau_1j: FlowFieldVal,
+        tau_2j: FlowFieldVal,
+    ) -> FlowFieldVal:
       """Computes 'rho u_i tau_ij'."""
       return [
           u * tau_0j_l + v * tau_1j_l + w * tau_2j_l
@@ -477,9 +478,9 @@ class Scalars(object):
                _ZI * tf.math.pow(tf.maximum(z - _ZI, 0.0), 1.0 / 3.0)))
 
     def source_by_radiation(
-        q_l: Sequence[tf.Tensor],
+        q_l: FlowFieldVal,
         g_dim: int,
-    ) -> List[tf.Tensor]:
+    ) -> FlowFieldVal:
       """Computes the energy source term due to radiation.
 
       Reference:
@@ -512,14 +513,14 @@ class Scalars(object):
         mean = mean * self._params.nz
       return mean
 
-    def scalar_function(e_t: Sequence[tf.Tensor]):
+    def scalar_function(e_t: FlowFieldVal):
       """Computes the functional RHS for the total energy equation.
 
       Args:
         e_t: The total energy field.
 
       Returns:
-        A `List[tf.Tensor]` representing the RHS of the total energy equation.
+        A `FlowFieldVal` representing the RHS of the total energy equation.
       """
       # Compute the temperature.
       q_t = states['q_t']
@@ -650,8 +651,8 @@ class Scalars(object):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: _FlowFieldMap,
-      additional_states: _FlowFieldMap,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
       scalar_name: str = 'q_t',
       dbg: bool = False,
   ):
@@ -728,7 +729,7 @@ class Scalars(object):
         self._scalars[scalar_name].HasField('humidity') and
         self._scalars[scalar_name].humidity.include_precipitation)
 
-    def scalar_function(q: Sequence[tf.Tensor]):
+    def scalar_function(q: FlowFieldVal):
       """Computes the RHS of humidity update equation.
 
       This return rhs `f(q)` of the humidity update equation
@@ -740,7 +741,7 @@ class Scalars(object):
           'scalar_name').
 
       Returns:
-        A `List[tf.Tensor]` representing the RHS of the humidity equation.
+        A `FlowFieldVal` representing the RHS of the humidity equation.
       """
 
       valid_names = ['q_t', 'q_r']
@@ -886,8 +887,8 @@ class Scalars(object):
       replica_id: tf.Tensor,
       replicas: np.ndarray,
       scalar_name: Text,
-      states: _FlowFieldMap,
-      additional_states: _FlowFieldMap,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
       dbg: bool = False,
   ):
     """Provides a function that computes the RHS of a scalar transport equation.
@@ -926,7 +927,7 @@ class Scalars(object):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      additional_states: _FlowFieldMap,
+      additional_states: FlowFieldMap,
   ) -> None:
     """Updates additional information required for scalars step.
 
@@ -955,10 +956,10 @@ class Scalars(object):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: _FlowFieldMap,
-      states_0: _FlowFieldMap,
-      additional_states: _FlowFieldMap,
-  ) -> _FlowFieldMap:
+      states: FlowFieldMap,
+      states_0: FlowFieldMap,
+      additional_states: FlowFieldMap,
+  ) -> FlowFieldMap:
     """Predicts the scalars from the generic scalar transport equation.
 
     Args:
@@ -1044,10 +1045,10 @@ class Scalars(object):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: _FlowFieldMap,
-      states_0: _FlowFieldMap,
-      additional_states: _FlowFieldMap,
-  ) -> _FlowFieldMap:
+      states: FlowFieldMap,
+      states_0: FlowFieldMap,
+      additional_states: FlowFieldMap,
+  ) -> FlowFieldMap:
     """Updates the primitive scalars after the density correction.
 
     Args:

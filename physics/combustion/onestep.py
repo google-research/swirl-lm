@@ -23,22 +23,24 @@ The source term for Y_F, Y_O, and T are then computed as:
   ω_T = Q / Cₚ ω(F, O, T) / ϱ, where Q is the heat of combustion.
 """
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import functools
-from typing import List, Sequence
+from typing import List
 
 import numpy as np
 from swirl_lm.numerics import time_integration
+from swirl_lm.physics.thermodynamics import ideal_gas
+from swirl_lm.utility import composite_types
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
+from swirl_lm.utility import types
 import tensorflow as tf
-from google3.research.simulation.tensorflow.fluid.framework.tf1 import model_function  # pylint: disable=line-too-long
-from google3.research.simulation.tensorflow.fluid.framework.tf1 import step_updater
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_updates  # pylint: disable=line-too-long
 
+from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
+
+
+FlowFieldVal = types.FlowFieldVal
+FlowFieldMap = types.FlowFieldMap
+StatesUpdateFn = composite_types.StatesUpdateFn
 # The universal gas constant that is used to compute the density in the onestep
 # chemistry model, in units of J/mol/K.
 R_UNIVERSAL = 8.3145
@@ -74,10 +76,10 @@ def _concentration(
 
 
 def one_step_reaction_source(
-    y_f: Sequence[tf.Tensor],
-    y_o: Sequence[tf.Tensor],
-    temperature: Sequence[tf.Tensor],
-    rho: Sequence[tf.Tensor],
+    y_f: FlowFieldVal,
+    y_o: FlowFieldVal,
+    temperature: FlowFieldVal,
+    rho: FlowFieldVal,
     a_cst: float,
     coeff_f: float,
     coeff_o: float,
@@ -88,7 +90,7 @@ def one_step_reaction_source(
     w_o: float,
     nu_f: float = 1.0,
     nu_o: float = 1.0,
-) -> List[List[tf.Tensor]]:
+) -> List[FlowFieldVal]:
   """Computes the reaction source term using onestep chemistry.
 
   Args:
@@ -139,9 +141,11 @@ def one_step_reaction_source(
 
 
 def one_step_reaction_integration(
-    y_f: Sequence[tf.Tensor],
-    y_o: Sequence[tf.Tensor],
-    temperature: Sequence[tf.Tensor],
+    params: incompressible_structured_mesh_config
+    .IncompressibleNavierStokesParameters,
+    y_f: FlowFieldVal,
+    y_o: FlowFieldVal,
+    temperature: FlowFieldVal,
     delta_t: float,
     a_cst: float,
     coeff_f: float,
@@ -151,15 +155,14 @@ def one_step_reaction_integration(
     cp: float,
     w_f: float,
     w_o: float,
-    w_p: float,
     nu_f: float = 1.0,
     nu_o: float = 1.0,
-    p_thermal: float = 1.0e5,
     nt: int = 100,
-) -> List[List[tf.Tensor]]:
+) -> List[FlowFieldVal]:
   """Integrates `y_f`, `y_o`, and `temperature` by `delta_t`.
 
   Args:
+    params: A context object for the simulation.
     y_f: The massfraction of fuel.
     y_o: The massfraction of oxidizer.
     temperature: The temperature, in units of K.
@@ -172,21 +175,21 @@ def one_step_reaction_integration(
     cp: The specific heat.
     w_f: The molecular weight of the fuel.
     w_o: The molecular weight of the oxidizer.
-    w_p: The molecular weight of the reaction product.
     nu_f: The stoichiometric coefficient of the fuel.
     nu_o: The stoichiometric coefficient of the oxidizer.
-    p_thermal: The thermal dynamic pressure, in units of Pa.
     nt: The number of sub-iterations for the integration.
 
   Returns:
     The new states of the `y_f`, `y_o`, and `temperature` due to the onestep
     chemical reaction integrated over `delta_t`.
+
+  Raises:
+    ValueError: If the thermodynamics model in `params` is not `ideal_gas_law`.
   """
 
   def substep_integration(states):
     """Integrates all variables by one substep."""
-    rho = incompressible_structured_mesh_updates.density_update(
-        states, scalars_info)
+    rho = thermodynamics.update_density(states, {})
     rhs = functools.partial(
         one_step_reaction_source,
         rho=rho,
@@ -210,31 +213,47 @@ def one_step_reaction_integration(
             scalars,
             scalars,
         ))
-    return {'Y_F': scalars_new[0], 'Y_O': scalars_new[1], 'T': scalars_new[2]}
+    return {
+        'Y_F': scalars_new[0],
+        'Y_O': scalars_new[1],
+        'T': scalars_new[2],
+        'rho': rho
+    }
 
   dt = delta_t / nt
 
-  molecular_weights = {'Y_F': w_f, 'Y_O': w_o, 'ambient': w_p}
-  scalars_info = (
-      incompressible_structured_mesh_updates.ThermodynamicScalarsInfo(
-          p_thermal, molecular_weights))
+  if params.thermodynamics.WhichOneof('thermodynamics_type') != 'ideal_gas_law':
+    raise ValueError(
+        'The thermodynamics model has to be `ideal_gas_law` to use the one-step'
+        ' chemistry model.')
+  thermodynamics = ideal_gas.IdealGas(params)
 
-  states0 = {'Y_F': y_f, 'Y_O': y_o, 'T': temperature}
+  states0 = {
+      'Y_F': tf.nest.map_structure(tf.identity, y_f),
+      'Y_O': tf.nest.map_structure(tf.identity, y_o),
+      'T': tf.nest.map_structure(tf.identity, temperature),
+      'rho': tf.nest.map_structure(tf.ones_like, y_f)
+  }
   i0 = tf.constant(0)
   stop_condition = lambda i, _: i < nt
   body = lambda i, states: (i + 1, substep_integration(states))
 
-  _, states_new = tf.while_loop(
-      cond=stop_condition,
-      body=body,
-      loop_vars=(i0, states0),
-      back_prop=False,
-  )
+  _, states_new = tf.nest.map_structure(
+      tf.stop_gradient,
+      tf.while_loop(
+          cond=stop_condition,
+          body=body,
+          loop_vars=(i0, states0),
+      ))
 
-  return [states_new['Y_F'], states_new['Y_O'], states_new['T']]
+  return [
+      states_new['Y_F'], states_new['Y_O'], states_new['T'], states_new['rho']
+  ]
 
 
 def integrated_reaction_source_update_fn(
+    params: incompressible_structured_mesh_config
+    .IncompressibleNavierStokesParameters,
     a_cst: float,
     coeff_f: float,
     coeff_o: float,
@@ -243,15 +262,14 @@ def integrated_reaction_source_update_fn(
     cp: float,
     w_f: float,
     w_o: float,
-    w_p: float,
     nu_f: float = 1.0,
     nu_o: float = 1.0,
-    p_thermal: float = 1.0e5,
     nt: int = 100,
-) -> step_updater.StatesUpdateFn:
+) -> StatesUpdateFn:
   """Generates an update function of reaction source  integrated change.
 
   Args:
+    params: A context object for the simulation.
     a_cst: The constant A in the Arrhenius law.
     coeff_f: The power law coefficient of the fuel volume concentration.
     coeff_o: The power law coefficient of the oxidizer volume concentration.
@@ -260,10 +278,8 @@ def integrated_reaction_source_update_fn(
     cp: The specific heat.
     w_f: The molecular weight of the fuel.
     w_o: The molecular weight of the oxidizer.
-    w_p: The molecular weight of the reaction product.
     nu_f: The stoichiometric coefficient of the fuel.
     nu_o: The stoichiometric coefficient of the oxidizer.
-    p_thermal: The thermal dynamic pressure, in units of Pa.
     nt: The number of sub-iterations for the integration.
 
   Returns:
@@ -274,39 +290,40 @@ def integrated_reaction_source_update_fn(
       kernel_op: get_kernel_fn.ApplyKernelOp,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: model_function.StatesMap,
-      additional_states: model_function.StatesMap,
-      params: grid_parametrization.GridParametrization,
-  ) -> model_function.StatesMap:
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
+      grid_params: grid_parametrization.GridParametrization,
+  ) -> FlowFieldMap:
     """Computes the reaction source term for Y_F, Y_O, and T."""
     del kernel_op, replica_id, replicas
 
-    updated_states = one_step_reaction_integration(states['Y_F'], states['Y_O'],
-                                                   states['T'], params.dt,
-                                                   a_cst, coeff_f, coeff_o, e_a,
-                                                   q, cp, w_f, w_o, w_p, nu_f,
-                                                   nu_o, p_thermal, nt)
+    dt = grid_params.dt
+    updated_states = one_step_reaction_integration(params, states['Y_F'],
+                                                   states['Y_O'], states['T'],
+                                                   dt, a_cst, coeff_f,
+                                                   coeff_o, e_a, q, cp, w_f,
+                                                   w_o, nu_f, nu_o, nt)
 
     updated_additional_states = {}
     for varname, value in additional_states.items():
       if varname == 'src_Y_F':
         updated_additional_states.update({
             varname: [
-                (y_f - y_f_old) / params.dt
+                (y_f - y_f_old) / dt
                 for y_f, y_f_old in zip(updated_states[0], states['Y_F'])
             ]
         })
       elif varname == 'src_Y_O':
         updated_additional_states.update({
             varname: [
-                (y_o - y_o_old) / params.dt
+                (y_o - y_o_old) / dt
                 for y_o, y_o_old in zip(updated_states[1], states['Y_O'])
             ]
         })
       elif varname == 'src_T':
         updated_additional_states.update({
             varname: [
-                (temp - temp_old) / params.dt
+                (temp - temp_old) / dt
                 for temp, temp_old in zip(updated_states[2], states['T'])
             ]
         })
@@ -329,7 +346,7 @@ def reaction_source_update_fn(
     w_o: float,
     nu_f: float = 1.0,
     nu_o: float = 1.0,
-) -> step_updater.StatesUpdateFn:
+) -> StatesUpdateFn:
   """Generates an update function of reaction source terms and heat release.
 
   Args:
@@ -352,10 +369,10 @@ def reaction_source_update_fn(
       kernel_op: get_kernel_fn.ApplyKernelOp,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states: model_function.StatesMap,
-      additional_states: model_function.StatesMap,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
       params: grid_parametrization.GridParametrization,
-  ) -> model_function.StatesMap:
+  ) -> FlowFieldMap:
     """Computes the reaction source term for Y_F, Y_O, and T."""
     del kernel_op, replica_id, replicas, params
 

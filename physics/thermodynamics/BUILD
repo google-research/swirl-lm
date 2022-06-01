@@ -207,7 +207,6 @@ pytype_strict_library(
         ":thermodynamics_generic",
         ":thermodynamics_utils",
         ":water",
-        "//research/simulation/tensorflow/fluid/framework/tf1:model_function",
         "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
         "//third_party/py/numpy",
         "//third_party/py/swirl_lm/communication:halo_exchange",
@@ -215,6 +214,7 @@ pytype_strict_library(
         "//third_party/py/swirl_lm/physics/thermodynamics:thermodynamics_py_pb2",
         "//third_party/py/swirl_lm/utility:common_ops",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
+        "//third_party/py/swirl_lm/utility:types",
         "//third_party/py/tensorflow",
     ],
 )

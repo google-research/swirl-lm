@@ -388,10 +388,8 @@ class Scalars(object):
     dt = self._params.dt
     velocity = [states[_KEY_U], states[_KEY_V], states[_KEY_W]]
     momentum = [states[_KEY_RHO_U], states[_KEY_RHO_V], states[_KEY_RHO_W]]
-    zz = additional_states['zz'] if 'zz' in additional_states.keys() else [
-        tf.zeros_like(rho_u_i, dtype=rho_u_i.dtype)
-        for rho_u_i in states[_KEY_RHO_U]
-    ]
+    zz = additional_states.get(
+        'zz', tf.nest.map_structure(tf.zeros_like, states[_KEY_RHO_U]))
     p = self.thermodynamics.model.p_ref(zz)
     bc_p = [[(halo_exchange.BCType.NEUMANN, 0.0),] * 2] * 3
     p = self._exchange_halos(p, bc_p, replica_id, replicas)
@@ -531,7 +529,7 @@ class Scalars(object):
         e = self.thermodynamics.model.internal_energy_from_total_energy(
             e_t, states[_KEY_U], states[_KEY_V], states[_KEY_W], zz)
         temperature = self.thermodynamics.model.saturation_adjustment(
-            e, rho, q_t)
+            'e_int', e, rho, q_t)
 
       # Compute the potential temperature.
       if 'theta' in additional_states:
@@ -705,15 +703,13 @@ class Scalars(object):
 
     momentum = [states[_KEY_RHO_U], states[_KEY_RHO_V], states[_KEY_RHO_W]]
 
-    zz = additional_states['zz'] if 'zz' in additional_states.keys() else [
-        tf.zeros_like(rho_u_i, dtype=rho_u_i.dtype)
-        for rho_u_i in states[_KEY_RHO_U]
-    ]
+    zz = additional_states.get(
+        'zz', tf.nest.map_structure(tf.zeros_like, states[_KEY_RHO_U]))
 
-    source_ext = self._source[scalar_name] if (
-        scalar_name in self._source.keys() and self._source[scalar_name]) else [
-            tf.zeros_like(rho_i) for rho_i in states[_KEY_RHO]
-        ]
+    source_ext = self._source[scalar_name] if (  # pylint: disable=g-long-ternary
+        scalar_name in self._source.keys() and
+        self._source[scalar_name]) else tf.nest.map_structure(
+            tf.zeros_like, states[_KEY_RHO])
 
     # Helper variables required by the Monin-Obukhov similarity theory.
     helper_variables_most = {
@@ -788,7 +784,7 @@ class Scalars(object):
         e = self.thermodynamics.model.internal_energy_from_total_energy(
             states['e_t'], states[_KEY_U], states[_KEY_V], states[_KEY_W], zz)
         temperature = self.thermodynamics.model.saturation_adjustment(
-            e, rho, q_t)
+            'e_int', e, rho, q_t)
 
       # Compute the potential temperature.
       if 'theta' in additional_states:

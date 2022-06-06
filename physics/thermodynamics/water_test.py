@@ -325,7 +325,8 @@ class WaterTest(tf.test.TestCase, parameterized.TestCase):
         tf.constant(0.003, dtype=tf.float32)
     ]
 
-    t = self.evaluate(self.water.saturation_adjustment(e_int, rho, q_t))
+    t = self.evaluate(
+        self.water.saturation_adjustment('e_int', e_int, rho, q_t))
 
     expected = [268.59998, 284.33896]
 
@@ -358,7 +359,8 @@ class WaterTest(tf.test.TestCase, parameterized.TestCase):
         tf.constant(1.0, dtype=tf.float32),
     ]
 
-    t = self.evaluate(self.water.saturation_density(e_t, q_t, u, v, w, rho_0))
+    t = self.evaluate(
+        self.water.saturation_density('e_t', e_t, q_t, u, v, w, rho_0))
 
     expected = [1.314876, 1.2405]
 
@@ -442,12 +444,17 @@ class WaterTest(tf.test.TestCase, parameterized.TestCase):
 
       self.assertAllClose(expected, e_t)
 
-  def testUpdateTemperatures(self):
+  @parameterized.named_parameters(
+      ('FromEt', 'e_t', (5201.06235, 22396.03)),
+      ('FromThetaLi', 'theta_li', (254.95332, 292.1548)),
+      ('FromThetaV', 'theta_v', (269.21576, 292.69037)),
+  )
+  def testUpdateTemperatures(self, prognostic_var_name, prognostic_var):
     """Checks if the temperature and potential temperatures are correct."""
     states = {
-        'e_t': [
-            tf.constant(5201.06235, dtype=tf.float32),
-            tf.constant(22396.03, dtype=tf.float32)
+        prognostic_var_name: [
+            tf.constant(prognostic_var[0], dtype=tf.float32),
+            tf.constant(prognostic_var[1], dtype=tf.float32)
         ],
         'q_t': [
             tf.constant(0.01, dtype=tf.float32),
@@ -522,13 +529,13 @@ class WaterTest(tf.test.TestCase, parameterized.TestCase):
     # Compute the density.
     rho_0 = [tf.constant(1.0, dtype=tf.float32)]
     rho = self.evaluate(
-        self.water.saturation_density(e_t, q_t, u, v, w, rho_0, height))
+        self.water.saturation_density('e_t', e_t, q_t, u, v, w, rho_0, height))
 
     e = self.evaluate(
         self.water.internal_energy_from_total_energy(e_t, u, v, w, height))
 
     # Compute the temperature.
-    t = self.evaluate(self.water.saturation_adjustment(e, rho, q_t))
+    t = self.evaluate(self.water.saturation_adjustment('e_int', e, rho, q_t))
     t = [tf.constant(t[0], dtype=tf.float32)]
 
     # Compute the liquid and ice phase fractions.

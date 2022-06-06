@@ -1,5 +1,12 @@
 # coding=utf-8
-"""A library of thermodynamics to be used in fluid dynamics simulations."""
+"""A library of thermodynamics to be used in fluid dynamics simulations.
+
+This library supports the following pairs of prognostic variables:
+1. 'e_t' (total energy) and 'q_t' (total humidity)
+2. 'theta_li' (liquid-ice potential temperature) and 'q_t' (total humidity)
+3. 'theta' (potential temperature) and 'q_t' (total humidity)
+4. 'theta_v' (virtual potential temperature) and 'q_t' (total humidity)
+"""
 import enum
 
 from typing import List, Optional, Sequence, Text
@@ -122,7 +129,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     Returns:
       The isovolumetric specific heat capacity of moist air.
     """
-    return [
+    return [  # pylint: disable=g-complex-comprehension
         self._cv_d + (self._cv_v - self._cv_d) * q_tot_i +
         (self._cv_l - self._cv_v) * q_liq_i +
         (self._cv_i - self._cv_v) * q_ice_i
@@ -808,25 +815,45 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def saturation_temperature(
       self,
+      target_var_name: Text,
       t_guess: FlowFieldVal,
-      e_int: FlowFieldVal,
+      target_var: FlowFieldVal,
       rho: FlowFieldVal,
       q_tot: FlowFieldVal,
+      zz: Optional[FlowFieldVal] = None,
   ) -> FlowFieldVal:
     """Computes the temperature assuming water is at saturation."""
 
     def internal_energy_error_fn(temperature: FlowFieldVal) -> FlowFieldVal:
       """Computes the error of internal energy for the Newton iterations."""
       e_int_sat = self.saturation_internal_energy(temperature, rho, q_tot)
-      return [
-          e_int_sat_i - e_int_i
-          for e_int_sat_i, e_int_i in zip(e_int_sat, e_int)
-      ]
+      return tf.nest.map_structure(tf.math.subtract, e_int_sat, target_var)
 
-    jacobian_fn = lambda temperature: self.de_int_dt(temperature, rho, q_tot)
+    def potential_temperature_error_fn(
+        temperature: FlowFieldVal) -> FlowFieldVal:
+      """Computes the error of potential temperature for Newton iterations."""
+      theta_sat = self.potential_temperatures(temperature, q_tot, rho,
+                                              zz)[target_var_name]
+      return tf.nest.map_structure(tf.math.subtract, theta_sat, target_var)
+
+    if target_var_name == 'e_int':
+      error_fn = internal_energy_error_fn
+      jacobian_fn = lambda temperature: self.de_int_dt(temperature, rho, q_tot)
+    elif target_var_name in (PotentialTemperature.THETA.value,
+                             PotentialTemperature.THETA_V.value,
+                             PotentialTemperature.THETA_LI.value):
+      error_fn = potential_temperature_error_fn
+      jacobian_fn = None
+    else:
+      raise ValueError(
+          f'{target_var_name} is not a valid variable for saturation '
+          f'temperature computation. Available options are: "e_int", '
+          f'"{PotentialTemperature.THETA.value}", '
+          f'"{PotentialTemperature.THETA_V.value}", '
+          f'"{PotentialTemperature.THETA_LI.value}".')
 
     t_sat = root_finder.newton_method(
-        internal_energy_error_fn,
+        error_fn,
         t_guess,
         self._t_max_iter,
         position_tolerance=self._f_temperature_atol_and_rtol,
@@ -838,38 +865,59 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
   def saturation_adjustment(
       self,
-      e_int: FlowFieldVal,
+      target_var_name: Text,
+      target_var: FlowFieldVal,
       rho: FlowFieldVal,
       q_tot: FlowFieldVal,
+      zz: Optional[FlowFieldVal] = None,
   ) -> FlowFieldVal:
     """Computes the temperature that is consistent with the input state.
 
     Args:
-      e_int: The internal energy.
+      target_var_name: The name of the target variable that is used to derive
+        the temperature.
+      target_var: The value of the variable corresponding to `target_var_name`.
       rho: The density of moist air.
       q_tot: The total specific humidity.
+      zz: The vertical coordinates.
 
     Returns:
       The temperature at the given state.
     """
-    # Case 1: temperature at unsaturated condition.
     q_liq = [tf.zeros_like(q_tot_i, dtype=_TF_DTYPE) for q_tot_i in q_tot]
     q_ice = [tf.zeros_like(q_tot_i, dtype=_TF_DTYPE) for q_tot_i in q_tot]
-    t_1 = [
-        tf.maximum(self._t_min, t_air)
-        for t_air in self.air_temperature(e_int, q_tot, q_liq, q_ice)
-    ]
+
+    if target_var_name == 'e_int':
+      t_air = self.air_temperature(target_var, q_tot, q_liq, q_ice)
+      target_freeze_fn = lambda t: self.internal_energy(t, q_tot, q_liq, q_ice)
+    elif target_var_name in (PotentialTemperature.THETA.value,
+                             PotentialTemperature.THETA_V.value,
+                             PotentialTemperature.THETA_LI.value):
+      t_air = self.potential_temperature_to_temperature(target_var_name,
+                                                        target_var, q_tot,
+                                                        q_liq, q_ice, zz)
+      target_freeze_fn = lambda t: self.potential_temperatures(  # pylint: disable=g-long-lambda
+          t, q_tot, rho, zz)[target_var_name]
+    else:
+      raise ValueError(
+          f'{target_var_name} is not a valid variable for saturation '
+          f'temperature computation. Available options are: "e_int", '
+          f'"{PotentialTemperature.THETA.value}", '
+          f'"{PotentialTemperature.THETA_V.value}", '
+          f'"{PotentialTemperature.THETA_LI.value}".')
+
+    # Case 1: temperature at unsaturated condition.
+    t_1 = tf.nest.map_structure(lambda t: tf.maximum(self._t_min, t), t_air)
     q_v_sat = self.saturation_q_vapor(t_1, rho)
 
     # Case 2: temperature at freezing point.
-    t_freeze = [
-        self._t_freeze * tf.ones_like(e_int_i, dtype=_TF_DTYPE)
-        for e_int_i in e_int
-    ]
-    e_int_freeze = self.internal_energy(t_freeze, q_tot, q_liq, q_ice)
+    t_freeze = tf.nest.map_structure(lambda t: self._t_freeze * tf.ones_like(t),
+                                     target_var)
+    target_freeze = target_freeze_fn(t_freeze)
 
     # Case 3: temperature at saturation condition.
-    t_sat = self.saturation_temperature(t_1, e_int, rho, q_tot)
+    t_sat = self.saturation_temperature(target_var_name, t_1, target_var, rho,
+                                        q_tot, zz)
 
     # Get temperature under correct conditions.
     def unsaturation_cond(
@@ -881,28 +929,27 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       return tf.math.logical_and(
           tf.less_equal(q_tot_i, q_v_sat_i), tf.greater(t_1_i, self._t_min))
 
-    t = [
-        tf.where(unsaturation_cond(q_tot_i, q_v_sat_i, t_1_i), t_1_i, t_sat_i)
-        for q_tot_i, q_v_sat_i, t_1_i, t_sat_i in zip(q_tot, q_v_sat, t_1,
-                                                      tf.unstack(t_sat))
-    ]
+    t = tf.nest.map_structure(
+        lambda q_tot_i, q_v_sat_i, t_1_i, t_sat_i: tf.where(  # pylint: disable=g-long-lambda
+            unsaturation_cond(q_tot_i, q_v_sat_i, t_1_i), t_1_i, t_sat_i),
+        q_tot, q_v_sat, t_1, t_sat)
 
     def freezing_cond(
-        e_int_freeze_i: tf.Tensor,
-        e_int_i: tf.Tensor,
+        target_freeze_i: tf.Tensor,
+        target_i: tf.Tensor,
     ) -> tf.Tensor:
       """Determines if the fluid is frozen."""
-      return tf.less(tf.abs(e_int_freeze_i - e_int_i), _EPS_E_INT)
+      return tf.less(tf.abs(target_freeze_i - target_i), _EPS_E_INT)
 
-    return [
-        tf.where(freezing_cond(e_int_freeze_i, e_int_i), t_freeze_i, t_i)
-        for e_int_freeze_i, e_int_i, t_freeze_i, t_i in zip(
-            e_int_freeze, e_int, t_freeze, t)
-    ]
+    return tf.nest.map_structure(
+        lambda target_freeze_i, target_i, t_freeze_i, t_i: tf.where(  # pylint: disable=g-long-lambda
+            freezing_cond(target_freeze_i, target_i), t_freeze_i, t_i),
+        target_freeze, target_var, t_freeze, t)
 
   def saturation_density(
       self,
-      e_tot: FlowFieldVal,
+      prognostic_var_name: Text,
+      prognostic_var: FlowFieldVal,
       q_tot: FlowFieldVal,
       u: FlowFieldVal,
       v: FlowFieldVal,
@@ -913,7 +960,10 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     """Computes the density that is consistent with the input state.
 
     Args:
-      e_tot: The total energy.
+      prognostic_var_name: The name of the target variable that is used to
+        derive the temperature.
+      prognostic_var: The value of the variable corresponds to
+        `target_var_name`.
       q_tot: The total specific humidity.
       u: The velocity component in the x direction.
       v: The velocity component in the y direction.
@@ -924,14 +974,30 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     Returns:
       The density at the given state.
     """
-    e_int = self.internal_energy_from_total_energy(e_tot, u, v, w, zz)
-    p = self.p_ref(zz) if zz is not None else [
-        self._p_thermal * tf.ones_like(e_i, dtype=e_i.dtype) for e_i in e_tot
-    ]
+    if prognostic_var_name == 'e_t':
+      target_var_name = 'e_int'
+      target_var = self.internal_energy_from_total_energy(
+          prognostic_var, u, v, w, zz)
+    elif prognostic_var_name in (PotentialTemperature.THETA.value,
+                                 PotentialTemperature.THETA_V.value,
+                                 PotentialTemperature.THETA_LI.value):
+      target_var_name = prognostic_var_name
+      target_var = prognostic_var
+    else:
+      raise ValueError(
+          f'{target_var_name} is not a valid variable for saturation '
+          f'temperature computation. Available options are: "e_int", '
+          f'"{PotentialTemperature.THETA.value}", '
+          f'"{PotentialTemperature.THETA_V.value}", '
+          f'"{PotentialTemperature.THETA_LI.value}".')
 
-    def density_update_fn(rho):
+    p = self.p_ref(zz) if zz is not None else tf.nest.map_structure(
+        lambda f: self._p_thermal * tf.ones_like(f), prognostic_var)
+
+    def density_update_fn(rho: FlowFieldVal) -> FlowFieldVal:
       """Updates the density for one iteration."""
-      temperature_sat = self.saturation_adjustment(e_int, rho, q_tot)
+      temperature_sat = self.saturation_adjustment(target_var_name, target_var,
+                                                   rho, q_tot, zz)
       r_mix = self.r_m(temperature_sat, rho, q_tot)
       return [
           p_i / t_sat / r_m
@@ -939,7 +1005,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       ]
 
     if rho_0 is None:
-      rho_0 = [tf.ones_like(e_i, dtype=e_i.dtype) for e_i in e_int]
+      rho_0 = tf.nest.map_structure(tf.ones_like, target_var)
 
     i0 = tf.constant(0)
     cond = lambda i, rho: tf.less(i, self._rho_n_iter)
@@ -1070,9 +1136,30 @@ class Water(thermodynamics_generic.ThermodynamicModel):
   def update_density(self, states: FlowFieldMap,
                      additional_states: FlowFieldMap) -> FlowFieldVal:
     """Updates the density of the flow field with water thermodynamics."""
-    zz = additional_states['zz'] if 'zz' in additional_states.keys() else None
-    return self.saturation_density(states['e_t'], states['q_t'], states['u'],
-                                   states['v'], states['w'], states['rho'], zz)
+    zz = additional_states.get('zz', None)
+
+    # Get the prognostic variable.
+    if 'e_t' in states:
+      prognostic_var_name = 'e_t'
+    elif PotentialTemperature.THETA.value in states:
+      prognostic_var_name = PotentialTemperature.THETA.value
+    elif PotentialTemperature.THETA_V.value in states:
+      prognostic_var_name = PotentialTemperature.THETA_V.value
+    elif PotentialTemperature.THETA_LI.value in states:
+      prognostic_var_name = PotentialTemperature.THETA_LI.value
+    else:
+      raise ValueError(
+          f'No prognostic variable for energy is found. Supported options are'
+          f'"e_t" (the total energy), "{PotentialTemperature.THETA.value}" '
+          f'(the potential temperature of the air mixture), '
+          f'"{PotentialTemperature.THETA_V.value}" (the virtual potential '
+          f'temperature), or "{PotentialTemperature.THETA_LI.value}" (the '
+          f'liquid-ice potential temperature).')
+
+    return self.saturation_density(prognostic_var_name,
+                                   states[prognostic_var_name], states['q_t'],
+                                   states['u'], states['v'], states['w'],
+                                   states['rho'], zz)
 
   def update_temperatures(
       self,
@@ -1082,8 +1169,8 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     """Computes the temperature and potential temperatures.
 
     Args:
-      states: Flow field variables, must contain 'rho', 'u', 'v', 'w', 'e_t',
-        and 'q_t'.
+      states: Flow field variables, must contain 'rho', 'u', 'v', 'w', 'q_t',
+        and one of 'e_t', 'theta', 'theta_li', 'theta_v'.
       additional_states: Helper variables that are required to compute potential
         temperatures. If field 'zz' is not in `additional_states`, assumes the
         flow field is independent of height, i.e. `zz` = 0.
@@ -1092,15 +1179,36 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       A dictionary of flow fields that contains, the temperature 'T', the liquid
       potential temperature 'T_l', and the virtual potential temperature 'T_v'.
     """
-    zz = additional_states['zz'] if 'zz' in additional_states.keys() else [
-        tf.zeros_like(e_i, dtype=e_i.dtype) for e_i in states['e_t']
-    ]
-    e = self.internal_energy_from_total_energy(states['e_t'], states['u'],
-                                               states['v'], states['w'],
-                                               zz)
+    zz = additional_states.get(
+        'zz', tf.nest.map_structure(tf.zeros_like, states['rho']))
+
+    # Get the prognostic variable.
+    if 'e_t' in states:
+      target_var_name = 'e_int'
+      target_var = self.internal_energy_from_total_energy(
+          states['e_t'], states['u'], states['v'], states['w'], zz)
+    elif PotentialTemperature.THETA.value in states:
+      target_var_name = PotentialTemperature.THETA.value
+      target_var = states[PotentialTemperature.THETA.value]
+    elif PotentialTemperature.THETA_V.value in states:
+      target_var_name = PotentialTemperature.THETA_V.value
+      target_var = states[PotentialTemperature.THETA_V.value]
+    elif PotentialTemperature.THETA_LI.value in states:
+      target_var_name = PotentialTemperature.THETA_LI.value
+      target_var = states[PotentialTemperature.THETA_LI.value]
+    else:
+      raise ValueError(
+          f'No prognostic variable for energy is found. Supported options are'
+          f'"e_t" (the total energy), "{PotentialTemperature.THETA.value}" '
+          f'(the potential temperature of the air mixture), '
+          f'"{PotentialTemperature.THETA_V.value}" (the virtual potential '
+          f'temperature), or "{PotentialTemperature.THETA_LI.value}" (the '
+          f'liquid-ice potential temperature).')
 
     temperatures = {
-        'T': self.saturation_adjustment(e, states['rho'], states['q_t'])
+        'T':
+            self.saturation_adjustment(target_var_name, target_var,
+                                       states['rho'], states['q_t'], zz)
     }
     temperatures.update(
         self.potential_temperatures(temperatures['T'], states['q_t'],

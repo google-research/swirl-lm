@@ -34,8 +34,8 @@ load(
 info = make_project_info(
     module_name = "swirl_lm",
     github_repo = "google-research/swirl_lm",
-    contact_email = "swirl_lm-automated+copybara@google.com",
-    owner_mdb = "swirl_lm",
+    contact_email = "sim-research-core+copybara@google.com",
+    owner_mdb = "sim-research",
 )
 
 # Files to include

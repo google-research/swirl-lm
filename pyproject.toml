@@ -1,10 +1,17 @@
 [project]
 name = "swirl_lm"
-description = ""
+description =
+  "Swirl-LM is a computational fluid dynamics simulation framework for low "
+  "Mach number turbulent flows with variable density implemented with "
+  "TensorFlow."
 readme = "README.md"
 requires-python = ">=3.7"
 license = {file = "LICENSE"}
-authors = [{name = "swirl_lm authors", email="swirl_lm@google.com"}]
+authors = [
+  {name = "wqing", email="wqing@google.com"},
+  {name = "anudhyan", email="anudhyan@google.com"},
+  {name = "yifanchen", email="yifanchen@google.com"},
+  ]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",

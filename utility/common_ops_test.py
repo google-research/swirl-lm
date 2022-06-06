@@ -7,10 +7,11 @@ import itertools
 import numpy as np
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import grid_parametrization
+from swirl_lm.utility import tf_test_util as test_util
+from swirl_lm.utility.tf_tpu_test_util import run_on_tpu_in_test
 import tensorflow as tf
 from google3.research.simulation.tensorflow.fluid.framework import initializer
 from google3.research.simulation.tensorflow.fluid.framework import util
-from google3.research.simulation.tensorflow.fluid.framework.tpu_runner import TpuRunner
 from google3.testing.pybase import parameterized
 
 _NormType = common_ops.NormType
@@ -18,14 +19,17 @@ _NormType = common_ops.NormType
 
 class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
 
+  @test_util.run_in_graph_and_eager_modes
   def testGetTileName(self):
     self.assertEqual(common_ops.get_tile_name('u', 5), 'u_tile_5')
 
+  @test_util.run_in_graph_and_eager_modes
   def testGenField(self):
     out = self.evaluate(common_ops.gen_field('u', 2, 2, 3))
     self.assertLen(out, 1)
     self.assertAllEqual(out['u'], np.zeros((3, 2, 2)))
 
+  @test_util.run_in_graph_and_eager_modes
   def testGetFieldRange(self):
     state = {'u': tf.zeros([3, 3, 2], dtype=tf.float32)}
     out = self.evaluate(
@@ -33,10 +37,12 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
     self.assertLen(out, 2)
     self.assertAllEqual(out[0], np.zeros((3, 3, 2)))
 
+  @test_util.run_in_graph_and_eager_modes
   def testGetField(self):
     state = {'u_tile_0': 0}
     self.assertEqual([0], common_ops.get_field(state, 'u', 1))
 
+  @test_util.run_in_graph_and_eager_modes
   def testPrepStepByChunkFn(self):
     input_state = {'u': tf.zeros([3, 3, 2], dtype=tf.float32)}
     inputs = tf.ones([2, 3, 3, 2], dtype=tf.float32)
@@ -57,6 +63,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
       ('ConstantUpdateIn1', 1, 2, 8.0),
       ('ConstantUpdateIn2', 2, 1, 36.0),
   )
+  @test_util.run_in_graph_and_eager_modes
   def testTensorScatter1DUpdatesProvidesCorrectPlaneUpdates(
       self, dim, index, updates):
     """Checks if a plane in a 3D tensor is updated correctly."""
@@ -99,6 +106,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
   _CORE_INDEX = (0, 1)
 
   @parameterized.parameters(*itertools.product(_REPLICAS, _DIM, _CORE_INDEX))
+  @test_util.run_in_graph_and_eager_modes
   def testTensorScatter1DUpdatesGlobalProvidesCorrectPlaneUpdates(
       self, replicas, dim, core_index):
     """Checks if the wall normal velocity is 0 at lower wall."""
@@ -122,8 +130,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
     device_inputs = [list(x) for x in zip(*inputs)]
 
     computation_shape = np.array(replicas.shape)
-    runner = TpuRunner(computation_shape=computation_shape)
-    output = runner.run(device_fn, *device_inputs)
+    output = run_on_tpu_in_test(self, replicas, device_fn, *device_inputs)
     output_0 = np.array(output[0])
     output_1 = np.array(output[1])
 
@@ -143,6 +150,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
 
     self.assertAllEqual(expected, output_all)
 
+  @test_util.run_in_graph_and_eager_modes
   def testApplyMulopX(self):
     tile_0 = tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9]], tf.float32)
     tile_1 = tf.constant([[10, 20, 30], [40, 50, 60], [70, 80, 90]], tf.float32)
@@ -165,6 +173,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         out[3],
         np.array([[-10, -10, -10], [-10, -10, -10], [30, 60, 90]], np.float32))
 
+  @test_util.run_in_graph_and_eager_modes
   def testExceptionApplyMulopXWithNonSquareMulop(self):
     tile_0 = tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9]], tf.float32)
     tile_1 = tf.constant([[10, 20, 30], [40, 50, 60], [70, 80, 90]], tf.float32)
@@ -177,6 +186,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         str(err.exception), 'apply_op_x requires a square mulop. '
         'mulop shape is (2, 3).')
 
+  @test_util.run_in_graph_and_eager_modes
   def testExceptionApplyMulopXWithWrongMulopShape(self):
     tile_0 = tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9]], tf.float32)
     tile_1 = tf.constant([[10, 20, 30], [40, 50, 60], [70, 80, 90]], tf.float32)
@@ -189,6 +199,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         'size to be divisible by mulop size 2. Tensor shape is '
         '(3, 3).')
 
+  @test_util.run_in_graph_and_eager_modes
   def testApplyMulopY(self):
     tile_0 = tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9]], tf.float32)
     tile_1 = tf.constant([[10, 20, 30], [40, 50, 60], [70, 80, 90]], tf.float32)
@@ -212,6 +223,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         out[3], np.array([[10, 30, 30], [20, 30, 30], [30, 30, 30]],
                          np.float32))
 
+  @test_util.run_in_graph_and_eager_modes
   def testExceptionApplyMulopYWithNonSquareMulop(self):
     tile_0 = tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9]], tf.float32)
     tile_1 = tf.constant([[10, 20, 30], [40, 50, 60], [70, 80, 90]], tf.float32)
@@ -224,6 +236,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         str(err.exception), 'apply_op_y requires a square mulop. '
         'mulop shape is (2, 3).')
 
+  @test_util.run_in_graph_and_eager_modes
   def testExceptionApplyMulopYWithWrongMulopShape(self):
     tile_0 = tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9]], tf.float32)
     tile_1 = tf.constant([[10, 20, 30], [40, 50, 60], [70, 80, 90]], tf.float32)
@@ -236,6 +249,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         'size to be divisible by mulop size 2. Tensor shape is '
         '(3, 3).')
 
+  @test_util.run_in_graph_and_eager_modes
   def testApplyMulopZ(self):
     tile_0 = tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9]], tf.float32)
     tile_1 = tf.constant([[10, 20, 30], [40, 50, 60], [70, 80, 90]], tf.float32)
@@ -257,6 +271,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         out[3], np.array([[10, 40, 70], [20, 50, 80], [30, 60, 90]],
                          np.float32))
 
+  @test_util.run_in_graph_and_eager_modes
   def testExceptionApplyMulopZWrongTileListLength(self):
     tile_0 = tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9]], tf.float32)
     with self.assertRaises(RuntimeError) as err:
@@ -266,6 +281,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         'length (1) be greater than or equal to z_op_list '
         'length (2).')
 
+  @test_util.run_in_graph_and_eager_modes
   def testExceptionApplyMulopZWrongZOpListLength(self):
     tile_0 = tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9]], tf.float32)
     tile_1 = tf.constant([[10, 20, 30], [40, 50, 60], [70, 80, 90]], tf.float32)
@@ -276,6 +292,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         str(err.exception), 'apply_op_z requires z_op_list length '
         '(2) be equal to shift length (3).')
 
+  @test_util.run_in_graph_and_eager_modes
   def testApplyMulopZ2(self):
     tile_0 = tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9]], tf.float32)
     tile_1 = tf.constant([[10, 20, 30], [40, 50, 60], [70, 80, 90]], tf.float32)
@@ -295,6 +312,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         out[3],
         np.array([[-1, 18, 37], [-24, -5, 14], [-47, -28, -9]], np.float32))
 
+  @test_util.run_in_graph_and_eager_modes
   def testApplyConvolutionalOpX(self):
     tile_0 = tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9]], tf.float32)
     tile_1 = tf.constant([[10, 20, 30], [40, 50, 60], [70, 80, 90]], tf.float32)
@@ -323,6 +341,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         out[3], np.array([[10, 40, 70], [10, 10, 10], [10, 10, 10]],
                          np.float32))
 
+  @test_util.run_in_graph_and_eager_modes
   def testApplyConvolutionalOpY(self):
     tile_0 = tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9]], tf.float32)
     tile_1 = tf.constant([[10, 20, 30], [40, 50, 60], [70, 80, 90]], tf.float32)
@@ -351,6 +370,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         out[3], np.array([[10, 30, 30], [20, 30, 30], [30, 30, 30]],
                          np.float32))
 
+  @test_util.run_in_graph_and_eager_modes
   def testApplySliceOpX(self):
     tile_0 = tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9]], tf.float32)
     tile_1 = tf.constant([[10, 20, 30], [40, 50, 60], [70, 80, 90]], tf.float32)
@@ -375,6 +395,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         out[3], np.array([[10, 40, 70], [10, 10, 10], [10, 10, 10]],
                          np.float32))
 
+  @test_util.run_in_graph_and_eager_modes
   def testApplySliceOpY(self):
     tile_0 = tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9]], tf.float32)
     tile_1 = tf.constant([[10, 20, 30], [40, 50, 60], [70, 80, 90]], tf.float32)
@@ -399,6 +420,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         out[3], np.array([[10, 30, 30], [20, 30, 30], [30, 30, 30]],
                          np.float32))
 
+  @test_util.run_in_graph_and_eager_modes
   def testSplitStateInZ(self):
     tile_0 = tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9]], tf.float32)
     tile_1 = tf.constant([[10, 20, 30], [40, 50, 60], [70, 80, 90]], tf.float32)
@@ -420,6 +442,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         out['b_tile_1'],
         np.array([[10, 40, 70], [20, 50, 80], [30, 60, 90]], np.float32))
 
+  @test_util.run_in_graph_and_eager_modes
   def testMergeStateInZ(self):
     tile_0 = tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9]], tf.float32)
     tile_1 = tf.constant([[10, 20, 30], [40, 50, 60], [70, 80, 90]], tf.float32)
@@ -480,6 +503,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
            common_ops.linear_combination, scale_lhs=-0.3,
            scale_rhs=-0.5), -1, 2, tf.float64, np.float64, -0.7),
   )
+  @test_util.run_in_graph_and_eager_modes
   def testOperators(self, fn, v1, v2, tf_dtype, expected_np_dtype,
                     expected_result):
     """Tests operators: +, -, *, / for 3D tensors, as a list of 2D tensors."""
@@ -493,8 +517,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
     vec1 = [tf.ones(shape=(nx, ny), dtype=tf_dtype) * v1 for _ in range(nz)]
     vec2 = [tf.ones(shape=(nx, ny), dtype=tf_dtype) * v2 for _ in range(nz)]
 
-    runner = TpuRunner(replicas)
-    res = runner.run(fn, [vec1, vec1], [vec2, vec2])
+    res = run_on_tpu_in_test(self, replicas, fn, [vec1, vec1], [vec2, vec2])
 
     self.assertLen(res, num_replicas)
     for i in range(num_replicas):
@@ -508,6 +531,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
   @parameterized.named_parameters(('LhsFloatRhsList', 1.0, 2.0, True, False),
                                   ('LhsListRhsFloat', 1.0, 2.0, False, True),
                                   ('BothFloat', 1.0, 2.0, True, True))
+  @test_util.run_in_graph_and_eager_modes
   def testLinearCombinationProvidesCorrectResultsWithMixedInputTypes(
       self, v1, v2, v1_float, v2_float):
     """Checks if the linear combination function is correct with mixed input."""
@@ -535,6 +559,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
       ('Case00', tf.float32, np.float32),
       ('Case01', tf.float64, np.float64),
   )
+  @test_util.run_in_graph_and_eager_modes
   def testGlobalDotInConjugateGradientSolverProduceCorrectVectorProduct(
       self, tf_dtype, np_dtype):
     replicas = np.array([[[0]], [[1]]])
@@ -551,18 +576,18 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
     vec1 = [tf.ones(shape=(nx, ny), dtype=tf_dtype) for _ in range(nz)]
     vec2 = [tf.ones(shape=(nx, ny), dtype=tf_dtype) for _ in range(nz)]
 
-    runner = TpuRunner(replicas=replicas)
-    dot = runner.run(tf_dot, [vec1, vec1], [vec2, vec2])
+    dot = run_on_tpu_in_test(self, replicas, tf_dot, [vec1, vec1], [vec2, vec2])
 
     self.assertLen(dot, num_replicas)
     for i in range(num_replicas):
-      dot_i = dot[i]
-
+      # The trick is to handle the differences in behavior between tf1 and tf2.
+      dot_i = dot[i][0] if isinstance(dot[i], list) else dot[i]
       self.assertIsInstance(dot_i, np_dtype)
       self.assertEqual(
           np.prod([nx, ny, nz * num_replicas]), dot_i,
           'Dot product in the {}th replica is incorrect!'.format(i))
 
+  @test_util.run_in_graph_and_eager_modes
   def testLocalVdotOneDimension(self):
     a = 1.2 + 3.2j
     b = 4.8 - 0.6j
@@ -587,6 +612,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         atol=1e-05,
         msg='Imaginary part failed.')
 
+  @test_util.run_in_graph_and_eager_modes
   def testLocalVdotTwoDimension(self):
     dim0 = 3
     dim1 = 4
@@ -611,6 +637,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         atol=1e-05,
         msg='Imaginary part failed.')
 
+  @test_util.run_in_graph_and_eager_modes
   def testLocalVdotThreeDimension(self):
     dim0 = 5
     dim1 = 4
@@ -690,6 +717,7 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
                                                    (tf.float32, np.float32),
                                                    (tf.float64, np.float64),
                                                )))
+  @test_util.run_in_graph_and_eager_modes
   def testComputeNorm(self, norm_type_and_values, as_list, dtypes):
     replicas = np.array([[[0]], [[1]]])
     num_replicas = np.prod(replicas.shape)
@@ -707,8 +735,8 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
     else:
       vec = tf.ones(shape=(nx, ny, nz), dtype=dtypes[0])
 
-    runner = TpuRunner(replicas)
-    typed_norms = runner.run(tf_compute_norm, [vec, vec])
+    typed_norms = run_on_tpu_in_test(
+        self, replicas, tf_compute_norm, [vec, vec])
 
     self.assertLen(typed_norms, num_replicas)
     expected_typed_norms = norm_type_and_values[1]
@@ -722,14 +750,15 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         self.assertIsInstance(typed_norm_i, dtypes[1])
         self.assertAllClose(expected_typed_norms[norm_type_str], typed_norm_i)
 
+  @test_util.run_in_graph_and_eager_modes
   def testCrossReplicaGather(self):
     num_replicas = 8
     tensors = [tf.constant(i) for i in range(num_replicas)]
     fn = lambda x: common_ops.cross_replica_gather(x, num_replicas)
 
-    replicas = list(range(num_replicas))
-    runner = TpuRunner(replicas)
-    all_gathered = runner.run(fn, tensors)
+    replicas = np.reshape(np.arange(num_replicas),
+                          (num_replicas, 1, 1))
+    all_gathered = run_on_tpu_in_test(self, replicas, fn, tensors)
     for replica in range(num_replicas):
       gathered = all_gathered[replica]
       # The original TF1 code permuted the components to 0, 1, 2, 3, 6, 7, 4, 5
@@ -745,6 +774,7 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
       ('_HaloWidth2', 2),
       ('_HaloWidth3', 3),
   )
+  @test_util.run_in_graph_and_eager_modes
   def testGetSlice(
       self,
       halo_width,
@@ -799,6 +829,7 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
   ]
 
   @parameterized.parameters(*zip(_REPLICAS))
+  @test_util.run_in_graph_and_eager_modes
   def testGroupReplicasAlongAxisReturnsVariableGroupAssignments(self, replicas):
     # Checks that group_replicas returns the correct group assignments for
     # arbitrary computation shapes and axis arguments.
@@ -857,6 +888,7 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
       (tf.float32, np.float32),
       (tf.float64, np.float64),
   )))
+  @test_util.run_in_graph_and_eager_modes
   def testGlobalMeanProduceCorrectResult(self, replicas, dtypes):
     computation_shape = np.array(replicas.shape)
     num_replicas = np.prod(computation_shape)
@@ -892,13 +924,17 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
           [halo_width, halo_width, halo_width])
 
     coordinates = util.grid_coordinates(computation_shape)
-    runner = TpuRunner(computation_shape=computation_shape)
-    mean = runner.run_with_replica_args(
-        step_fn, [init_fn(coordinates[i]) for i in range(num_replicas)])
+    def test_fn(states, replica_id):
+      return step_fn(states, replicas, replica_id)
+    mean = run_on_tpu_in_test(
+        self, replicas, test_fn,
+        [init_fn(coordinates[i]) for i in range(num_replicas)],
+        np.arange(num_replicas))
 
     self.assertLen(mean, num_replicas)
     for i in range(num_replicas):
-      mean_value = mean[i]
+      # The trick is to handle the differences in behavior between tf1 and tf2.
+      mean_value = mean[i][0] if isinstance(mean[i], list) else mean[i]
       self.assertIsInstance(mean_value, dtypes[1])
       self.assertEqual(1., mean_value,
                        'Mean in the {}th replica is incorrect!'.format(i))
@@ -913,6 +949,7 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
       (np.array([[[0, 1], [2, 3]]]), [1, 2]),
       (np.array([[[0, 1], [2, 3]], [[4, 5], [6, 7]]]), [0, 1, 2]),
   )
+  @test_util.run_in_graph_and_eager_modes
   def testGlobalMeanInAxis(
       self,
       replicas,
@@ -973,9 +1010,12 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
     reduced_physical_grid = tf.unstack(reduced_physical_grid, axis=2)
 
     coordinates = util.grid_coordinates(computation_shape)
-    runner = TpuRunner(computation_shape=computation_shape)
-    mean = runner.run_with_replica_args(
-        step_fn, [init_fn(coordinates[i]) for i in range(num_replicas)])
+    def test_fn(states, replica_id):
+      return step_fn(states, replicas, replica_id)
+    mean = run_on_tpu_in_test(
+        self, replicas, test_fn,
+        [init_fn(coordinates[i]) for i in range(num_replicas)],
+        np.arange(num_replicas))
 
     self.assertLen(mean, num_replicas)
     for i in range(num_replicas):
@@ -984,6 +1024,7 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
                             f'Mean in the {i}th replica is incorrect!')
 
   @parameterized.parameters(*zip(_REPLICAS))
+  @test_util.run_in_graph_and_eager_modes
   def testGlobalReduce(
       self,
       replicas,
@@ -999,9 +1040,8 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         operator=tf.math.reduce_max,
         group_assignment=group_assignment)
 
-    runner = TpuRunner(computation_shape=computation_shape)
-    output = runner.run(
-        device_fn,
+    output = run_on_tpu_in_test(
+        self, replicas, device_fn,
         [i * tf.ones((8, 8), dtype=tf.float32) for i in range(num_replicas)])
 
     for i in range(num_replicas):
@@ -1013,6 +1053,7 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
       self.assertEqual(output[i], expected_max)
 
   @parameterized.parameters(*zip(_REPLICAS))
+  @test_util.run_in_graph_and_eager_modes
   def testGetCoreCoordinate(
       self,
       replicas,
@@ -1024,8 +1065,7 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
     def computation(replica_id):
       return common_ops.get_core_coordinate(replicas, replica_id)
 
-    runner = TpuRunner(replicas)
-    results = runner.run(computation, inputs)
+    results = run_on_tpu_in_test(self, replicas, computation, inputs)
 
     for i in range(num_replicas):
       self.assertAllEqual(results[i], np.squeeze(np.where(replicas == i)))
@@ -1309,6 +1349,7 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(*zip(_SPECTRAL_GRID_REPLICAS, _CORE_NXYZ, _HALOS,
                                  _EXPECTED_GRID))
+  @test_util.run_in_graph_and_eager_modes
   def testGetSpectralIndexGrid(
       self,
       replicas,
@@ -1317,16 +1358,18 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
       expected_grid,
   ):
     num_replicas = np.prod(replicas.shape)
-    grid = functools.partial(
-        common_ops.get_spectral_index_grid,
-        core_nxyz[0],
-        core_nxyz[1],
-        core_nxyz[2],
-        halos=halos,
-        pad_value=99)
+    def grid(replica_id):
+      return  common_ops.get_spectral_index_grid(
+          core_nxyz[0],
+          core_nxyz[1],
+          core_nxyz[2],
+          replicas=replicas,
+          replica_id=replica_id,
+          halos=halos,
+          pad_value=99)
 
-    runner = TpuRunner(replicas)
-    result = runner.run_with_replica_args(grid)
+    result = run_on_tpu_in_test(self, replicas, grid,
+                                np.arange(num_replicas))
 
     for i in range(num_replicas):
       for k in {'xx', 'yy', 'zz', 'xx_c', 'yy_c', 'zz_c'}:
@@ -1335,6 +1378,7 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
   _DIMS = (0, 1, 2)
 
   @parameterized.parameters(*itertools.product(_REPLICAS, _DIMS))
+  @test_util.run_in_graph_and_eager_modes
   def testIntegrationInDim(
       self,
       replicas,
@@ -1352,10 +1396,14 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
             dtype=tf.float32,
         ))
     num_replicas = np.product(computation_shape)
-    runner = TpuRunner(replicas)
-    output = runner.run_with_replica_args(
-        functools.partial(common_ops.integration_in_dim, h=0.2, dim=dim),
-        f=[ones] * num_replicas)
+    def test_fn(replica_id, f):
+      return common_ops.integration_in_dim(
+          replica_id=replica_id, replicas=replicas, f=f, h=0.2, dim=dim)
+    output = run_on_tpu_in_test(
+        self, replicas, test_fn,
+        np.arange(num_replicas),
+        [ones] * num_replicas
+    )
 
     buf_z_0 = []
     buf_z_1 = []
@@ -1399,6 +1447,7 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
       expected = np.tile(expand_dims(0.2 * np.arange(31, -1, -1)), tile_shape)
       self.assertAllClose(expected, integral_to_end)
 
+  @test_util.run_in_graph_and_eager_modes
   def testGetTensorShapeProducesCorrectShapeOfEmptyTensor(self):
     """Checks if the shape of an empty tensor is correct."""
     state = []
@@ -1408,6 +1457,7 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
     expected = (0, 0, 0)
     self.assertAllEqual(expected, shape)
 
+  @test_util.run_in_graph_and_eager_modes
   def testGetTensorShapeProducesCorrectShapeOfAListOf2DTensors(self):
     """Checks if the shape of a sequence of `tf.Tensor` is correct."""
     state = [
@@ -1420,6 +1470,7 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
     expected = (2, 3, 4)
     self.assertAllEqual(expected, shape)
 
+  @test_util.run_in_graph_and_eager_modes
   def testGetTensorShapeRaisesValueErrorForNon3DTensor(self):
     """Checks if incorrect tensor shape raises `ValueError`."""
     with self.subTest(name='2DTensor'):
@@ -1442,6 +1493,7 @@ class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
                                   'The tensor in the list has to be 2D'):
         _ = common_ops.get_tensor_shape(state)
 
+  @test_util.run_in_graph_and_eager_modes
   def testPadCorrectlyPadsInputField(self):
     f = [tf.constant([[1, 2, 3], [4, 5, 6], [7, 8, 9]], tf.float32),
          tf.constant([[10, 11, 12], [13, 14, 15], [16, 17, 18]], tf.float32)]
@@ -1484,16 +1536,19 @@ class CrossReplicaGatherTest(tf.test.TestCase, parameterized.TestCase):
         .create_from_grid_lengths_and_etc(
             grid_lengths, computation_shape, (nx, ny, nz), halo_width=1))
     num_replicas = np.prod(computation_shape)
+    replicas = np.reshape(np.arange(num_replicas), computation_shape)
     coordinates = util.grid_coordinates(computation_shape)
-
-    runner = TpuRunner(computation_shape=computation_shape)
-    return runner.run_with_replica_args(self.step_fn, [
-        initializer.subgrid_of_3d_grid_from_params(x, params, coordinates[i])
-        for i in range(num_replicas)
-    ])
+    def test_fn(states, replica_id):
+      return self.step_fn(states, replicas, replica_id)
+    return run_on_tpu_in_test(
+        self, replicas, test_fn,
+        [initializer.subgrid_of_3d_grid_from_params(x, params, coordinates[i])
+         for i in range(num_replicas)],
+        np.arange(num_replicas))
 
   @parameterized.parameters(*itertools.product(
       range(1, 3), range(1, 3), range(1, 3)))
+  @test_util.run_in_graph_and_eager_modes
   def testCrossReplicaGather(self, cx, cy, cz):
     if cx * cy * cz == 1:
       return
@@ -1504,7 +1559,7 @@ class CrossReplicaGatherTest(tf.test.TestCase, parameterized.TestCase):
 
     # Check that every replica has the full grid.
     for i in range(np.prod(computation_shape)):
-      np.testing.assert_allclose(x, x_gathered[i])
+      self.assertAllEqual(x, np.squeeze(x_gathered[i]))
 
 
 if __name__ == '__main__':

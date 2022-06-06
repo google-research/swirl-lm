@@ -531,9 +531,9 @@ class Velocity(object):
         e = thermal_model.internal_energy_from_total_energy(
             states['e_t'], states[_KEY_U], states[_KEY_V], states[_KEY_W], zz)
         temperature = thermal_model.saturation_adjustment(
-            e, states[_KEY_RHO], q_t)
-        theta = thermal_model.potential_temperatures(
-            temperature, q_t, states[_KEY_RHO], zz)
+            'e_int', e, states[_KEY_RHO], q_t)
+        theta = thermal_model.potential_temperatures(temperature, q_t,
+                                                     states[_KEY_RHO], zz)
         helper_variables.update({'theta': theta['theta_v']})
       else:
         raise ValueError(

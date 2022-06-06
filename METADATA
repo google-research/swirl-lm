@@ -3,7 +3,10 @@
 # proto-message: MetaData
 
 name: "swirl_lm"
-description: ""  # TODO(swirl_lm): Complete
+description:
+  "Swirl-LM is a computational fluid dynamics simulation framework for low "
+  "Mach number turbulent flows with variable density implemented with "
+  "TensorFlow."
 
 third_party {
   url {
@@ -17,35 +20,38 @@ third_party {
 }
 
 presubmit: {
-  review_notify: "swirl_lm-automated+reviews"
+  include_presubmit: "//depot/google3/research/simulation/METADATA"
+  path_expression: "//depot/google3/third_party/py/swirl_lm/..."
 
   # TODO(swirl_lm): To activate presubmit, you should replace by your
   # tap/swirl_lm (defined in your `.blueprint` file)
-  check_tests: {
-    failure_status: ERROR
-    project: "swirl_lm"
-  }
-
-  # Checks that files in the changelist do not contain tab characters.
-  check_tabs: {
-    failure_status: ERROR
-  }
-
-  check_trailing_whitespace: {
-    failure_status: ERROR
-  }
-
-  # Presubmit applied during submit
-
-  check_lint: {
-    action: SUBMIT  # Do not activate by default to not block TAP.
-    failure_status: ERROR
-  }
-
-  # Ensures that the string "do not submit" (in all caps) is not present.
-  check_do_not_submit: {
-    action: SUBMIT
-  }
+  #   review_notify: "swirl_lm-automated+reviews"
+  #
+  #   check_tests: {
+  #     failure_status: ERROR
+  #     project: "swirl_lm"
+  #   }
+  #
+  #   # Checks that files in the changelist do not contain tab characters.
+  #   check_tabs: {
+  #     failure_status: ERROR
+  #   }
+  #
+  #   check_trailing_whitespace: {
+  #     failure_status: ERROR
+  #   }
+  #
+  #   # Presubmit applied during submit
+  #
+  #   check_lint: {
+  #     action: SUBMIT  # Do not activate by default to not block TAP.
+  #     failure_status: ERROR
+  #   }
+  #
+  #   # Ensures that the string "do not submit" (in all caps) is not present.
+  #   check_do_not_submit: {
+  #     action: SUBMIT
+  #   }
 }
 
 # TODO(swirl_lm): Uncomment after copy.bara.sky has been set-up

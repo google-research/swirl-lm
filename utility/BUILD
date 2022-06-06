@@ -214,7 +214,7 @@ pytype_strict_library(
     ],
 )
 
-py_strict_test(
+tf1_and_tf2_test(
     name = "common_ops_test",
     srcs = ["common_ops_test.py"],
     python_version = "PY3",
@@ -224,9 +224,10 @@ py_strict_test(
     deps = [
         ":common_ops",
         ":grid_parametrization",
+        ":tf_test_util",
+        ":tf_tpu_test_util",
         "//learning/brain/google/xla:deepsea_hardware_device",
         "//research/simulation/tensorflow/fluid/framework:initializer",
-        "//research/simulation/tensorflow/fluid/framework:tpu_runner",
         "//research/simulation/tensorflow/fluid/framework:util",
         "//testing/pybase:parameterized",
         "//third_party/py/numpy",

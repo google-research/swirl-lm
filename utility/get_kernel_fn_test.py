@@ -42,7 +42,6 @@ FLAGS = flags.FLAGS
 _TESTDATA_DIR = 'google3/third_party/py/swirl_lm/utility/testdata'
 
 
-@test_util.run_all_in_graph_and_eager_modes
 class ApplyKernelOpTest(tf.test.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(*itertools.product((
@@ -60,6 +59,7 @@ class ApplyKernelOpTest(tf.test.TestCase, parameterized.TestCase):
       'k3d1{}+',
       'k4d2{}',
   ), (2, 3, 4, 10)))
+  @test_util.run_in_graph_and_eager_modes
   def testmulop_kernel_dict_symmetry(self, template_name, kernel_size):
     """Tests `_mulop_kernel_dict`'s symmetry, y should be x transpose."""
     kernel_dict = (
@@ -71,7 +71,6 @@ class ApplyKernelOpTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(kernel_dict[name_x], np.transpose(kernel_dict[name_y]))
 
 
-@test_util.run_all_in_graph_and_eager_modes
 class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
 
   # TODO(yusef): Reconsider systematic ways for selecting test data.
@@ -108,6 +107,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
                             tf.float32)
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpDx(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     kdx = self.evaluate(
@@ -131,6 +131,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected, kdx[0])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpdx(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     kdx = self.evaluate(
@@ -150,6 +151,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected, kdx[0])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpDxPlus(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     kdx = self.evaluate(
@@ -170,6 +172,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected, kdx[0])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpDy(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     kdy = self.evaluate(
@@ -187,6 +190,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expetced, kdy[0])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpdy(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     kdy = self.evaluate(
@@ -204,6 +208,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected, kdy[0])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpDyPlus(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     kdy = self.evaluate(
@@ -221,6 +226,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected, kdy[0])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpddx(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     kddx = self.evaluate(
@@ -244,6 +250,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected, kddx[0])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpddy(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     kddy = self.evaluate(
@@ -261,6 +268,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected, kddy[0])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpSx(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     ksx = self.evaluate(
@@ -283,6 +291,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected, ksx[0])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpSy(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     ksy = self.evaluate(
@@ -303,6 +312,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected, ksy[0])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpsx(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     ksx = self.evaluate(
@@ -328,6 +338,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected, ksx[0])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpsy(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     ksy = self.evaluate(
@@ -353,6 +364,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected, ksy[0])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpf2x(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     kf2x = self.evaluate(
@@ -380,6 +392,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected, kf2x[0])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpf2y(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     kf2y = self.evaluate(
@@ -405,6 +418,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected, kf2y[0])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpf2xPlus(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     kf2x_plus = self.evaluate(
@@ -433,6 +447,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected, kf2x_plus[0])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpf2yPlus(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     kf2y_plus = self.evaluate(
@@ -458,6 +473,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected, kf2y_plus[0])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpd4x(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     k3d1x_plus = self.evaluate(
@@ -483,6 +499,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected, k3d1x_plus[0])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpd4y(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     k3d1y_plus = self.evaluate(
@@ -511,6 +528,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
       [get_kernel_fn.ApplyKernelConvOp(2),
        get_kernel_fn.ApplyKernelMulOp(2, 2),
        get_kernel_fn.ApplyKernelSliceOp()])
+  @test_util.run_in_graph_and_eager_modes
   def testKernelZ(self, kernel_op):
     tile_0 = tf.constant([[1, 2, 3],
                           [4, 5, 6],
@@ -639,6 +657,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(tile_3, kd4z_plus[3])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testExternallyDefinedKernelMatchesPrescribedKernels(
       self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
@@ -688,6 +707,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
         self.assertAllEqual(kd[i], kd_ext[i])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testExternallyDefinedBackwardKernelMatchesPrescribedKernels(
       self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
@@ -720,6 +740,7 @@ class GetKernelFnTest(tf.test.TestCase, parameterized.TestCase):
         self.assertAllEqual(kd[i], kd_ext[i])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testExternallyAddedBackwardKernelMatchesPrescribedKernels(
       self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
@@ -776,6 +797,7 @@ class GetBigKernelFnTest(tf.test.TestCase, parameterized.TestCase):
         else _TESTDATA_DIR)
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpD4x(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     big_tile = tf.constant(self.big_tile_np)
@@ -792,6 +814,7 @@ class GetBigKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected, kd4x[0])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpD4y(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     big_tile = tf.constant(self.big_tile_np)
@@ -808,6 +831,7 @@ class GetBigKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected, kd4y[0])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpdd8x(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     big_tile = tf.constant(self.big_tile_np)
@@ -826,6 +850,7 @@ class GetBigKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllClose(expected, kdd8x[0], atol=2e-6)
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpdd8y(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     big_tile = tf.constant(self.big_tile_np)
@@ -844,6 +869,7 @@ class GetBigKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllClose(expected, kdd8y[0], atol=2e-6)
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpdd16x(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     big_tile = tf.constant(self.big_tile_np)
@@ -862,6 +888,7 @@ class GetBigKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllClose(expected, kdd16x[0], atol=2e-5)
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOpdd16y(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     big_tile = tf.constant(self.big_tile_np)
@@ -880,6 +907,7 @@ class GetBigKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllClose(expected, kdd16y[0], atol=2e-5)
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOp4d2x(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     big_tile = tf.constant(self.big_tile_np)
@@ -896,6 +924,7 @@ class GetBigKernelFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertAllEqual(expected, k4d2x[0])
 
   @parameterized.parameters(*zip(KERNEL_SIZES, KERNEL_OP))
+  @test_util.run_in_graph_and_eager_modes
   def testKernelConvOp4d2y(self, kernel_size, kernel_op):
     FLAGS.kernel_size = kernel_size
     big_tile = tf.constant(self.big_tile_np)
@@ -915,6 +944,7 @@ class GetBigKernelFnTest(tf.test.TestCase, parameterized.TestCase):
       [get_kernel_fn.ApplyKernelConvOp(8),
        get_kernel_fn.ApplyKernelMulOp(16, 16),
        get_kernel_fn.ApplyKernelSliceOp()])
+  @test_util.run_in_graph_and_eager_modes
   def testKernelZ(self, kernel_op):
     tile_0 = tf.constant([[1, 2, 3],
                           [4, 5, 6],

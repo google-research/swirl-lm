@@ -383,7 +383,7 @@ class RootFinderTest(tf.test.TestCase, parameterized.TestCase):
         tf.constant(3.2e4, dtype=tf.float32),
     ]
 
-    t_sat = model.saturation_temperature(t_1, e_int, rho, q_t)
+    t_sat = model.saturation_temperature('e_int', t_1, e_int, rho, q_t)
     e_int_sat = model.saturation_internal_energy(t_sat, rho, q_t)
 
     res_t = self.evaluate(t_sat)
@@ -510,7 +510,7 @@ class RootFinderTest(tf.test.TestCase, parameterized.TestCase):
         tf.constant(3.2e4, dtype=tf.float32),
     ]
 
-    t_sat = model.saturation_temperature(t_1, e_int, rho, q_t)
+    t_sat = model.saturation_temperature('e_int', t_1, e_int, rho, q_t)
     e_int_sat = model.saturation_internal_energy(t_sat, rho, q_t)
 
     res_t = self.evaluate(t_sat)

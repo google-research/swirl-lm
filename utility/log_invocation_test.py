@@ -70,12 +70,7 @@ class LogInvocationTest(parameterized.TestCase):
     self.assertEqual(lines[1], '')
     self.assertEqual(lines[2], 'Flags:')
 
-    # Flag lines.
-    flag_regex = r'--.+=.*'
-    for line in lines[3:]:
-      m = re.match(flag_regex, line)
-      if not m:
-        self.fail(f'Line {line} does not match regex {flag_regex}.')
+    # Flag lines: Not tested as one flag could have multiple lines.
 
   @parameterized.named_parameters(
       ('WithoutTimestamp', False, ''),

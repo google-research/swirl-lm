@@ -215,7 +215,8 @@ class Water(object):
     rho = [tf.constant(rho, dtype=_TF_DTYPE)]
     q_t = [tf.constant(q_t, dtype=_TF_DTYPE)]
 
-    res = self.return_fn(self.water.saturation_adjustment(e_int, rho, q_t))  # pytype: disable=wrong-arg-types
+    res = self.return_fn(self.water.saturation_adjustment(
+        'e_int', e_int, rho, q_t))  # pytype: disable=wrong-arg-types
 
     return res[0]
 
@@ -255,7 +256,14 @@ class Water(object):
 
     res = self.return_fn(
         self.water.saturation_density(
-            e_tot=e_tot, q_tot=q_tot, u=u, v=v, w=w, rho_0=rho_0, zz=zz))  # pytype: disable=wrong-arg-types
+            prognostic_var_name='e_t',
+            prognostic_var=e_tot,
+            q_tot=q_tot,
+            u=u,
+            v=v,
+            w=w,
+            rho_0=rho_0,
+            zz=zz))  # pytype: disable=wrong-arg-types
 
     return res[0]
 

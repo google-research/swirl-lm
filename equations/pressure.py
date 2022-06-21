@@ -114,6 +114,8 @@ from typing import Any, Dict, Mapping, Text, Tuple
 from absl import logging
 import attr
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import physical_variable_keys_manager
 from swirl_lm.boundary_condition import boundary_condition_utils
 from swirl_lm.communication import halo_exchange
 from swirl_lm.equations import pressure_pb2
@@ -129,8 +131,6 @@ import tensorflow as tf
 
 from google3.net.proto2.python.public import text_format
 from google3.research.simulation.tensorflow.fluid.framework import util
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import physical_variable_keys_manager
 
 FlowFieldVal = types.FlowFieldVal
 FlowFieldMap = types.FlowFieldMap
@@ -396,8 +396,7 @@ class Pressure(object):
   def __init__(
       self,
       kernel_op: get_kernel_fn.ApplyKernelOp,
-      params: incompressible_structured_mesh_config
-      .IncompressibleNavierStokesParameters,
+      params: parameters_lib.SwirlLMParameters,
       thermodynamics: thermodynamics_manager.ThermodynamicsManager,
       monitor_lib: monitor.Monitor,
   ):
@@ -829,15 +828,17 @@ class Pressure(object):
               for conv_x_i, conv_y_i, conv_z_i in conv_terms
           ]
 
-          bc_value = util.get_slice(conv, i, j, self._params.halo_width - 1,
-                                    grid_spacing[i])
+          bc_value = common_ops.get_face(conv, i, j,
+                                         self._params.halo_width - 1,
+                                         grid_spacing[i])
 
         elif self._params.bc_type[i][j] in (
             boundary_condition_utils.BoundaryType.SLIP_WALL,
             boundary_condition_utils.BoundaryType.NON_SLIP_WALL,
             boundary_condition_utils.BoundaryType.SHEAR_WALL):
-          bc_value = util.get_slice(diff[i], i, j, self._params.halo_width - 1,
-                                    grid_spacing[i])
+          bc_value = common_ops.get_face(diff[i], i, j,
+                                         self._params.halo_width - 1,
+                                         grid_spacing[i])
         else:
           raise ValueError('{} is not defined for pressure boundary.'.format(
               self._params.bc_type[i][j]))

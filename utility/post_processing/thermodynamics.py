@@ -7,7 +7,7 @@ This library can be imported from colab with adhoc_import. For example:
 from colabtools import adhoc_import
 
 with adhoc_import.Google3(
-    build_targets=['//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_parameters_py_pb2']):
+    build_targets=['//third_party/py/swirl_lm/base:parameters_py_pb2']):
     #pylint: disable=line-too-long
   from
   google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh.utilities.post_processing
@@ -17,14 +17,14 @@ with adhoc_import.Google3(
 from typing import Optional, Sequence, Text
 
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import parameters_pb2
 from swirl_lm.physics.thermodynamics import water
 from swirl_lm.utility import types
 import tensorflow as tf
 
 from google3.net.proto2.python.public import text_format
 from google3.pyglib import gfile
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
 
 _TF_DTYPE = types.TF_DTYPE
 
@@ -35,14 +35,9 @@ class Water(object):
   def __init__(self, config_filepath: Text, tf1: bool = False):
     """Initializes the thermodynamics library used in the NS solver."""
     with gfile.GFile(config_filepath) as f:
-      config = text_format.Parse(
-          f.read(),
-          incompressible_structured_mesh_parameters_pb2
-          .IncompressibleNavierStokesParameters())
+      config = text_format.Parse(f.read(), parameters_pb2.SwirlLMParameters())
 
-    params = (
-        incompressible_structured_mesh_config
-        .IncompressibleNavierStokesParameters(config))
+    params = parameters_lib.SwirlLMParameters(config)
 
     self.water = water.Water(params)
 
@@ -69,7 +64,7 @@ class Water(object):
     Args:
       varname: The name of the potential temperature to be returned. Should be
         one of the following: 'theta_l' (the liquid potential temperature),
-          'theta_v' (the virtual potential temperature).
+        'theta_v' (the virtual potential temperature).
       t: The temperature, in units of K.
       q_t: The total humidity, in units of kg/kg.
       rho: The density of the water-air mixture, in units of kg/m^3.

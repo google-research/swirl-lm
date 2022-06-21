@@ -2,7 +2,7 @@
 import collections
 import enum
 import functools
-from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Text, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Text, Tuple, Union
 
 import numpy as np
 from swirl_lm.utility import types
@@ -1363,3 +1363,62 @@ def pad(
   upper_pad = [value * tf.ones_like(padded[0])
               ] * paddings[2][1] if paddings[2][1] > 0 else []
   return lower_pad + list(padded) + upper_pad
+
+
+def get_face(value: Sequence[tf.Tensor],
+             dim: int,
+             face: int,
+             index: int,
+             scaling_factor: float = 1.) -> List[tf.Tensor]:
+  """Gets the face in `value` that is `index` number of points from boundary.
+
+  This function extracts the requested plane from a 3D tensor represented as a
+  `Sequence[tf.Tensor]`. The returned value depends on `dim`:
+    if `dim` is 0 (x plane): returns a list with length nz, each tensor in the
+      list has size 1 x ny;
+    if `dim` is 1 (y plane): returns a list with length nz, each tensor in the
+      list has size nx x 1;
+    if `dim` is 2 (z plane): returns a list with length 1, each tensor in the
+      list has size nx x ny.
+
+  Args:
+    value: A list of `tf.Tensor` representing a 3D field.
+    dim: The dimension of the plane to slice, should be on of 0, 1, and 2.
+    face: The face of the plane to slice, with 0 representing the lower face,
+      and 1 representing the higher face.
+    index: The number of points that is away from the boundary determined by
+      `dim` and `face`.
+    scaling_factor: A factor that is used to scale the target slice.
+
+  Returns:
+    If face is 0, then the (index + 1)'th plane is returned; if face is 1, then
+    the length - index'th plane is returned. The returned slice will be
+    multiplied by `scaling_factor`.
+  """
+  nz = len(value)
+  nx, ny = value[0].get_shape().as_list()
+  if dim == 0:  # X
+    if face == 0:  # low
+      bc_value = [[scaling_factor * val[index:index + 1, :] for val in value]]
+    elif face == 1:  # high
+      bc_value = [[
+          scaling_factor * val[nx - index - 1:nx - index, :] for val in value
+      ]]
+  elif dim == 1:  # Y
+    if face == 0:  # low
+      bc_value = [[scaling_factor * val[:, index:index + 1] for val in value]]
+    elif face == 1:  # high
+      bc_value = [[
+          scaling_factor * val[:, ny - index - 1:ny - index] for val in value
+      ]]
+  elif dim == 2:  # Z
+    if face == 0:  # low
+      bc_value = [
+          scaling_factor * value[index],
+      ]
+    elif face == 1:  # high
+      bc_value = [
+          scaling_factor * value[nz - index - 1],
+      ]
+
+  return bc_value  # pytype: disable=bad-return-type

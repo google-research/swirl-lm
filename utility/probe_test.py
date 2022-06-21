@@ -2,14 +2,14 @@
 
 from absl import flags
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import parameters_pb2
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import probe
 import tensorflow as tf
 
 from google3.net.proto2.python.public import text_format
 from google3.research.simulation.tensorflow.fluid.framework.tpu_runner import TpuRunner
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
 
 FLAGS = flags.FLAGS
 
@@ -46,13 +46,8 @@ class ProbeTest(tf.test.TestCase):
               '  nt: 10 '
               '  start_step_id: 6 '
               '}')
-    config = text_format.Parse(
-        textpb,
-        incompressible_structured_mesh_parameters_pb2
-        .IncompressibleNavierStokesParameters())
-    self.params = (
-        incompressible_structured_mesh_config
-        .IncompressibleNavierStokesParameters(config))
+    config = text_format.Parse(textpb, parameters_pb2.SwirlLMParameters())
+    self.params = parameters_lib.SwirlLMParameters(config)
     self.model = probe.Probe(self.params)
 
   def testTheProbeLibraryInitializedCorrectly(self):

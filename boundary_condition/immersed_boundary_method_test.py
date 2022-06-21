@@ -2,6 +2,8 @@
 
 from absl import flags
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import parameters_pb2
 from swirl_lm.boundary_condition import immersed_boundary_method
 from swirl_lm.communication import halo_exchange
 from swirl_lm.utility import get_kernel_fn
@@ -10,8 +12,6 @@ import tensorflow as tf
 
 from google3.net.proto2.python.public import text_format
 from google3.research.simulation.tensorflow.fluid.framework.tpu_runner import TpuRunner
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
 from google3.testing.pybase import parameterized
 
 FLAGS = flags.FLAGS
@@ -89,13 +89,8 @@ class ImmersedBoundaryMethodTest(tf.test.TestCase, parameterized.TestCase):
 
   def _set_up_immersed_boundary_method(self, pbtxt):
     """Generates the `ImmersedBoundaryMethod` object."""
-    config = text_format.Parse(
-        pbtxt,
-        incompressible_structured_mesh_parameters_pb2
-        .IncompressibleNavierStokesParameters())
-    params = (
-        incompressible_structured_mesh_config
-        .IncompressibleNavierStokesParameters(config))
+    config = text_format.Parse(pbtxt, parameters_pb2.SwirlLMParameters())
+    params = parameters_lib.SwirlLMParameters(config)
     FLAGS.dt = 0.01
     params.halo_width = 1
     return immersed_boundary_method.immersed_boundary_method_factory(params)

@@ -1,5 +1,5 @@
-# proto-file: research/simulation/tensorflow/fluid/models/incompressible_structured_mesh/incompressible_structured_mesh_parameters.proto
-# proto-message: IncompressibleNavierStokesParameters
+# proto-file: third_party/py/swirl_lm/base/parameters.proto
+# proto-message: SwirlLMParameters
 
 p_thermal: 1.013e5
 thermodynamics {

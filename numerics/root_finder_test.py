@@ -4,6 +4,8 @@ import itertools
 import os
 
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import parameters_pb2
 from swirl_lm.numerics import root_finder
 from swirl_lm.physics.thermodynamics import water
 from swirl_lm.utility import tf_test_util as test_util
@@ -12,8 +14,6 @@ import tensorflow as tf
 from google3.net.proto2.python.public import text_format
 from google3.pyglib import gfile
 from google3.pyglib import resources
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
 from google3.testing.pybase import parameterized
 
 _MAX_ITERATIONS = 10
@@ -355,14 +355,9 @@ class RootFinderTest(tf.test.TestCase, parameterized.TestCase):
     with gfile.Open(
         resources.GetResourceFilename(
             os.path.join(_TESTDATA_DIR, 'config.textpb'))) as f:
-      config = text_format.Parse(
-          f.read(),
-          incompressible_structured_mesh_parameters_pb2
-          .IncompressibleNavierStokesParameters())
+      config = text_format.Parse(f.read(), parameters_pb2.SwirlLMParameters())
 
-    params = (
-        incompressible_structured_mesh_config
-        .IncompressibleNavierStokesParameters(config))
+    params = parameters_lib.SwirlLMParameters(config)
 
     model = water.Water(params)
 
@@ -482,14 +477,9 @@ class RootFinderTest(tf.test.TestCase, parameterized.TestCase):
     with gfile.Open(
         resources.GetResourceFilename(
             os.path.join(_TESTDATA_DIR, 'config.textpb'))) as f:
-      config = text_format.Parse(
-          f.read(),
-          incompressible_structured_mesh_parameters_pb2
-          .IncompressibleNavierStokesParameters())
+      config = text_format.Parse(f.read(), parameters_pb2.SwirlLMParameters())
 
-    params = (
-        incompressible_structured_mesh_config
-        .IncompressibleNavierStokesParameters(config))
+    params = parameters_lib.SwirlLMParameters(config)
 
     model = water.Water(params)
 

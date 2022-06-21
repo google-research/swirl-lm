@@ -48,7 +48,7 @@ def get_kernel_op(name):
 
 class PoissonSolverTest(tf.test.TestCase, parameterized.TestCase):
 
-  _L2_NORM_01 = 2.8e-06
+  _L2_NORM_01 = 3.0e-06
   _L2_NORM_02 = 6.0e-06
 
   # TODO(b/190265551): There are some issues with partitions and iterations,

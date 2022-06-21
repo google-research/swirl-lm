@@ -3,12 +3,12 @@
 from typing import List, Optional, Text, Tuple
 
 import numpy as np
+from swirl_lm.base import physical_variable_keys_manager
 from swirl_lm.communication import halo_exchange
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import types
 import tensorflow as tf
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import physical_variable_keys_manager
 
 FloatSequence = types.FloatSequence
 IntSequence = types.IntSequence

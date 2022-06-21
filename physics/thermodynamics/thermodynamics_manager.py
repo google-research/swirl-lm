@@ -3,6 +3,7 @@
 from typing import Optional, Tuple
 
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.communication import halo_exchange
 from swirl_lm.numerics import filters
 from swirl_lm.physics.thermodynamics import constant_density
@@ -15,9 +16,8 @@ from swirl_lm.physics.thermodynamics import water
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 import tensorflow as tf
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 
-DensityUpdateOption = incompressible_structured_mesh_config.DensityUpdateOption
+DensityUpdateOption = parameters_lib.DensityUpdateOption
 FlowFieldVal = thermodynamics_utils.FlowFieldVal
 FlowFieldMap = thermodynamics_utils.FlowFieldMap
 
@@ -27,8 +27,7 @@ class ThermodynamicsManager(object):
 
   def __init__(
       self,
-      params: incompressible_structured_mesh_config
-      .IncompressibleNavierStokesParameters,
+      params: parameters_lib.SwirlLMParameters,
       model_params: thermodynamics_pb2.Thermodynamics,
       model: thermodynamics_generic.ThermodynamicModel,
   ):
@@ -152,8 +151,7 @@ class ThermodynamicsManager(object):
     return self.model.update_density(states, additional_states)
 
 
-def thermodynamics_factory(params: incompressible_structured_mesh_config
-                           .IncompressibleNavierStokesParameters):
+def thermodynamics_factory(params: parameters_lib.SwirlLMParameters):
   """Creates an object of the `ThermodynamicsManager`.
 
   The thermodynamic library will be created based on parameters specified in the

@@ -9,6 +9,8 @@ import functools
 from typing import Optional, Text
 
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import physical_variable_keys_manager
 from swirl_lm.boundary_condition import immersed_boundary_method
 from swirl_lm.communication import halo_exchange
 from swirl_lm.equations import common
@@ -28,8 +30,6 @@ from swirl_lm.utility import components_debug
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import types
 import tensorflow as tf
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import physical_variable_keys_manager
 
 FlowFieldVal = types.FlowFieldVal
 FlowFieldMap = types.FlowFieldMap
@@ -75,8 +75,7 @@ class Scalars(object):
   def __init__(
       self,
       kernel_op: get_kernel_fn.ApplyKernelOp,
-      params: incompressible_structured_mesh_config
-      .IncompressibleNavierStokesParameters,
+      params: parameters_lib.SwirlLMParameters,
       ib: Optional[immersed_boundary_method.ImmersedBoundaryMethod] = None,
       dbg: Optional[components_debug.ComponentsDebug] = None,
   ):

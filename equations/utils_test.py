@@ -3,6 +3,8 @@
 import functools
 
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import parameters_pb2
 from swirl_lm.communication import halo_exchange
 from swirl_lm.equations import utils
 from swirl_lm.utility import common_ops
@@ -10,8 +12,6 @@ from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import tf_test_util as test_util
 import tensorflow as tf
 from google3.net.proto2.python.public import text_format
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
 from google3.testing.pybase import parameterized
 
 
@@ -71,13 +71,9 @@ class UtilsTest(tf.test.TestCase, parameterized.TestCase):
 
   def _set_up_params(self, pbtxt=''):
     """Creates a simulation configuration handler."""
-    proto = text_format.Parse(
-        pbtxt,
-        incompressible_structured_mesh_parameters_pb2
-        .IncompressibleNavierStokesParameters())
+    proto = text_format.Parse(pbtxt, parameters_pb2.SwirlLMParameters())
 
-    return (incompressible_structured_mesh_config
-            .IncompressibleNavierStokesParameters(proto))
+    return parameters_lib.SwirlLMParameters(proto)
 
   def testShearStressOutputsCorrectStressTensors(self):
     """Shear stress near point [1, 1, 1] are non-trivial and correct."""

@@ -29,9 +29,9 @@ tf1_and_tf2_test(
     deps = [
         ":constant_density",
         "//net/proto2/python/public",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_parameters_py_pb2",
         "//third_party/py/numpy",
+        "//third_party/py/swirl_lm/base:parameters",
+        "//third_party/py/swirl_lm/base:parameters_py_pb2",
         "//third_party/py/swirl_lm/utility:tf_test_util",
         "//third_party/py/tensorflow",
     ],
@@ -45,9 +45,9 @@ tf1_and_tf2_test(
     deps = [
         ":ideal_gas",
         "//net/proto2/python/public",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_parameters_py_pb2",
         "//third_party/py/numpy",
+        "//third_party/py/swirl_lm/base:parameters",
+        "//third_party/py/swirl_lm/base:parameters_py_pb2",
         "//third_party/py/swirl_lm/utility:tf_test_util",
         "//third_party/py/tensorflow",
     ],
@@ -61,9 +61,9 @@ tf1_and_tf2_test(
     deps = [
         ":linear_mixing",
         "//net/proto2/python/public",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_parameters_py_pb2",
         "//third_party/py/numpy",
+        "//third_party/py/swirl_lm/base:parameters",
+        "//third_party/py/swirl_lm/base:parameters_py_pb2",
         "//third_party/py/swirl_lm/utility:tf_test_util",
         "//third_party/py/tensorflow",
     ],
@@ -77,9 +77,9 @@ tf1_and_tf2_test(
     deps = [
         ":thermodynamics_generic",
         "//net/proto2/python/public",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_parameters_py_pb2",
         "//third_party/py/numpy",
+        "//third_party/py/swirl_lm/base:parameters",
+        "//third_party/py/swirl_lm/base:parameters_py_pb2",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
         "//third_party/py/swirl_lm/utility:tf_test_util",
         "//third_party/py/tensorflow",
@@ -108,10 +108,10 @@ tf1_and_tf2_test(
         "//net/proto2/python/public",
         "//pyglib:gfile",
         "//pyglib:resources",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_parameters_py_pb2",
         "//testing/pybase:parameterized",
         "//third_party/py/numpy",
+        "//third_party/py/swirl_lm/base:parameters",
+        "//third_party/py/swirl_lm/base:parameters_py_pb2",
         "//third_party/py/swirl_lm/physics/thermodynamics:thermodynamics_py_pb2",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
         "//third_party/py/swirl_lm/utility:tf_test_util",
@@ -141,9 +141,9 @@ tf1_and_tf2_test(
     deps = [
         ":water",
         "//net/proto2/python/public",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_parameters_py_pb2",
         "//testing/pybase:parameterized",
+        "//third_party/py/swirl_lm/base:parameters",
+        "//third_party/py/swirl_lm/base:parameters_py_pb2",
         "//third_party/py/swirl_lm/utility:tf_test_util",
         "//third_party/py/tensorflow",
     ],
@@ -155,7 +155,7 @@ pytype_strict_library(
     srcs_version = "PY3",
     deps = [
         ":thermodynamics_generic",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
+        "//third_party/py/swirl_lm/base:parameters",
         "//third_party/py/tensorflow",
     ],
 )
@@ -167,7 +167,7 @@ pytype_strict_library(
     deps = [
         ":thermodynamics_generic",
         ":thermodynamics_utils",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
+        "//third_party/py/swirl_lm/base:parameters",
         "//third_party/py/tensorflow",
     ],
 )
@@ -179,7 +179,7 @@ pytype_strict_library(
     deps = [
         ":thermodynamics_generic",
         ":thermodynamics_utils",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
+        "//third_party/py/swirl_lm/base:parameters",
         "//third_party/py/tensorflow",
     ],
 )
@@ -190,8 +190,8 @@ pytype_strict_library(
     srcs_version = "PY3",
     deps = [
         ":thermodynamics_utils",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
         "//third_party/py/six",
+        "//third_party/py/swirl_lm/base:parameters",
         "//third_party/py/tensorflow",
     ],
 )
@@ -207,8 +207,8 @@ pytype_strict_library(
         ":thermodynamics_generic",
         ":thermodynamics_utils",
         ":water",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
         "//third_party/py/numpy",
+        "//third_party/py/swirl_lm/base:parameters",
         "//third_party/py/swirl_lm/communication:halo_exchange",
         "//third_party/py/swirl_lm/numerics:filters",
         "//third_party/py/swirl_lm/physics/thermodynamics:thermodynamics_py_pb2",
@@ -236,7 +236,7 @@ pytype_strict_library(
     srcs_version = "PY3",
     deps = [
         ":thermodynamics_generic",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
+        "//third_party/py/swirl_lm/base:parameters",
         "//third_party/py/swirl_lm/numerics:root_finder",
         "//third_party/py/swirl_lm/physics:constants",
         "//third_party/py/tensorflow",

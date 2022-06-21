@@ -1,13 +1,13 @@
 """Tests for google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh.physics.thermodynamics.linear_mixing."""
 
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import parameters_pb2
 from swirl_lm.physics.thermodynamics import linear_mixing
 from swirl_lm.utility import tf_test_util as test_util
 import tensorflow as tf
 
 from google3.net.proto2.python.public import text_format
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
 
 
 @test_util.run_all_in_graph_and_eager_modes
@@ -24,14 +24,9 @@ class LinearMixingTest(tf.test.TestCase):
         R'scalars {  '
         R'  name: "Y2" diffusivity: 0.002 density: 2.0  '
         R'}  ')
-    config = text_format.Parse(
-        pbtxt,
-        incompressible_structured_mesh_parameters_pb2
-        .IncompressibleNavierStokesParameters())
+    config = text_format.Parse(pbtxt, parameters_pb2.SwirlLMParameters())
 
-    params = (
-        incompressible_structured_mesh_config
-        .IncompressibleNavierStokesParameters(config))
+    params = parameters_lib.SwirlLMParameters(config)
 
     self.model = linear_mixing.LinearMixing(params)
 

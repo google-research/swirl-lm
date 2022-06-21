@@ -1,13 +1,13 @@
 """Tests for google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh.utilities.components_debug."""
 
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import parameters_pb2
 from swirl_lm.utility import components_debug
 from swirl_lm.utility import tf_test_util as test_util
 import tensorflow as tf
 
 from google3.net.proto2.python.public import text_format
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
 
 
 @test_util.run_all_in_graph_and_eager_modes
@@ -27,13 +27,8 @@ class ComponentsDebugTest(tf.test.TestCase):
              R'additional_state_keys: "dbg_T_D_t"  '
              R'additional_state_keys: "dbg_rhow_diff_z"  '
              R'use_sgs: true  ')
-    config = text_format.Parse(
-        pbtxt,
-        incompressible_structured_mesh_parameters_pb2
-        .IncompressibleNavierStokesParameters())
-    params = (
-        incompressible_structured_mesh_config
-        .IncompressibleNavierStokesParameters(config))
+    config = text_format.Parse(pbtxt, parameters_pb2.SwirlLMParameters())
+    params = parameters_lib.SwirlLMParameters(config)
     params.nx = 6
     params.ny = 6
     params.nz = 6

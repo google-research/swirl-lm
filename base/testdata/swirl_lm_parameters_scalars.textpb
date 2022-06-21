@@ -1,0 +1,244 @@
+# proto-file: third_party/py/swirl_lm/base/parameters.proto
+# proto-message: SwirlLMParameters
+
+solver_procedure: SEQUENTIAL
+convection_scheme: CONVECTION_SCHEME_UPWIND_1
+time_integration_scheme: TIME_SCHEME_RK3
+periodic {
+  dim_0: false
+  dim_1: false
+  dim_2: false
+}
+scalars {
+  name: "Y0"
+  diffusivity: 1e-7
+  density: 0.1
+}
+scalars {
+  name: "Y1"
+  diffusivity: 1e-6
+  density: 1.0
+  time_integration_scheme: TIME_SCHEME_CN_EXPLICIT_ITERATION
+}
+scalars {
+  name: "Y2"
+  diffusivity: 8e-7
+  density: 0.5
+  time_integration_scheme: TIME_SCHEME_UNKNOWN
+}
+boundary_conditions {
+  name: "u"
+  boundary_info {
+    dim: 0
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 1.0
+  }
+  boundary_info {
+    dim: 0
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: -1.0
+  }
+  boundary_info {
+    dim: 1
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 1.0
+  }
+  boundary_info {
+    dim: 1
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: -1.0
+  }
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_NEUMANN
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_NEUMANN
+  }
+}
+boundary_conditions {
+  name: "v"
+  boundary_info {
+    dim: 0
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 2.0
+  }
+  boundary_info {
+    dim: 0
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: -2.0
+  }
+  boundary_info {
+    dim: 1
+    location: 0
+    type: BC_TYPE_NEUMANN
+  }
+  boundary_info {
+    dim: 1
+    location: 1
+    type: BC_TYPE_NEUMANN
+  }
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 2.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: -2.0
+  }
+}
+boundary_conditions {
+  name: "w"
+  boundary_info {
+    dim: 0
+    location: 0
+    type: BC_TYPE_NEUMANN
+  }
+  boundary_info {
+    dim: 0
+    location: 1
+    type: BC_TYPE_NEUMANN
+  }
+  boundary_info {
+    dim: 1
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 3.0
+  }
+  boundary_info {
+    dim: 1
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: -3.0
+  }
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 3.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: -3.0
+  }
+}
+boundary_conditions {
+  name: "p"
+  boundary_info {
+    dim: 0
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 10.0
+  }
+  boundary_info {
+    dim: 0
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: 10.0
+  }
+  boundary_info {
+    dim: 1
+    location: 0
+    type: BC_TYPE_NEUMANN
+  }
+  boundary_info {
+    dim: 1
+    location: 1
+    type: BC_TYPE_NEUMANN
+  }
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_NEUMANN
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_NEUMANN
+  }
+}
+boundary_conditions {
+  name: "Y1"
+  boundary_info {
+    dim: 0
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 1.0
+  }
+  boundary_info {
+    dim: 0
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: 1.0
+  }
+  boundary_info {
+    dim: 1
+    location: 0
+    type: BC_TYPE_NEUMANN
+  }
+  boundary_info {
+    dim: 1
+    location: 1
+    type: BC_TYPE_NEUMANN
+  }
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_NEUMANN
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_NEUMANN
+  }
+}
+boundary_conditions {
+  name: "Y2"
+  boundary_info {
+    dim: 0
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 0.5
+  }
+  boundary_info {
+    dim: 0
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: 0.5
+  }
+  boundary_info {
+    dim: 1
+    location: 0
+    type: BC_TYPE_NEUMANN
+  }
+  boundary_info {
+    dim: 1
+    location: 1
+    type: BC_TYPE_NEUMANN
+  }
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_NEUMANN
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_NEUMANN
+  }
+}

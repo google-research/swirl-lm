@@ -27,6 +27,7 @@ import functools
 from typing import List
 
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.numerics import time_integration
 from swirl_lm.physics.thermodynamics import ideal_gas
 from swirl_lm.utility import composite_types
@@ -34,8 +35,6 @@ from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import types
 import tensorflow as tf
-
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 
 
 FlowFieldVal = types.FlowFieldVal
@@ -141,8 +140,7 @@ def one_step_reaction_source(
 
 
 def one_step_reaction_integration(
-    params: incompressible_structured_mesh_config
-    .IncompressibleNavierStokesParameters,
+    params: parameters_lib.SwirlLMParameters,
     y_f: FlowFieldVal,
     y_o: FlowFieldVal,
     temperature: FlowFieldVal,
@@ -252,8 +250,7 @@ def one_step_reaction_integration(
 
 
 def integrated_reaction_source_update_fn(
-    params: incompressible_structured_mesh_config
-    .IncompressibleNavierStokesParameters,
+    params: parameters_lib.SwirlLMParameters,
     a_cst: float,
     coeff_f: float,
     coeff_o: float,

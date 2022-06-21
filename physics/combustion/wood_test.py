@@ -3,6 +3,8 @@ import os
 
 from absl import flags
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import parameters_pb2
 from swirl_lm.physics.combustion import wood
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
@@ -12,8 +14,6 @@ import tensorflow as tf
 from google3.net.proto2.python.public import text_format
 from google3.pyglib import gfile
 from google3.pyglib import resources
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
 from google3.testing.pybase import parameterized
 
 _TESTDATA_DIR = 'google3/third_party/py/swirl_lm/physics/combustion/test_data'
@@ -31,13 +31,8 @@ class WoodTest(tf.test.TestCase, parameterized.TestCase):
     with gfile.GFile(filename, 'r') as f:
       pbtxt = f.read()
 
-    params = text_format.Parse(
-        pbtxt,
-        incompressible_structured_mesh_parameters_pb2
-        .IncompressibleNavierStokesParameters())
-    config = (
-        incompressible_structured_mesh_config
-        .IncompressibleNavierStokesParameters(params))
+    params = text_format.Parse(pbtxt, parameters_pb2.SwirlLMParameters())
+    config = parameters_lib.SwirlLMParameters(params)
 
     return wood.wood_combustion_factory(config)
 

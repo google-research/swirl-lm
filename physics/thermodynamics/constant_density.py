@@ -1,9 +1,8 @@
 """A library of density update with a constant."""
 
+from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.physics.thermodynamics import thermodynamics_generic
 import tensorflow as tf
-
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 
 TF_DTYPE = thermodynamics_generic.TF_DTYPE
 
@@ -14,11 +13,7 @@ FlowFieldMap = thermodynamics_generic.FlowFieldMap
 class ConstantDensity(thermodynamics_generic.ThermodynamicModel):
   """A library of constant density."""
 
-  def __init__(
-      self,
-      params: incompressible_structured_mesh_config
-      .IncompressibleNavierStokesParameters,
-  ):
+  def __init__(self, params: parameters_lib.SwirlLMParameters):
     """Initializes the constant density object."""
     super(ConstantDensity, self).__init__(params)
 

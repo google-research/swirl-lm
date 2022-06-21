@@ -7,6 +7,7 @@ from typing import Optional, Sequence
 
 from absl import logging
 import numpy as np
+from swirl_lm.base import parameters_pb2
 from swirl_lm.numerics import calculus
 from swirl_lm.numerics import filters
 from swirl_lm.utility import common_ops
@@ -14,7 +15,6 @@ from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import types
 import tensorflow as tf
 
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2  # pylint: disable=line-too-long
 
 FlowFieldVal = types.FlowFieldVal
 FlowFieldMap = types.FlowFieldMap
@@ -201,8 +201,7 @@ class SgsModel(object):
       self,
       kernel_op: get_kernel_fn.ApplyKernelOp,
       filter_widths: Sequence[float],
-      params: Optional[incompressible_structured_mesh_parameters_pb2
-                       .SubGridScaleModel] = None,
+      params: Optional[parameters_pb2.SubGridScaleModel] = None,
   ):
     """Initializes the sub-grid scale model library.
 

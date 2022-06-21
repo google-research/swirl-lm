@@ -5,6 +5,8 @@ import itertools
 from absl import flags
 from absl.testing import parameterized
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import parameters_pb2
 from swirl_lm.equations import scalars
 from swirl_lm.utility import components_debug
 from swirl_lm.utility import get_kernel_fn
@@ -12,8 +14,6 @@ from swirl_lm.utility import tf_test_util as test_util
 import tensorflow as tf
 
 from google3.net.proto2.python.public import text_format
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
 
 
 FLAGS = flags.FLAGS
@@ -146,10 +146,7 @@ class ScalarsTest(tf.test.TestCase, parameterized.TestCase):
                R'  molecular_weight: 0.29  '
                R'  solve_scalar: true  '
                R'}  ')
-    config = text_format.Parse(
-        pbtxt,
-        incompressible_structured_mesh_parameters_pb2
-        .IncompressibleNavierStokesParameters())
+    config = text_format.Parse(pbtxt, parameters_pb2.SwirlLMParameters())
     FLAGS.cx = 1
     FLAGS.cy = 1
     FLAGS.cz = 1
@@ -163,9 +160,7 @@ class ScalarsTest(tf.test.TestCase, parameterized.TestCase):
     FLAGS.dt = 1e-2
     FLAGS.simulation_debug = dbg
     FLAGS.num_boundary_points = 0
-    params = (
-        incompressible_structured_mesh_config
-        .IncompressibleNavierStokesParameters(config))
+    params = parameters_lib.SwirlLMParameters(config)
 
     dbg_model = components_debug.ComponentsDebug(params) if dbg else None
 

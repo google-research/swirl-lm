@@ -15,10 +15,10 @@ Terms considered in each equation, and their naming rules are (take variable ):
 
 import re
 from typing import Optional, Sequence, Text
+from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import types
 import tensorflow as tf
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 
 FlowFieldVal = types.FlowFieldVal
 FlowFieldMap = types.FlowFieldMap
@@ -29,8 +29,7 @@ _MOMEMTUM_VARIABLES = ['rhou', 'rhov', 'rhow']
 class ComponentsDebug(object):
   """A library for debugging components in governing equations."""
 
-  def __init__(self, params: incompressible_structured_mesh_config
-               .IncompressibleNavierStokesParameters):
+  def __init__(self, params: parameters_lib.SwirlLMParameters):
     """Initializes the debugging tool."""
     self._params = params
 

@@ -2,13 +2,13 @@
 
 from typing import Callable, Dict, Optional, Text
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.boundary_condition import monin_obukhov_similarity_theory
 from swirl_lm.numerics import calculus
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import types
 import tensorflow as tf
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 
 FlowFieldVal = types.FlowFieldVal
 FlowFieldMap = types.FlowFieldMap
@@ -131,8 +131,7 @@ def shear_stress(
   return tau_ij
 
 
-def shear_flux(params: incompressible_structured_mesh_config
-               .IncompressibleNavierStokesParameters) -> ...:
+def shear_flux(params: parameters_lib.SwirlLMParameters) -> ...:
   """Generates a function that computes the shear fluxes at cell faces.
 
   Args:

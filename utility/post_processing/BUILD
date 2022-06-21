@@ -34,11 +34,26 @@ pytype_strict_library(
     deps = [
         "//net/proto2/python/public",
         "//pyglib:gfile",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_parameters_py_pb2",
         "//third_party/py/numpy",
+        "//third_party/py/swirl_lm/base:parameters",
+        "//third_party/py/swirl_lm/base:parameters_py_pb2",
         "//third_party/py/swirl_lm/physics/thermodynamics:water",
         "//third_party/py/swirl_lm/utility:types",
         "//third_party/py/tensorflow",
+    ],
+)
+
+pytype_strict_library(
+    name = "combustion",
+    srcs = ["combustion.py"],
+    deps = [
+        "//net/proto2/python/public",
+        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
+        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_parameters_py_pb2",
+        "//third_party/py/numpy",
+        "//third_party/py/swirl_lm/physics/combustion:wood",
+        "//third_party/py/swirl_lm/utility:get_kernel_fn",
+        "//third_party/py/swirl_lm/utility:grid_parametrization",
+        "//third_party/py/tensorflow:tensorflow_no_contrib",
     ],
 )

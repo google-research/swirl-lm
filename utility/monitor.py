@@ -16,12 +16,12 @@ from typing import Dict, Sequence, Text, Union
 
 from absl import logging
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.utility import monitor_pb2
 from swirl_lm.utility import types
 import tensorflow as tf
 
 from google3.research.simulation.tensorflow.fluid.framework import analytics_util
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 
 _MONITOR_NAME_DELIMITER = '_'
 _TF_DTYPE = types.TF_DTYPE
@@ -57,11 +57,7 @@ class Monitor(object):
 
   _MONITOR_VAR_PREFIX = 'MONITOR'
 
-  def __init__(
-      self,
-      params: incompressible_structured_mesh_config
-      .IncompressibleNavierStokesParameters,
-  ):
+  def __init__(self, params: parameters_lib.SwirlLMParameters):
     """Initializes the monitor and creates containers for analytics."""
     self._params = params
     self._monitor_spec = params.monitor_spec

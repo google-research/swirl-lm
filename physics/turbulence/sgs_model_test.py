@@ -3,13 +3,13 @@ import functools
 import itertools
 
 import numpy as np
+from swirl_lm.base import parameters_pb2
 from swirl_lm.physics.turbulence import sgs_model
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import tf_test_util as test_util
 from swirl_lm.utility.tf_tpu_test_util import run_on_tpu_in_test
 import tensorflow as tf
 
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
 from google3.testing.pybase import parameterized
 
 
@@ -237,7 +237,7 @@ class SgsModelTest(tf.test.TestCase, parameterized.TestCase):
       }
 
     kernel_op = get_kernel_fn.ApplyKernelConvOp(8)
-    params = incompressible_structured_mesh_parameters_pb2.SubGridScaleModel()
+    params = parameters_pb2.SubGridScaleModel()
     params.smagorinsky.c_s = 0.18
     params.smagorinsky.pr_t = 0.3
     sgs = sgs_model.SgsModel(kernel_op, self.delta, params)
@@ -352,7 +352,7 @@ class SgsModelTest(tf.test.TestCase, parameterized.TestCase):
     }
 
     kernel_op = get_kernel_fn.ApplyKernelConvOp(8)
-    params = incompressible_structured_mesh_parameters_pb2.SubGridScaleModel()
+    params = parameters_pb2.SubGridScaleModel()
     params.smagorinsky_lilly.c_s = 0.18
     params.smagorinsky_lilly.pr_t = 0.1
     sgs = sgs_model.SgsModel(kernel_op, self.delta, params)
@@ -383,7 +383,7 @@ class SgsModelTest(tf.test.TestCase, parameterized.TestCase):
       self):
     """Checks if the turbulent viscosity is computed correctly at [8, 8, 8]."""
     kernel_op = get_kernel_fn.ApplyKernelConvOp(8)
-    params = incompressible_structured_mesh_parameters_pb2.SubGridScaleModel()
+    params = parameters_pb2.SubGridScaleModel()
     params.vreman.c_s = 0.18
     params.vreman.pr_t = 0.1
     sgs = sgs_model.SgsModel(kernel_op, self.delta, params)

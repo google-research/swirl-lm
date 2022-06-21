@@ -766,6 +766,39 @@ class CommonOpsTest(tf.test.TestCase, parameterized.TestCase):
         with self.subTest(f'replica {replica}; tensor {i}'):
           self.assertAllEqual(i, gathered[i])
 
+  @test_util.run_in_graph_and_eager_modes
+  def testGetFaceCutsCorrectPlanesFromVolume(self):
+    """Checks if faces from a volume are cut correctly."""
+    volume = np.array(np.reshape(np.arange(512), (8, 8, 8)), dtype=np.float32)
+    volume_tf = tf.unstack(tf.convert_to_tensor(volume, dtype=tf.float32))
+
+    with self.subTest(name='SlicesInLowerX'):
+      slices = self.evaluate(common_ops.get_face(volume_tf, 0, 0, 0, 0.1))
+      self.assertAllEqual(np.squeeze(slices), 0.1 * np.squeeze(volume[:, 0, :]))
+
+    with self.subTest(name='SlicesInUpperX'):
+      slices = self.evaluate(common_ops.get_face(volume_tf, 0, 1, 1, 0.2))
+      self.assertAllEqual(
+          np.squeeze(slices), 0.2 * np.squeeze(volume[:, -2, :]))
+
+    with self.subTest(name='SlicesInLowerY'):
+      slices = self.evaluate(common_ops.get_face(volume_tf, 1, 0, 2, 0.3))
+      self.assertAllEqual(np.squeeze(slices), 0.3 * np.squeeze(volume[:, :, 2]))
+
+    with self.subTest(name='SlicesInUpperY'):
+      slices = self.evaluate(common_ops.get_face(volume_tf, 1, 1, 3, 0.4))
+      self.assertAllEqual(
+          np.squeeze(slices), 0.4 * np.squeeze(volume[:, :, -4]))
+
+    with self.subTest(name='SlicesInLowerZ'):
+      slices = self.evaluate(common_ops.get_face(volume_tf, 2, 0, 4, 0.5))
+      self.assertAllEqual(np.squeeze(slices), 0.5 * np.squeeze(volume[4, :, :]))
+
+    with self.subTest(name='SlicesInUpperZ'):
+      slices = self.evaluate(common_ops.get_face(volume_tf, 2, 1, 5, 0.6))
+      self.assertAllEqual(
+          np.squeeze(slices), 0.6 * np.squeeze(volume[-6, :, :]))
+
 
 class ParameterizedCommonOpsTest(tf.test.TestCase, parameterized.TestCase):
 

@@ -10,12 +10,11 @@ This library supports the following pairs of prognostic variables:
 import enum
 
 from typing import List, Optional, Sequence, Text
+from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.numerics import root_finder
 from swirl_lm.physics import constants
 from swirl_lm.physics.thermodynamics import thermodynamics_generic
 import tensorflow as tf
-
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 
 FlowFieldVal = thermodynamics_generic.FlowFieldVal
 FlowFieldMap = thermodynamics_generic.FlowFieldMap
@@ -48,11 +47,7 @@ class PotentialTemperature(enum.Enum):
 class Water(thermodynamics_generic.ThermodynamicModel):
   """A library of thermodynamics for water."""
 
-  def __init__(
-      self,
-      params: incompressible_structured_mesh_config
-      .IncompressibleNavierStokesParameters,
-  ):
+  def __init__(self, params: parameters_lib.SwirlLMParameters):
     """Initializes parameters for the water thermodynamics."""
     super(Water, self).__init__(params)
 
@@ -335,6 +330,83 @@ class Water(thermodynamics_generic.ThermodynamicModel):
         p_ref / _R_D / t_ref
         for p_ref, t_ref in zip(self.p_ref(zz), self.t_ref(zz))
     ]
+
+  def dry_exner(self, zz: FlowFieldVal) -> FlowFieldVal:
+    """Computes the exner function using the dry air gas constant.
+
+    Args:
+      zz: The geopotential height.
+
+    Returns:
+      The exner function as a function of height.
+    """
+    return tf.nest.map_structure(
+        lambda p: tf.pow(p / self._p_thermal, _R_D / self.cp_d), self.p_ref(zz))
+
+  def dry_exner_inverse(self, zz: FlowFieldVal) -> FlowFieldVal:
+    """Computes the inverse exner function using the dry air gas constant.
+
+    Args:
+      zz: The geopotential height.
+
+    Returns:
+      The inverse exner function as a function of height.
+    """
+    p_ref = self.p_ref(zz)
+    return tf.nest.map_structure(
+        lambda p: tf.pow(p / self._p_thermal, -_R_D / self.cp_d), p_ref)
+
+  def exner(
+      self,
+      rho: FlowFieldVal,
+      q_t: FlowFieldVal,
+      t: FlowFieldVal,
+      zz: FlowFieldVal,
+  ) -> FlowFieldVal:
+    """Computes the exner function from the moisture-adjusted constants.
+
+    Args:
+      rho: The density of the moist air.
+      q_t: The total specific humidity.
+      t: The temperature of the flow field.
+      zz: The geopotential height.
+
+    Returns:
+      The moisture-adjusted exner function as a function of height.
+    """
+    p_ref = self.p_ref(zz)
+    q_l, q_i = self.equilibrium_phase_partition(t, rho, q_t)
+
+    r_m = self.r_m(t, rho, q_t)
+    cp_m = self.cp_m(q_t, q_l, q_i)
+    return tf.nest.map_structure(
+        lambda p, r, cp: tf.pow(p / self._p_thermal, r / cp), p_ref, r_m, cp_m)
+
+  def exner_inverse(
+      self,
+      rho: FlowFieldVal,
+      q_t: FlowFieldVal,
+      t: FlowFieldVal,
+      zz: FlowFieldVal,
+  ) -> FlowFieldVal:
+    """Computes the inverse exner function from the moisture-adjusted constants.
+
+    Args:
+      rho: The density of the moist air.
+      q_t: The total specific humidity.
+      t: The temperature of the flow field.
+      zz: The geopotential height.
+
+    Returns:
+      The moisture-adjusted inverse exner function as a function of height.
+    """
+    p_ref = self.p_ref(zz)
+    q_l, q_i = self.equilibrium_phase_partition(t, rho, q_t)
+
+    r_m = self.r_m(t, rho, q_t)
+    cp_m = self.cp_m(q_t, q_l, q_i)
+    return tf.nest.map_structure(
+        lambda p, r, cp: tf.pow(p / self._p_thermal, -r / cp), p_ref, r_m, cp_m)
 
   def air_temperature(
       self,

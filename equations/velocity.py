@@ -28,6 +28,8 @@ import functools
 from typing import Optional, Sequence, Text
 
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import physical_variable_keys_manager
 from swirl_lm.boundary_condition import boundary_condition_utils
 from swirl_lm.boundary_condition import immersed_boundary_method
 from swirl_lm.communication import halo_exchange
@@ -46,10 +48,6 @@ from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import monitor
 from swirl_lm.utility import types
 import tensorflow as tf
-
-from google3.research.simulation.tensorflow.fluid.framework import util
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import physical_variable_keys_manager
 
 
 FlowFieldVal = types.FlowFieldVal
@@ -88,8 +86,7 @@ class Velocity(object):
   def __init__(
       self,
       kernel_op: get_kernel_fn.ApplyKernelOp,
-      params: incompressible_structured_mesh_config
-      .IncompressibleNavierStokesParameters,
+      params: parameters_lib.SwirlLMParameters,
       thermodynamics: thermodynamics_manager.ThermodynamicsManager,
       monitor_lib: monitor.Monitor,
       ib: Optional[immersed_boundary_method.ImmersedBoundaryMethod] = None,
@@ -321,6 +318,17 @@ class Velocity(object):
         # Computes the convection term.
         g_corr = None if np.abs(
             self._gravity_vec[dim]) < _G_THRESHOLD else gravity
+        if (self._params.convection_scheme !=
+            _ConvectionScheme.CONVECTION_SCHEME_WENO):
+          # Pressure is used for the Rhie-Chow correction in schemes other than
+          # WENO.
+          p_corr = [p,] * 3
+        else:
+          # The pressure gradient term is included in the convection term when
+          # the WENO scheme is used. This eliminates the need for the Rhie-Chow
+          # correction.
+          p_corr = [tf.nest.map_structure(tf.zeros_like, p) for _ in range(3)]
+          p_corr[dim] = p
         conv = [
             convection.convection_term(  # pylint: disable=g-complex-comprehension
                 self._kernel_op,
@@ -328,7 +336,7 @@ class Velocity(object):
                 replicas,
                 f,
                 states[momentum_key[i]],
-                p,
+                p_corr[i],
                 h[i],
                 dt,
                 i,
@@ -343,7 +351,13 @@ class Velocity(object):
         diff = diff_all[velocity_key[dim]]
 
         # Computes the pressure gradient.
-        dp_dh = [dp / (2.0 * h[dim]) for dp in grad_central[dim](p)]
+        if (self._params.convection_scheme !=
+            _ConvectionScheme.CONVECTION_SCHEME_WENO):
+          dp_dh = [dp / (2.0 * h[dim]) for dp in grad_central[dim](p)]
+        else:
+          # The pressure contribution is considered with the convection when
+          # WENO scheme is used to eliminate the need for Rhie-Chow correction.
+          dp_dh = tf.nest.map_structure(tf.zeros_like, p)
 
         # Computes external forcing terms.
         force = forces[dim] if forces[dim] else [
@@ -434,8 +448,8 @@ class Velocity(object):
       for i in range(self._params.halo_width):
         idx = i if face == 1 else self._params.halo_width - 1 - i
         bc_planes.append(
-            util.get_slice(val, dim, face,
-                           self._params.halo_width, -1.0 * (2 * idx + 1))[0])
+            common_ops.get_face(val, dim, face, self._params.halo_width,
+                                -1.0 * (2 * idx + 1))[0])
       return bc_planes
 
     for dim in range(3):
@@ -446,10 +460,10 @@ class Velocity(object):
                     boundary_condition_utils.BoundaryType.SLIP_WALL)):
           continue
 
-        velocity_components = _KEYS_VELOCITY if self._params.bc_type[dim][
-            face] == boundary_condition_utils.BoundaryType.NON_SLIP_WALL else [
-                _KEYS_VELOCITY[dim]
-            ]
+        velocity_components = (
+            _KEYS_VELOCITY if self._params.bc_type[dim][face]
+            == boundary_condition_utils.BoundaryType.NON_SLIP_WALL else
+            [_KEYS_VELOCITY[dim]])
 
         for velocity_key in velocity_components:
           bc_planes = bc_planes_for_wall(states[velocity_key], dim, face)

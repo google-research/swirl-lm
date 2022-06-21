@@ -6,6 +6,7 @@ from typing import Optional, Text, Tuple
 import numpy as np
 from swirl_lm.boundary_condition import boundary_condition_utils
 from swirl_lm.equations import common
+from swirl_lm.numerics import interpolation
 from swirl_lm.numerics import numerics_pb2  # pylint: disable=line-too-long
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
@@ -420,6 +421,132 @@ def convection_quick(
   return [d_flux / dx for d_flux in kernel_fn(flux, *diff_op_type)]
 
 
+def face_flux_weno(
+    replica_id: tf.Tensor,
+    replicas: np.ndarray,
+    state: FlowFieldVal,
+    rhou: FlowFieldVal,
+    pressure: FlowFieldVal,
+    dim: int,
+    bc_types: Tuple[boundary_condition_utils.BoundaryType,
+                    boundary_condition_utils.BoundaryType] = (
+                        boundary_condition_utils.BoundaryType.UNKNOWN,
+                        boundary_condition_utils.BoundaryType.UNKNOWN),
+    varname: Optional[Text] = None,
+    halo_width: Optional[int] = None,
+) -> FlowFieldVal:
+  """Computes the face flux of `state` normal to `dim` with WENO scheme.
+
+  Note:
+  1. The Lax-Friedrich flux splitting is applied.
+  2. Currently only the 5th order WENO scheme is supported, i.e. with k = 3.
+
+  The WENO scheme is retrieved from the following reference:
+  Shu, C.-W. (1998). Essentially non-oscillatory and weighted essentially
+  non-oscillatory schemes for hyperbolic conservation laws. In Lecture Notes in
+  Mathematics (pp. 325–432). https://doi.org/10.1007/bfb0096355
+
+  Args:
+    replica_id: The index of the current TPU replica.
+    replicas: A numpy array that maps grid coordinates to replica id numbers.
+    state: A list of `tf.Tensor` representing a 3D volume of the variable for
+      which the flux is computed.
+    rhou: A list of `tf.Tensor` representing a 3D volume of momentum.
+    pressure: A list of `tf.Tensor` representing a 3D volume of pressure.
+    dim: The dimension that is normal to the face where the interpolation is
+      performed.
+    bc_types: The type of the boundary conditions on the 2 ends along `dim`.
+    varname: The name of the variable.
+    halo_width: The number of points in the halo layer in the direction normal
+      to a boundary plane.
+
+  Returns:
+    The flux of `state` on faces that are normal to `dim`.
+
+  Raises:
+    ValueError if `dim` is not one of 0, 1, and 2.
+  """
+  del replica_id, replicas, bc_types, halo_width
+  dims = ('x', 'y', 'z')
+
+  if varname is not None and varname in (common.KEYS_VELOCITY[dim],
+                                         common.KEYS_MOMENTUM[dim]):
+    flux = tf.nest.map_structure(lambda rhou_i, s_i, p_i: rhou_i * s_i + p_i,
+                                 rhou, state, pressure)
+  else:
+    flux = tf.nest.map_structure(tf.math.multiply, rhou, state)
+
+  flux_m = tf.nest.map_structure(lambda f, u, s: 0.5 * (f - tf.abs(u) * s),
+                                 flux, rhou, state)
+  flux_p = tf.nest.map_structure(lambda f, u, s: 0.5 * (f + tf.abs(u) * s),
+                                 flux, rhou, state)
+
+  # Interpolates the scalar value onto faces. Note that the `weno` functions
+  # stores value on face i + 1/2 at i.
+  f_neg, _ = interpolation.weno(flux_p, dims[dim])
+  _, f_pos = interpolation.weno(flux_m, dims[dim])
+
+  return tf.nest.map_structure(tf.math.add, f_neg, f_pos)
+
+
+def convection_weno(
+    kernel_op: get_kernel_fn.ApplyKernelOp,
+    replica_id: tf.Tensor,
+    replicas: np.ndarray,
+    state: FlowFieldVal,
+    rhou: FlowFieldVal,
+    pressure: FlowFieldVal,
+    dx: float,
+    dim: int,
+    bc_types: Tuple[boundary_condition_utils.BoundaryType,
+                    boundary_condition_utils.BoundaryType] = (
+                        boundary_condition_utils.BoundaryType.UNKNOWN,
+                        boundary_condition_utils.BoundaryType.UNKNOWN),
+    varname: Optional[Text] = None,
+    halo_width: Optional[int] = None,
+) -> FlowFieldVal:
+  """Computes the convection term for convservative variables with WENO scheme.
+
+  Args:
+    kernel_op: An object holding a library of kernel operations.
+    replica_id: The index of the current TPU replica.
+    replicas: A numpy array that maps grid coordinates to replica id numbers.
+    state: A list of `tf.Tensor` representing a 3D volume of the variable for
+      which the convection term is computed.
+    rhou: A list of `tf.Tensor` representing a 3D volume of momentum.
+    pressure: A list of `tf.Tensor` representing a 3D volume of pressure.
+    dx: The grid spacing.
+    dim: The dimension that is normal to the face where the convection term is
+      computed.
+    bc_types: The type of the boundary conditions on the 2 ends along `dim`.
+    varname: The name of the variable.
+    halo_width: The number of points in the halo layer in the direction normal
+      to a boundary plane.
+
+  Returns:
+    The convection term of `f`. Values within `halo_width` of 3 are invalid.
+
+  Raises:
+    ValueError if `dim` is not one of 0, 1, and 2.
+  """
+  if dim == 0:
+    diff_op_type = ['kdx']
+    kernel_fn = kernel_op.apply_kernel_op_x
+  elif dim == 1:
+    diff_op_type = ['kdy']
+    kernel_fn = kernel_op.apply_kernel_op_y
+  elif dim == 2:
+    diff_op_type = ['kdz', 'kdzsh']
+    kernel_fn = kernel_op.apply_kernel_op_z
+  else:
+    raise ValueError('`dim` has to be 0, 1, or 2. {} is provided.'.format(dim))
+
+  flux = face_flux_weno(replica_id, replicas, state, rhou, pressure, dim,
+                        bc_types, varname, halo_width)
+
+  return [d_flux / dx for d_flux in kernel_fn(flux, *diff_op_type)]
+
+
 def convection_upwinding_1(
     kernel_op: get_kernel_fn.ApplyKernelOp,
     replica_id: tf.Tensor,
@@ -575,6 +702,9 @@ def convection_term(
     return convection_quick(kernel_op, replica_id, replicas, state, rhou,
                             pressure, dx, dt, dim, bc_types, varname,
                             halo_width, src, apply_correction)
+  elif scheme == ConvectionScheme.CONVECTION_SCHEME_WENO:
+    return convection_weno(kernel_op, replica_id, replicas, state, rhou,
+                           pressure, dx, dim, bc_types, varname, halo_width)
   elif scheme == ConvectionScheme.CONVECTION_SCHEME_UPWIND_1:
     return convection_upwinding_1(kernel_op, replica_id, replicas, state, rhou,
                                   pressure, dx, dt, dim, bc_types, varname,
@@ -584,10 +714,12 @@ def convection_term(
   else:
     raise NotImplementedError(
         '{} is not implemented. Available options are: '
-        '{}, {}, {}.'.format(
+        '{}, {}, {}, {}.'.format(
             numerics_pb2.ConvectionScheme.Name(scheme),
             numerics_pb2.ConvectionScheme.Name(
                 ConvectionScheme.CONVECTION_SCHEME_QUICK),
+            numerics_pb2.ConvectionScheme.Name(
+                ConvectionScheme.CONVECTION_SCHEME_WENO),
             numerics_pb2.ConvectionScheme.Name(
                 ConvectionScheme.CONVECTION_SCHEME_UPWIND_1),
             numerics_pb2.ConvectionScheme.Name(

@@ -4,6 +4,8 @@ import functools
 
 from absl import flags
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import parameters_pb2
 from swirl_lm.physics.combustion import onestep
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
@@ -11,8 +13,6 @@ from swirl_lm.utility import tf_test_util as test_util
 import tensorflow as tf
 
 from google3.net.proto2.python.public import text_format
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
 
 FLAGS = flags.FLAGS
 
@@ -42,14 +42,9 @@ class OnestepTest(tf.test.TestCase):
     """Prepares common variables to be used in this test."""
     super().setUp()
 
-    params = text_format.Parse(
-        PARAMS,
-        incompressible_structured_mesh_parameters_pb2
-        .IncompressibleNavierStokesParameters())
+    params = text_format.Parse(PARAMS, parameters_pb2.SwirlLMParameters())
 
-    self.config = (
-        incompressible_structured_mesh_config
-        .IncompressibleNavierStokesParameters(params))
+    self.config = parameters_lib.SwirlLMParameters(params)
 
   def testOnestepReactionSource(self):
     """Checks if the onestep reaction source is correctly computed."""

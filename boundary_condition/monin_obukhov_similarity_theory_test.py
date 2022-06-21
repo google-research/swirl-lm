@@ -5,6 +5,9 @@ import os
 
 from absl import flags
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import parameters_pb2
+from swirl_lm.base import physical_variable_keys_manager
 from swirl_lm.boundary_condition import monin_obukhov_similarity_theory
 from swirl_lm.equations import common
 from swirl_lm.utility import get_kernel_fn
@@ -15,9 +18,6 @@ import tensorflow as tf
 from google3.net.proto2.python.public import text_format
 from google3.pyglib import gfile
 from google3.pyglib import resources
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import physical_variable_keys_manager
 from google3.testing.pybase import parameterized
 
 FLAGS = flags.FLAGS
@@ -39,10 +39,7 @@ def read_proto(filename):
   with gfile.GFile(
       resources.GetResourceFilename(os.path.join(_TESTDATA_DIR,
                                                  filename))) as f:
-    return text_format.Parse(
-        f.read(),
-        incompressible_structured_mesh_parameters_pb2
-        .IncompressibleNavierStokesParameters())
+    return text_format.Parse(f.read(), parameters_pb2.SwirlLMParameters())
 
 
 @test_util.run_all_in_graph_and_eager_modes
@@ -62,9 +59,7 @@ class MoninObukhovSimilarityTheoryTest(tf.test.TestCase,
     FLAGS.ly = 6.0
     FLAGS.lz = 6.0
     FLAGS.halo_width = 2
-    self.params = (
-        incompressible_structured_mesh_config
-        .IncompressibleNavierStokesParameters(read_proto(filename)))
+    self.params = parameters_lib.SwirlLMParameters(read_proto(filename))
     if vertical_dim == 0:
       self.params.gravity_direction = [1.0, 0.0, 0.0]
     elif vertical_dim == 1:

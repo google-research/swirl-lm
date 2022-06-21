@@ -4,10 +4,9 @@ import abc
 from typing import Optional
 
 import six
+from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.physics.thermodynamics import thermodynamics_utils
 import tensorflow as tf
-
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 
 TF_DTYPE = thermodynamics_utils.TF_DTYPE
 
@@ -19,11 +18,7 @@ FlowFieldMap = thermodynamics_utils.FlowFieldMap
 class ThermodynamicModel(object):
   """A generic class for thermodynamic models."""
 
-  def __init__(
-      self,
-      params: incompressible_structured_mesh_config
-      .IncompressibleNavierStokesParameters,
-  ):
+  def __init__(self, params: parameters_lib.SwirlLMParameters):
     """Initializes the thermodynamics library."""
     self._params = params
     self._rho = params.rho

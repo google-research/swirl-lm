@@ -1,0 +1,214 @@
+syntax = "proto2";
+
+package research.simulation;
+
+import "third_party/py/swirl_lm/boundary_condition/boundary_conditions.proto";
+import "third_party/py/swirl_lm/boundary_condition/boundary_models.proto";
+import "third_party/py/swirl_lm/boundary_condition/rayleigh_damping_layer.proto";
+import "third_party/py/swirl_lm/equations/pressure.proto";
+import "third_party/py/swirl_lm/equations/scalars.proto";
+import "third_party/py/swirl_lm/numerics/numerics.proto";
+import "third_party/py/swirl_lm/physics/combustion/combustion.proto";
+import "third_party/py/swirl_lm/physics/thermodynamics/thermodynamics.proto";
+import "third_party/py/swirl_lm/utility/grid_parametrization.proto";
+import "third_party/py/swirl_lm/utility/monitor.proto";
+import "third_party/py/swirl_lm/utility/probe.proto";
+
+// Specifies if the flow field is periodic in a direction.
+message PeriodicDimensions {
+  // Periodicity in the x dimension.
+  optional bool dim_0 = 1 [default = false];
+  // Periodicity in the y dimension.
+  optional bool dim_1 = 2 [default = false];
+  // Periodicity in the z dimension.
+  optional bool dim_2 = 3 [default = false];
+}
+
+// Stores information about a sub-grid scale model.
+message SubGridScaleModel {
+  // Parameters required by the constant Smagorinsky model.
+  message SmagorinskyModel {
+    // The Smagonrinsky constant.
+    optional float c_s = 1 [default = 0.18];
+    // The turbulent Prandtl number.
+    optional float pr_t = 2 [default = 0.3];
+    // An indicator of whether the turbulent diffusivity is computed using the
+    // turbulent Prandtl number, or from the scalar gradient directly. Default
+    // to use the turbulent Prandtl number to match the original behavior.
+    optional bool use_pr_t = 3 [default = true];
+  }
+
+  // Parameters required by the dynamic Smagorinsky model.
+  message DynamicSmagorinskyModel {
+    // An indicator of periodicity in the x direction.
+    optional bool periodic_x = 1 [default = true];
+    // An indicator of periodicity in the y direction.
+    optional bool periodic_y = 2 [default = true];
+    // An indicator of periodicity in the z direction.
+    optional bool periodic_z = 3 [default = true];
+  }
+
+  // Parameters required by the Smagorinsky-Lilly model. Default values are
+  // retrieved from reference: Stevens, Bjorn, Chin-Hoh Moeng, Andrew S.
+  // Ackerman, Christopher S. Bretherton, Andreas Chlond, Stephan de Roode,
+  // James Edwards, et al. 2005. “Evaluation of Large-Eddy Simulations via
+  // Observations of Nocturnal Marine Stratocumulus.” Monthly Weather Review 133
+  // (6): 1443–62.
+  message SmagorinskyLillyModel {
+    // The Smagonrinsky constant.
+    optional float c_s = 1 [default = 0.18];
+    // The turbulent Prandtl number.
+    optional float pr_t = 2 [default = 0.4];
+    // An indicator of whether the turbulent diffusivity is computed using the
+    // turbulent Prandtl number, or from the scalar gradient directly. Default
+    // to use the turbulent Prandtl number to match the original behavior.
+    optional bool use_pr_t = 3 [default = true];
+  }
+
+  // Parameters required by the Vreman model.
+  // Reference:
+  // Vreman, A. W. 2004. “An Eddy-Viscosity Subgrid-Scale Model for Turbulent
+  // Shear Flow: Algebraic Theory and Applications.” Physics of Fluids
+  // 16 (10): 3670–81.
+  message VremanModel {
+    // The Smagonrinsky constant. Default value is taken from the reference.
+    optional float c_s = 1 [default = 0.18];
+    // The turbulent Prandtl number. Default value is taken from the reference.
+    optional float pr_t = 2 [default = 0.4];
+  }
+
+  oneof sgs_model_type {
+    SmagorinskyModel smagorinsky = 1;
+    DynamicSmagorinskyModel dynamic_smagorinsky = 2;
+    SmagorinskyLillyModel smagorinsky_lilly = 3;
+    VremanModel vreman = 4;
+  }
+
+  // An upper bound of the turbulent diffusivity.
+  optional float diff_t_max = 5 [default = 1.0];
+}
+
+// Stores the parameters required by an incompressible Navier-Stokes simulation.
+// Next id: 30
+message SwirlLMParameters {
+  // Defines the type of the simulation procedure to be used in the solver.
+  enum SolverProcedureType {
+    // The default option where no solver procedure is specified. Results in an
+    // error in this case.
+    UNKNOWN = 0;
+    // The sequential procedure that first updates pressure then velocity.
+    SEQUENTIAL = 1;
+    // The predictor-corrector approach which enforces the divergence free
+    // condition in a finite number of subiterations.
+    PREDICTOR_CORRECTOR = 2;
+    // The variable-density low Mach number solver.
+    VARIABLE_DENSITY = 3;
+  }
+
+  // Defines the method types for density update. This will be deprecated and
+  // replaced by `thermodynamics.Thermodynamics`.
+  enum DensityUpdateOption {
+    // The default option where density is not updated. A constant density is
+    // used.
+    DENSITY_UPDATE_UNKNOWN = 0;
+    // The option for updating density with a linear mixing rule.
+    DENSITY_UPDATE_LINEAR_MIXING = 1;
+    // The option for updating density from the equation of state.
+    DENSITY_UPDATE_EOS = 2;
+    // The option for updating density with the water thermodynamics.
+    DENSITY_UPDATE_WATER = 3;
+  }
+
+  // Defines the type of kernel operator to be used in the simulation algorithm.
+  enum KernelOpType {
+    // An unimplemented kernel operator type.
+    KERNEL_OP_UNKNOWN = 0;
+    // The option for using convolution to perform finite difference operations.
+    KERNEL_OP_CONV = 1;
+    // The option for using slicing to perform finite difference operations.
+    KERNEL_OP_SLICE = 2;
+    // The option for using matrix multiplication to perform finite difference
+    // operations.
+    KERNEL_OP_MATMUL = 3;
+  }
+
+  // The mesh information.
+  optional swirl_lm.GridParametrization grid_info = 1;
+  // The type of kernel operator to be used to represent finite difference
+  // operators. Default set to `KERNEL_OP_CONV` to match previous behavior.
+  optional KernelOpType kernel_op_type = 27 [default = KERNEL_OP_CONV];
+
+  // The scheme used to discretize the convection term.
+  optional ConvectionScheme convection_scheme = 2
+      [default = CONVECTION_SCHEME_UNKNOWN];
+  // The scheme used to discretize the diffusion term.
+  optional DiffusionScheme diffusion_scheme = 25
+      [default = DIFFUSION_SCHEME_CENTRAL_5];
+  // The scheme used for the time integration, which is shared for momentum/
+  // velocity and scalars' time advancement by default.
+  //
+  // When one needs a different time integration scheme for scalars, one could
+  // explicitly add `Scalar`'s `time_integration_scheme` field in:
+  // google3/third_party/py/swirl_lm/equations/scalars.proto
+  // In this case, the scalar specific one will overwrite the shared one here.
+  optional TimeIntegrationScheme time_integration_scheme = 3
+      [default = TIME_SCHEME_UNKNOWN];
+
+  // The periodicity in each dimension.
+  optional PeriodicDimensions periodic = 4;
+  // The boundary conditions for all variables.
+  repeated BoundaryCondition boundary_conditions = 5;
+  // The number of sub-iterations of the pressure solver.
+  optional int32 num_pressure_iterations = 6 [deprecated = true];
+  // Options for the pressure solving step.
+  optional Pressure pressure = 24;
+  // The number of sub-iterations within each time step in the Crank-Nicolson
+  // scheme.
+  optional int32 num_sub_iterations = 18 [default = 3];
+  // The density of the flow field [kg/m^3].
+  optional float density = 7 [default = 1.0];
+  // The kinematic viscosity of the flow field [m^2/s].
+  optional float kinematic_viscosity = 8;
+  // The thermodynamic pressure of the flow field [Pa]. Default set to 1 bar,
+  // which is the standard atmospheric condition.
+  optional float p_thermal = 15 [default = 1.0e5];
+  // The procedure for pressure and momentum updates in the solver.
+  optional SolverProcedureType solver_procedure = 9 [default = UNKNOWN];
+  // The names of transported scalars.
+  repeated Scalar scalars = 10;
+  // The names of additional states, which are constants that will be used in
+  // the simulation, e.g. boundary condition etc.
+  repeated string additional_state_keys = 11;
+  // The names of the variables that are used as helper in computation. These
+  // variables are not subjected to the splitting in z-direction, and they don't
+  // have to be of the same size as the mesh.
+  repeated string helper_var_keys = 20;
+  // The direction vector of gravity if it is considered in the simulation. The
+  // default case of (0, 0, 0) corresponds to the case of no gravity.
+  optional swirl_lm.CoordinateFloat gravity_direction = 12;
+  // The option of using sub-grid scale model. If `False`, the simulation is
+  // DNS, otherwise it's an LES. Default solver is DNS.
+  optional bool use_sgs = 13 [default = false];
+  // The choice of sub-grid scale model to use in the simulation.
+  optional SubGridScaleModel sgs_model = 16;
+  // The option of updating density. This will be deprecated and replaced by
+  // `thermodynamics`.
+  optional DensityUpdateOption density_update_option = 14
+      [default = DENSITY_UPDATE_UNKNOWN, deprecated = true];
+  // The thermodynamic model that's used to update the density.
+  optional Thermodynamics thermodynamics = 22;
+  // Information required by combustion models.
+  optional Combustion combustion = 26;
+  // A filter of variable names to be loaded from files if the filter is used.
+  // The option for using this filter will be set by a command line flag.
+  repeated string states_from_file = 17;
+  // Information required for sponge layers if applied. This will be deprecated,
+  // and contained in `boundary_models`.
+  optional RayleighDampingLayer sponge_layer = 21 [deprecated = true];
+  // Information required for boundary models if applied.
+  optional BoundaryModels boundary_models = 23;
+  // Specification of analytics monitoring variables.
+  optional MonitorSpec monitor_spec = 28;
+  // Specification of probes that retrieves values at user specified locations.
+  optional Probe probe = 29;
+}

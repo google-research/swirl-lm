@@ -2,11 +2,10 @@
 """A library of modeling thermodynamic quantities with ideal gas."""
 
 from typing import Optional
+from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.physics.thermodynamics import thermodynamics_generic
 from swirl_lm.physics.thermodynamics import thermodynamics_utils
 import tensorflow as tf
-
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 
 TF_DTYPE = thermodynamics_generic.TF_DTYPE
 
@@ -26,11 +25,7 @@ DRY_AIR_MOLECULAR_WEIGHT = 0.0289647
 class IdealGas(thermodynamics_generic.ThermodynamicModel):
   """A library of ideal gas modeling."""
 
-  def __init__(
-      self,
-      params: incompressible_structured_mesh_config
-      .IncompressibleNavierStokesParameters,
-  ):
+  def __init__(self, params: parameters_lib.SwirlLMParameters):
     """Initializes the ideal gas object."""
     super(IdealGas, self).__init__(params)
 

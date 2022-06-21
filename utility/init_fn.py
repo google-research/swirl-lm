@@ -140,8 +140,10 @@ def blasius_boundary_layer(
   """
   u_mag = np.sqrt(u_inf**2 + v_inf**2)
 
-  # Prepare the elevation map with the correct format.
-  kernel_op = get_kernel_fn.ApplyKernelConvOp(4)
+  # Prepare the elevation map with the correct format. Note that slice kernel
+  # is used here to prevent issues from data size is not fully divisible by the
+  # kernel size.
+  kernel_op = get_kernel_fn.ApplyKernelSliceOp()
   theta = 0.0
   if elevation is None:
     elevation = 0.0

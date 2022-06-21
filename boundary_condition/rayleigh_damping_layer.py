@@ -22,6 +22,7 @@ from typing import Dict, Iterable, Mapping, Optional, Sequence, Text, Union
 
 from absl import logging
 import numpy as np
+from swirl_lm.base import parameters_pb2
 from swirl_lm.boundary_condition import rayleigh_damping_layer_pb2
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
@@ -30,7 +31,6 @@ from swirl_lm.utility import types
 import tensorflow as tf
 
 from google3.research.simulation.tensorflow.fluid.framework import initializer
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
 
 FlowFieldVal = types.FlowFieldVal
 FlowFieldMap = types.FlowFieldMap
@@ -40,7 +40,7 @@ TargetValueLib = Dict[Text, Optional[Union[float, Text]]]
 _InitFn = initializer.ValueFunction
 _Orientation = rayleigh_damping_layer_pb2.RayleighDampingLayer.Orientation
 _SpongeInfo = rayleigh_damping_layer_pb2.RayleighDampingLayer.VariableInfo
-_PeriodicDimensionInfo = incompressible_structured_mesh_parameters_pb2.PeriodicDimensions
+_PeriodicDimensionInfo = parameters_pb2.PeriodicDimensions
 
 
 def get_sponge_force_name(varname: Text) -> Text:

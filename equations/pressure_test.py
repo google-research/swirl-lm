@@ -5,6 +5,8 @@ import os
 
 from absl import flags
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import parameters_pb2
 from swirl_lm.communication import halo_exchange
 from swirl_lm.equations import pressure
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
@@ -17,8 +19,6 @@ import tensorflow as tf
 from google3.net.proto2.python.public import text_format
 from google3.pyglib import gfile
 from google3.pyglib import resources
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
 from google3.testing.pybase import googletest
 from google3.testing.pybase import parameterized
 
@@ -128,10 +128,7 @@ class PressureTest(tf.test.TestCase, parameterized.TestCase):
     with gfile.Open(
         resources.GetResourceFilename(
             os.path.join(_TESTDATA_DIR, 'pressure_config.textpb')), 'r') as f:
-      config = text_format.Parse(
-          f.read(),
-          incompressible_structured_mesh_parameters_pb2
-          .IncompressibleNavierStokesParameters())
+      config = text_format.Parse(f.read(), parameters_pb2.SwirlLMParameters())
 
     FLAGS.cx = 1
     FLAGS.cy = 1
@@ -145,9 +142,7 @@ class PressureTest(tf.test.TestCase, parameterized.TestCase):
     FLAGS.halo_width = halo_width
     FLAGS.dt = 1e-2
     FLAGS.num_boundary_points = 0
-    params = (
-        incompressible_structured_mesh_config
-        .IncompressibleNavierStokesParameters(config))
+    params = parameters_lib.SwirlLMParameters(config)
     thermodynamics = thermodynamics_manager.thermodynamics_factory(params)
     monitor_lib = monitor.Monitor(params)
 

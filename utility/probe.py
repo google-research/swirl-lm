@@ -3,6 +3,7 @@
 from typing import Optional, Text
 
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
@@ -10,7 +11,6 @@ from swirl_lm.utility import types
 import tensorflow as tf
 from google3.research.simulation.tensorflow.fluid.framework import initializer
 from google3.research.simulation.tensorflow.fluid.framework.post_processing import data_processing
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 
 FlowFieldVal = types.FlowFieldVal
 FlowFieldMap = types.FlowFieldMap
@@ -20,11 +20,7 @@ _DTYPE = tf.float32
 class Probe(object):
   """A library for getting values from the flow field."""
 
-  def __init__(
-      self,
-      params: incompressible_structured_mesh_config
-      .IncompressibleNavierStokesParameters,
-  ):
+  def __init__(self, params: parameters_lib.SwirlLMParameters):
     """Initializes the probe library."""
     self.variable_names = params.probe.variable_name
 
@@ -144,7 +140,6 @@ class Probe(object):
     return probes
 
 
-def probe_factory(params: incompressible_structured_mesh_config
-                  .IncompressibleNavierStokesParameters,) -> Optional[Probe]:
+def probe_factory(params: parameters_lib.SwirlLMParameters) -> Optional[Probe]:
   """Creates an object of the probe library if requested."""
   return None if params.probe is None else Probe(params)

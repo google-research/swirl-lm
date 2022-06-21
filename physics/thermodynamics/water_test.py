@@ -1,15 +1,12 @@
 """Tests for google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh.physics.thermodynamics.water."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import parameters_pb2
 from swirl_lm.physics.thermodynamics import water
 from swirl_lm.utility import tf_test_util as test_util
 import tensorflow as tf
 
 from google3.net.proto2.python.public import text_format
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
 from google3.testing.pybase import parameterized
 
 
@@ -57,14 +54,9 @@ class WaterTest(tf.test.TestCase, parameterized.TestCase):
     suffix = R'}} '
     pbtxt = prefix + ref_state_pbtxt + suffix
 
-    config = text_format.Parse(
-        pbtxt,
-        incompressible_structured_mesh_parameters_pb2
-        .IncompressibleNavierStokesParameters())
+    config = text_format.Parse(pbtxt, parameters_pb2.SwirlLMParameters())
 
-    params = (
-        incompressible_structured_mesh_config
-        .IncompressibleNavierStokesParameters(config))
+    params = parameters_lib.SwirlLMParameters(config)
 
     return water.Water(params)
 
@@ -139,6 +131,52 @@ class WaterTest(tf.test.TestCase, parameterized.TestCase):
     rho_ref = self.evaluate(model.rho_ref(zz))
 
     self.assertAllClose(expected_rho_ref, rho_ref)
+
+  def testDryExner(self):
+    """Checks if the dry exner function is computed correctly."""
+    zz = [tf.constant(8000.0), tf.constant(0.0)]
+
+    model = self.set_up_model()
+
+    dry_exner = self.evaluate(model.dry_exner(zz))
+    expected_dry_exner = [0.743379, 1.0]
+    self.assertAllClose(expected_dry_exner, dry_exner)
+
+  def testDryExnerInverse(self):
+    """Checks if the dry inverse exner function is computed correctly."""
+    zz = [tf.constant(8000.0), tf.constant(0.0)]
+
+    model = self.set_up_model()
+
+    dry_exner_inv = self.evaluate(model.dry_exner_inverse(zz))
+    expected_dry_exner_inv = [1.34521, 1.0]
+    self.assertAllClose(expected_dry_exner_inv, dry_exner_inv)
+
+  def testMoistExner(self):
+    """Checks if the moist exner function is computed correctly."""
+    rho = [tf.constant(1.2), tf.constant(1.0)]
+    q_t = [tf.constant(0.01), tf.constant(0.05)]
+    temperature = [tf.constant(266.0), tf.constant(293.0)]
+    zz = [tf.constant(8000.0), tf.constant(0.0)]
+
+    model = self.set_up_model()
+
+    exner = self.evaluate(model.exner(rho, q_t, temperature, zz))
+    expected_exner = [0.743514, 1.0]
+    self.assertAllClose(expected_exner, exner)
+
+  def testMoistExnerInverse(self):
+    """Checks if the inverse moist exner function is computed correctly."""
+    rho = [tf.constant(1.2), tf.constant(1.0)]
+    q_t = [tf.constant(0.01), tf.constant(0.05)]
+    temperature = [tf.constant(266.0), tf.constant(293.0)]
+    zz = [tf.constant(8000.0), tf.constant(0.0)]
+
+    model = self.set_up_model()
+
+    exner_inv = self.evaluate(model.exner_inverse(rho, q_t, temperature, zz))
+    expected_exner_inv = [1.344964, 1.0]
+    self.assertAllClose(expected_exner_inv, exner_inv)
 
   def testAirTemperature(self):
     """Checks if air temperature is computed correctly."""

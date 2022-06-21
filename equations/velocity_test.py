@@ -4,6 +4,8 @@ import os
 
 from absl import flags
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import parameters_pb2
 from swirl_lm.equations import velocity
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.utility import components_debug
@@ -15,8 +17,6 @@ import tensorflow as tf
 from google3.net.proto2.python.public import text_format
 from google3.pyglib import gfile
 from google3.pyglib import resources
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
 from google3.testing.pybase import parameterized
 
 FLAGS = flags.FLAGS
@@ -104,10 +104,8 @@ class VelocityTest(tf.test.TestCase, parameterized.TestCase):
     """Initializes the `Velocity` object."""
     pbtxt = ReadProto('velocity_config.textpb')
     convection_pbtxt = 'convection_scheme: {}  '.format(scheme)
-    config = text_format.Parse(
-        convection_pbtxt + pbtxt,
-        incompressible_structured_mesh_parameters_pb2
-        .IncompressibleNavierStokesParameters())
+    config = text_format.Parse(convection_pbtxt + pbtxt,
+                               parameters_pb2.SwirlLMParameters())
     FLAGS.cx = 1
     FLAGS.cy = 1
     FLAGS.cz = 1
@@ -121,9 +119,7 @@ class VelocityTest(tf.test.TestCase, parameterized.TestCase):
     FLAGS.dt = 1e-3
     FLAGS.simulation_debug = dbg
     FLAGS.num_boundary_points = 0
-    params = (
-        incompressible_structured_mesh_config
-        .IncompressibleNavierStokesParameters(config))
+    params = parameters_lib.SwirlLMParameters(config)
 
     thermodynamics = thermodynamics_manager.thermodynamics_factory(params)
 
@@ -265,14 +261,9 @@ class VelocityTest(tf.test.TestCase, parameterized.TestCase):
   def testUpdateWallBCGeneratesCorrectVelocityBC(self):
     """Checks if wall boundary conditions for velocity is correctly updated."""
     pbtxt = ReadProto('velocity_config_mixed_wall.textpb')
-    config = text_format.Parse(
-        pbtxt,
-        incompressible_structured_mesh_parameters_pb2
-        .IncompressibleNavierStokesParameters())
+    config = text_format.Parse(pbtxt, parameters_pb2.SwirlLMParameters())
     FLAGS.halo_width = 2
-    params = (
-        incompressible_structured_mesh_config
-        .IncompressibleNavierStokesParameters(config))
+    params = parameters_lib.SwirlLMParameters(config)
 
     thermodynamics = thermodynamics_manager.thermodynamics_factory(params)
 

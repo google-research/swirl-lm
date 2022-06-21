@@ -48,6 +48,7 @@ import functools
 from typing import Optional
 
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.numerics import time_integration
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.utility import composite_types
@@ -55,7 +56,7 @@ from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import types
 import tensorflow as tf
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
+
 
 FlowFieldVal = types.FlowFieldVal
 FlowFieldMap = types.FlowFieldMap
@@ -157,8 +158,8 @@ def _reaction_rate(
 
   def lambda_of():
     """Computes 𝛌of = ϱf ϱo / (ϱf / Nf + ϱo / No)2."""
-    return tf.math.divide_no_nan(rho_f * rho_g * y_o,
-                                 (rho_f / _N_F + rho_g * y_o / _N_O)**2)
+    return tf.math.divide(rho_f * rho_g * y_o,
+                          (rho_f / _N_F + rho_g * y_o / _N_O)**2)
 
   rho_f = _bound_scalar(rho_f, minval=0.0)
   y_o = _bound_scalar(y_o, minval=0.0, maxval=1.0)
@@ -258,10 +259,10 @@ def _theta(
     return [0.5 * tf.ones_like(rho_f_i, dtype=_TF_DTYPE) for rho_f_i in rho_f]
 
   rho_f_0 = rho_f_init
-  return [
-      1.0 - tf.math.divide_no_nan(rho_f_i, rho_f_0_i)
-      for rho_f_i, rho_f_0_i in zip(rho_f, rho_f_0)
-  ]
+  return tf.nest.map_structure(
+      lambda rho_f_i, rho_f_0_i: tf.where(  # pylint: disable=g-long-lambda
+          tf.math.greater(rho_f_0_i, 0.0), 1.0 - tf.math.divide(
+              rho_f_i, rho_f_0_i), tf.ones_like(rho_f_i)), rho_f, rho_f_0)
 
 
 def _localize_by_fuel(
@@ -306,11 +307,7 @@ def _compute_mid_state(
 class Wood(object):
   """A library of wood combustion."""
 
-  def __init__(
-      self,
-      config: incompressible_structured_mesh_config
-      .IncompressibleNavierStokesParameters,
-  ):
+  def __init__(self, config: parameters_lib.SwirlLMParameters):
     """Initializes the wood combustion library.
 
     Args:
@@ -434,7 +431,7 @@ class Wood(object):
     if rho_m is not None:
       cp += _CP_W * _bound_scalar(rho_m, minval=0.0)
 
-    return tf.math.divide_no_nan(rhs, cp)
+    return tf.math.divide(rhs, cp)
 
   def _get_temperature_from_states(self, states):
     """Retrieves temperature from a library of states.
@@ -533,14 +530,11 @@ class Wood(object):
             for t_s_i, t_g_i, theta_val_i, f_f_i, in zip(
                 t_s, t_g, theta_val, f_f)
         ]
-        # pylint: disable=g-complex-comprehension
-        rhs_t_g = [
-            tf.math.divide_no_nan(
-                self._src_t_g(t_s_i, t_g_i, theta_val_i, f_f_i, rho_f_i), rho_i)
-            for t_s_i, t_g_i, theta_val_i, f_f_i, rho_f_i, rho_i in zip(
-                t_s, t_g, theta_val, f_f, rho_f, rho)
-        ]
-        # pylint: enable=g-complex-comprehension
+        rhs_t_g = tf.nest.map_structure(
+            lambda t_s_i, t_g_i, theta_val_i, f_f_i, rho_f_i, rho_i: tf.math.  # pylint: disable=g-long-lambda
+            divide(
+                self._src_t_g(t_s_i, t_g_i, theta_val_i, f_f_i, rho_f_i), rho_i
+            ), t_s, t_g, theta_val, f_f, rho_f, rho)
         rhs_y_o = [
             _src_oxidizer(f_f_i) / rho_i for f_f_i, rho_i in zip(f_f, rho)
         ]
@@ -807,10 +801,7 @@ class Wood(object):
     return additional_states_update_fn
 
 
-def wood_combustion_factory(
-    config: incompressible_structured_mesh_config
-    .IncompressibleNavierStokesParameters
-) -> Wood:
+def wood_combustion_factory(config: parameters_lib.SwirlLMParameters) -> Wood:
   """Constructs an object of the wood combustion model.
 
   Args:

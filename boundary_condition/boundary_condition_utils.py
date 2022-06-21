@@ -5,10 +5,10 @@ import enum
 from typing import Dict, List, Optional, Sequence, Text
 
 from swirl_lm.communication import halo_exchange
+from swirl_lm.utility import common_ops
 from swirl_lm.utility import types
 
 from google3.research.simulation.tensorflow.fluid.framework import util
-from google3.research.simulation.tensorflow.fluid.util import constants
 
 BoundaryConditionDict = Dict[Text,
                              Optional[halo_exchange.BoundaryConditionsSpec]]
@@ -36,10 +36,15 @@ def find_bc_type(
   if bc['u'] is None or bc['v'] is None or bc['w'] is None:
     return [[BoundaryType.PERIODIC,] * 2,] * 3
 
-  def is_non_slip_wall(dim_type, face_type):
+  def velocity_var(dim: int):
+    """The name of the velocity variable in the given dimension."""
+    if dim not in range(3):
+      raise ValueError(
+          'Dimension has to be one of 0, 1, and 2. Given {}.'.format(dim))
+    return ('u', 'v', 'w')[dim]
+
+  def is_non_slip_wall(dim: int, face: int):
     """Checks if the boundary is a non-slip wall."""
-    dim = dim_type.value
-    face = face_type.value
     return ((bc['u'][dim][face][0] == halo_exchange.BCType.DIRICHLET and
              bc['u'][dim][face][1] == 0.0) and
             (bc['v'][dim][face][0] == halo_exchange.BCType.DIRICHLET and
@@ -47,20 +52,9 @@ def find_bc_type(
             (bc['w'][dim][face][0] == halo_exchange.BCType.DIRICHLET and
              bc['w'][dim][face][1] == 0.0))
 
-  def is_slip_wall(dim_type, face_type):
+  def is_slip_wall(dim: int, face: int):
     """Checks if the boundary is a free-slip wall."""
-    dim = dim_type.value
-    face = face_type.value
-
-    if dim == 0:
-      wall_normal_velocity = 'u'
-    elif dim == 1:
-      wall_normal_velocity = 'v'
-    elif dim == 2:
-      wall_normal_velocity = 'w'
-    else:
-      raise ValueError(
-          'Dimension has to be one of 0, 1, and 2. Given {}.'.format(dim))
+    wall_normal_velocity = velocity_var(dim)
 
     # The velocity component normal to the wall should be 0 to have no
     # penetration.
@@ -78,20 +72,9 @@ def find_bc_type(
 
     return True
 
-  def is_shear_wall(dim_type, face_type):
+  def is_shear_wall(dim: int, face: int):
     """Checks if the boundary is a shear wall."""
-    dim = dim_type.value
-    face = face_type.value
-
-    if dim == 0:
-      wall_normal_velocity = 'u'
-    elif dim == 1:
-      wall_normal_velocity = 'v'
-    elif dim == 2:
-      wall_normal_velocity = 'w'
-    else:
-      raise ValueError(
-          'Dimension has to be one of 0, 1, and 2. Given {}.'.format(dim))
+    wall_normal_velocity = velocity_var(dim)
 
     # The velocity component normal to the wall should be 0 to have no
     # penetration.
@@ -114,17 +97,9 @@ def find_bc_type(
 
     return non_zero_shear
 
-  def is_inflow(dim_type, face_type):
+  def is_inflow(dim: int, face: int):
     """Checks if the boundary is an inflow."""
-    dim = dim_type.value
-    face = face_type.value
-
-    if dim_type == constants.Dim.X:
-      mainstream = 'u'
-    elif dim_type == constants.Dim.Y:
-      mainstream = 'v'
-    elif dim_type == constants.Dim.Z:
-      mainstream = 'w'
+    mainstream = velocity_var(dim)
 
     for velocity in ['u', 'v', 'w']:
       bc_local = bc[velocity][dim][face]
@@ -141,10 +116,8 @@ def find_bc_type(
 
     return True
 
-  def is_outflow(dim_type, face_type):
+  def is_outflow(dim: int, face: int):
     """Checks if the boundary is an outflow."""
-    dim = dim_type.value
-    face = face_type.value
 
     # Here we only consider the case in which the outflow is specified by an
     # all-Neumann boundary condition.
@@ -152,26 +125,24 @@ def find_bc_type(
             bc['v'][dim][face][0] == halo_exchange.BCType.NEUMANN and
             bc['w'][dim][face][0] == halo_exchange.BCType.NEUMANN)
 
-  for dim_type in constants.Dim:
-    i = dim_type.value
-    if periodic_dims[i]:
-      bc_type[i] = [BoundaryType.PERIODIC, BoundaryType.PERIODIC]
+  for dim in range(3):
+    if periodic_dims[dim]:
+      bc_type[dim] = [BoundaryType.PERIODIC, BoundaryType.PERIODIC]
       continue
 
-    for face_type in constants.Face:
-      j = face_type.value
-      if is_non_slip_wall(dim_type, face_type):
-        bc_type[i][j] = BoundaryType.NON_SLIP_WALL
-      elif is_slip_wall(dim_type, face_type):
-        bc_type[i][j] = BoundaryType.SLIP_WALL
-      elif is_shear_wall(dim_type, face_type):
-        bc_type[i][j] = BoundaryType.SHEAR_WALL
-      elif is_inflow(dim_type, face_type):
-        bc_type[i][j] = BoundaryType.INFLOW
-      elif is_outflow(dim_type, face_type):
-        bc_type[i][j] = BoundaryType.OUTFLOW
+    for face in range(2):
+      if is_non_slip_wall(dim, face):
+        bc_type[dim][face] = BoundaryType.NON_SLIP_WALL
+      elif is_slip_wall(dim, face):
+        bc_type[dim][face] = BoundaryType.SLIP_WALL
+      elif is_shear_wall(dim, face):
+        bc_type[dim][face] = BoundaryType.SHEAR_WALL
+      elif is_inflow(dim, face):
+        bc_type[dim][face] = BoundaryType.INFLOW
+      elif is_outflow(dim, face):
+        bc_type[dim][face] = BoundaryType.OUTFLOW
       else:
-        bc_type[i][j] = BoundaryType.UNKNOWN
+        bc_type[dim][face] = BoundaryType.UNKNOWN
 
   return bc_type
 
@@ -230,7 +201,8 @@ def dirichlet_ghost_cell_quick(
             bc_type[dim][face] == BoundaryType.INFLOW):
           bc_values_new[dim][face] = bc_values[dim][face]
         else:
-          fluid_cell = util.get_slice(states[varname], dim, face, halo_width)[0]
+          fluid_cell = common_ops.get_face(states[varname], dim, face,
+                                           halo_width)[0]
           if isinstance(bc_values[dim][face][1], float):
             boundary_val = bc_values[dim][face][1]
             boundary_cell = util.constants_like(fluid_cell, boundary_val)

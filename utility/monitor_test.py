@@ -1,6 +1,8 @@
 """Tests for google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh.utilities.monitor."""
 
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import parameters_pb2
 from swirl_lm.utility import monitor
 from swirl_lm.utility import monitor_pb2
 import tensorflow as tf
@@ -8,8 +10,6 @@ import tensorflow as tf
 from google3.net.proto2.python.public import text_format
 from google3.research.simulation.tensorflow.fluid.framework import test_util
 from google3.research.simulation.tensorflow.fluid.framework.tpu_runner import TpuRunner
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
 from google3.testing.pybase import parameterized
 
 _NP_DTYPE = np.float32
@@ -68,15 +68,12 @@ class MonitorTest(tf.test.TestCase, parameterized.TestCase):
             }
           }
         }
-        """, incompressible_structured_mesh_parameters_pb2
-        .IncompressibleNavierStokesParameters())
+        """, parameters_pb2.SwirlLMParameters())
     config.num_sub_iterations = MonitorTest._NUM_SUBITER
     if time_averaging is not None:
       config.monitor_spec.time_averaging.MergeFrom(time_averaging)
 
-    params = (
-        incompressible_structured_mesh_config
-        .IncompressibleNavierStokesParameters(config))
+    params = parameters_lib.SwirlLMParameters(config)
 
     params.halo_width = 2
     params.periodic_dims = periodic_dims

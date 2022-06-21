@@ -556,6 +556,34 @@ class ConvectionTest(tf.test.TestCase, parameterized.TestCase):
     else:
       self.assertEqual(convection_val[4][4, 4], 37376.0)
 
+  @parameterized.parameters(DIRECTIONS)
+  @test_util.run_in_graph_and_eager_modes
+  def testConvectionWENOProducesCorrectionConvectionTerm(self, dim):
+    """Tests convection term at (4, 4, 4) is correct."""
+    state = tf.unstack(
+        tf.constant(np.reshape(np.arange(512), (8, 8, 8)), dtype=tf.float32))
+    pressure = tf.unstack(
+        tf.constant(np.reshape(np.arange(512), (8, 8, 8)), dtype=tf.float32))
+    rhou = tf.unstack(
+        tf.constant(np.reshape(np.arange(512), (8, 8, 8)), dtype=tf.float32))
+    dx = 1.0
+
+    replica_id = tf.constant(0)
+    replicas = np.array([[[0]]])
+
+    conv_terms = convection.convection_weno(
+        get_kernel_fn.ApplyKernelConvOp(4), replica_id, replicas, state, rhou,
+        pressure, dx, dim)
+
+    convection_val = self.evaluate(conv_terms)
+
+    if dim == 0:
+      self.assertAlmostEqual(convection_val[4][4, 4], 4672.0, 1)
+    elif dim == 1:
+      self.assertAlmostEqual(convection_val[4][4, 4], 584.0, 1)
+    else:
+      self.assertAlmostEqual(convection_val[4][4, 4], 37376.0, 1)
+
   @parameterized.parameters(*zip(MESH_SIZES, DIRECTIONS))
   @test_util.run_in_graph_and_eager_modes
   def testCentralDifferenceGivesCorrectFirstOrderDerivative(

@@ -5,6 +5,7 @@ from typing import Callable, Dict, Optional, Text
 
 from absl import logging
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.boundary_condition import immersed_boundary_method_pb2
 from swirl_lm.communication import halo_exchange
 from swirl_lm.utility import common_ops
@@ -13,7 +14,6 @@ from swirl_lm.utility import types
 import tensorflow as tf
 
 from google3.research.simulation.tensorflow.fluid.framework import initializer
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 
 FlowFieldVal = types.FlowFieldVal
 FlowFieldMap = types.FlowFieldMap
@@ -197,8 +197,7 @@ def get_fluid_solid_interface_value_z(
 class ImmersedBoundaryMethod(object):
   """A library of the immersed boundary method."""
 
-  def __init__(self, params: incompressible_structured_mesh_config
-               .IncompressibleNavierStokesParameters):
+  def __init__(self, params: parameters_lib.SwirlLMParameters):
     """Initializes the immersed boundary method library."""
     self._replica_dims = (0, 1, 2)
     self._halo_dims = (0, 1, 2)
@@ -688,8 +687,7 @@ class ImmersedBoundaryMethod(object):
 
 
 def immersed_boundary_method_factory(
-    params: incompressible_structured_mesh_config
-    .IncompressibleNavierStokesParameters
+    params: parameters_lib.SwirlLMParameters,
 ) -> Optional[ImmersedBoundaryMethod]:
   """Constructs an `ImmersedBoudnaryMethod` object.
 

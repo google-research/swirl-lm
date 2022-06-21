@@ -12,6 +12,8 @@ enum ConvectionScheme {
   CONVECTION_SCHEME_UPWIND_1 = 1;
   // The second order upwinding QUICK scheme.
   CONVECTION_SCHEME_QUICK = 2;
+  // The WENO scheme. Default order 5.
+  CONVECTION_SCHEME_WENO = 5;
   // The second order central differencing shceme.
   CONVECTION_SCHEME_CENTRAL_2 = 3;
   // The fourth order central differencing shceme.

@@ -4,6 +4,8 @@ import itertools
 import os
 
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import parameters_pb2
 from swirl_lm.numerics import diffusion
 from swirl_lm.numerics import numerics_pb2
 from swirl_lm.utility import get_kernel_fn
@@ -11,8 +13,6 @@ import tensorflow as tf
 
 from google3.net.proto2.python.public import text_format
 from google3.pyglib import gfile
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_parameters_pb2
 from google3.testing.pybase import parameterized
 
 _NP_DTYPE = np.float32
@@ -110,13 +110,9 @@ class DiffusionTest(tf.test.TestCase, parameterized.TestCase):
 
   def _set_up_params(self, pbtxt=''):
     """Creates a simulation configuration handler."""
-    proto = text_format.Parse(
-        pbtxt,
-        incompressible_structured_mesh_parameters_pb2
-        .IncompressibleNavierStokesParameters())
+    proto = text_format.Parse(pbtxt, parameters_pb2.SwirlLMParameters())
 
-    return (incompressible_structured_mesh_config
-            .IncompressibleNavierStokesParameters(proto))
+    return parameters_lib.SwirlLMParameters(proto)
 
   @parameterized.named_parameters(
       ('Central5', numerics_pb2.DIFFUSION_SCHEME_CENTRAL_5),

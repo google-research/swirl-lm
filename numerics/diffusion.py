@@ -28,6 +28,7 @@ direction is 3.
 from typing import Callable, Dict, List, Optional, Sequence, Text, Tuple
 
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.boundary_condition import monin_obukhov_similarity_theory
 from swirl_lm.equations import common
 from swirl_lm.equations import utils as eq_utils
@@ -38,15 +39,12 @@ from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import types
 import tensorflow as tf
 
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-
 FlowFieldVal = types.FlowFieldVal
 FlowFieldMap = types.FlowFieldMap
 
 
 def diffusion_scalar(
-    params: incompressible_structured_mesh_config
-    .IncompressibleNavierStokesParameters,
+    params: parameters_lib.SwirlLMParameters,
 ) -> Callable[..., List[FlowFieldVal]]:
   """Generates a function that computes the scalar diffusion term.
 
@@ -312,8 +310,7 @@ def _diffusion_momentum_stencil_3(
 
 
 def diffusion_momentum(
-    params: incompressible_structured_mesh_config
-    .IncompressibleNavierStokesParameters,
+    params: parameters_lib.SwirlLMParameters,
 ) -> Callable[..., Dict[Text, Sequence[FlowFieldVal]]]:
   """Generates a function that computes the scalar diffusion term.
 

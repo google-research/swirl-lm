@@ -1,3 +1,4 @@
+load("//devtools/python/blaze:strict.bzl", "py_strict_test")
 load("//devtools/python/blaze:pytype.bzl", "pytype_strict_library")
 load("//third_party/py/swirl_lm/utility:build_defs.bzl", "tf1_and_tf2_test")
 
@@ -88,10 +89,10 @@ tf1_and_tf2_test(
         ":diffusion",
         "//net/proto2/python/public",
         "//pyglib:gfile",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_parameters_py_pb2",
         "//testing/pybase:parameterized",
         "//third_party/py/numpy",
+        "//third_party/py/swirl_lm/base:parameters",
+        "//third_party/py/swirl_lm/base:parameters_py_pb2",
         "//third_party/py/swirl_lm/numerics:numerics_proto_py_pb2",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
         "//third_party/py/tensorflow",
@@ -134,10 +135,10 @@ tf1_and_tf2_test(
         "//net/proto2/python/public",
         "//pyglib:gfile",
         "//pyglib:resources",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_parameters_py_pb2",
         "//testing/pybase:parameterized",
         "//third_party/py/numpy",
+        "//third_party/py/swirl_lm/base:parameters",
+        "//third_party/py/swirl_lm/base:parameters_py_pb2",
         "//third_party/py/swirl_lm/physics/thermodynamics:water",
         "//third_party/py/swirl_lm/utility:tf_test_util",
         "//third_party/py/tensorflow",
@@ -155,10 +156,11 @@ pytype_strict_library(
         "//third_party/py/swirl_lm/numerics/tf1:__pkg__",
     ],
     deps = [
+        ":interpolation",
+        ":numerics_proto_py_pb2",
         "//third_party/py/numpy",
         "//third_party/py/swirl_lm/boundary_condition:boundary_condition_utils",
         "//third_party/py/swirl_lm/equations:common",
-        "//third_party/py/swirl_lm/numerics:numerics_proto_py_pb2",
         "//third_party/py/swirl_lm/utility:common_ops",
         "//third_party/py/swirl_lm/utility:get_kernel_fn",
         "//third_party/py/swirl_lm/utility:types",
@@ -175,8 +177,8 @@ pytype_strict_library(
         "//third_party/py/swirl_lm/numerics/tf1:__pkg__",
     ],
     deps = [
-        "//research/simulation/tensorflow/fluid/models/incompressible_structured_mesh:incompressible_structured_mesh_config",
         "//third_party/py/numpy",
+        "//third_party/py/swirl_lm/base:parameters",
         "//third_party/py/swirl_lm/boundary_condition:monin_obukhov_similarity_theory",
         "//third_party/py/swirl_lm/equations:common",
         "//third_party/py/swirl_lm/equations:utils",
@@ -233,6 +235,16 @@ pytype_strict_library(
     ],
 )
 
+pytype_strict_library(
+    name = "interpolation",
+    srcs = ["interpolation.py"],
+    deps = [
+        "//third_party/py/swirl_lm/utility:get_kernel_fn",
+        "//third_party/py/swirl_lm/utility:types",
+        "//third_party/py/tensorflow:tensorflow_no_contrib",
+    ],
+)
+
 tf1_and_tf2_test(
     name = "time_integration_test",
     srcs = ["time_integration_test.py"],
@@ -244,5 +256,16 @@ tf1_and_tf2_test(
         "//third_party/py/numpy",
         "//third_party/py/swirl_lm/utility:tf_test_util",
         "//third_party/py/tensorflow",
+    ],
+)
+
+py_strict_test(
+    name = "interpolation_test",
+    srcs = ["interpolation_test.py"],
+    deps = [
+        ":interpolation",
+        "//third_party/py/absl/testing:parameterized",
+        "//third_party/py/numpy",
+        "//third_party/py/tensorflow:tensorflow_no_contrib",
     ],
 )

@@ -1,10 +1,9 @@
 """A library of modeling thermodynamic quantities with linear mixing."""
 
+from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.physics.thermodynamics import thermodynamics_generic
 from swirl_lm.physics.thermodynamics import thermodynamics_utils
 import tensorflow as tf
-
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
 
 TF_DTYPE = thermodynamics_generic.TF_DTYPE
 
@@ -18,11 +17,7 @@ NON_SPECIES = ['T']
 class LinearMixing(thermodynamics_generic.ThermodynamicModel):
   """A library of linear mixing rule."""
 
-  def __init__(
-      self,
-      params: incompressible_structured_mesh_config
-      .IncompressibleNavierStokesParameters,
-  ):
+  def __init__(self, params: parameters_lib.SwirlLMParameters):
     """Initialize components required by the linear mixing rule."""
     super(LinearMixing, self).__init__(params)
 

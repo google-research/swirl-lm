@@ -28,6 +28,8 @@ import functools
 from typing import Mapping, Text, Tuple
 
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import physical_variable_keys_manager
 from swirl_lm.boundary_condition import monin_obukhov_similarity_theory_pb2
 from swirl_lm.equations import common
 from swirl_lm.numerics import root_finder
@@ -38,9 +40,6 @@ from swirl_lm.utility import types
 import tensorflow as tf
 
 from google3.research.simulation.tensorflow.fluid.framework import initializer
-from google3.research.simulation.tensorflow.fluid.framework import util
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import incompressible_structured_mesh_config
-from google3.research.simulation.tensorflow.fluid.models.incompressible_structured_mesh import physical_variable_keys_manager
 
 # The type of a state variable.
 FlowFieldVal = types.FlowFieldVal
@@ -398,13 +397,13 @@ class MoninObukhovSimilarityTheory(object):
     # Get the slice of the first fluid layer above the ground for the ground
     # tangential velocity and potential temperature. Assume the ground is always
     # on the low-index end in a dimension.
-    u1 = util.get_slice(states[velocity_keys[0]], self.vertical_dim, 0,
-                        self.halo_width)[0]
-    u2 = util.get_slice(states[velocity_keys[1]], self.vertical_dim, 0,
-                        self.halo_width)[0]
+    u1 = common_ops.get_face(states[velocity_keys[0]], self.vertical_dim, 0,
+                             self.halo_width)[0]
+    u2 = common_ops.get_face(states[velocity_keys[1]], self.vertical_dim, 0,
+                             self.halo_width)[0]
     theta = self._maybe_regularize_potential_temperature(
-        util.get_slice(states['theta'], self.vertical_dim, 0,
-                       self.halo_width)[0])
+        common_ops.get_face(states['theta'], self.vertical_dim, 0,
+                            self.halo_width)[0])
 
     # Because the wall is at the mid-point face between the first fluid layer
     # and the halo layers, the height of the first fluid layer above the ground
@@ -468,19 +467,19 @@ class MoninObukhovSimilarityTheory(object):
     # Get the slice of the first fluid layer above the ground for the ground
     # tangential velocity and potential temperature. Assume the ground is always
     # on the low-index end in a dimension.
-    u1 = util.get_slice(states[velocity_keys[0]], self.vertical_dim, 0,
-                        self.halo_width)[0]
-    u2 = util.get_slice(states[velocity_keys[1]], self.vertical_dim, 0,
-                        self.halo_width)[0]
+    u1 = common_ops.get_face(states[velocity_keys[0]], self.vertical_dim, 0,
+                             self.halo_width)[0]
+    u2 = common_ops.get_face(states[velocity_keys[1]], self.vertical_dim, 0,
+                             self.halo_width)[0]
     theta = self._maybe_regularize_potential_temperature(
-        util.get_slice(states['theta'], self.vertical_dim, 0,
-                       self.halo_width)[0])
-    rho = util.get_slice(states['rho'], self.vertical_dim, 0,
-                         self.halo_width)[0]
-    phi_zm = util.get_slice(states['phi'], self.vertical_dim, 0,
-                            self.halo_width)[0]
-    phi_z0 = util.get_slice(states['phi'], self.vertical_dim, 0,
-                            self.halo_width - 1)[0]
+        common_ops.get_face(states['theta'], self.vertical_dim, 0,
+                            self.halo_width)[0])
+    rho = common_ops.get_face(states['rho'], self.vertical_dim, 0,
+                              self.halo_width)[0]
+    phi_zm = common_ops.get_face(states['phi'], self.vertical_dim, 0,
+                                 self.halo_width)[0]
+    phi_z0 = common_ops.get_face(states['phi'], self.vertical_dim, 0,
+                                 self.halo_width - 1)[0]
 
     # Because the wall is at the mid-point face between the first fluid layer
     # and the halo layers, the height of the first fluid layer above the ground
@@ -726,7 +725,7 @@ class MoninObukhovSimilarityTheory(object):
       idx: int,
   ) -> FlowFieldVal:
     """Returns a horizontal slice of `f` at level `idx`."""
-    slices = util.get_slice(f, self.vertical_dim, 0, idx)
+    slices = common_ops.get_face(f, self.vertical_dim, 0, idx)
     return slices if self.vertical_dim == 2 else slices[0]
 
   def _expand_state(
@@ -1044,8 +1043,7 @@ class MoninObukhovSimilarityTheory(object):
 
 
 def monin_obukhov_similarity_theory_factory(
-    params: incompressible_structured_mesh_config
-    .IncompressibleNavierStokesParameters,
+    params: parameters_lib.SwirlLMParameters,
 ) -> MoninObukhovSimilarityTheory:
   """Generaets an object of `MoninObukhovSimilarityTheory`.
 

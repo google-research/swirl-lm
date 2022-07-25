@@ -1,0 +1,137 @@
+# proto-file: third_party/py/swirl_lm/base/parameters.proto
+# proto-message: SwirlLMParameters
+
+periodic {
+  dim_0: false
+  dim_1: false
+  dim_2: false
+}
+time_integration_scheme: TIME_SCHEME_CN_EXPLICIT_ITERATION
+kinematic_viscosity: 1e-5
+density: 1.0
+thermodynamics {
+  solver_mode: ANELASTIC
+  water {
+    const_theta_reference_state {
+      theta: 295.0
+    }
+  }
+}
+gravity_direction { dim_0: 0.0 dim_1: 0.0 dim_2: -1.0 }
+boundary_conditions {
+  name: "u"
+  boundary_info {
+    dim: 0
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 1.0
+  }
+  boundary_info {
+    dim: 0
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: 1.0
+  }
+  boundary_info {
+    dim: 1
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 2.0
+  }
+  boundary_info {
+    dim: 1
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: 2.0
+  }
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 3.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: 3.0
+  }
+}
+boundary_conditions {
+  name: "v"
+  boundary_info {
+    dim: 0
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: -1.0
+  }
+  boundary_info {
+    dim: 0
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: -1.0
+  }
+  boundary_info {
+    dim: 1
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: -2.0
+  }
+  boundary_info {
+    dim: 1
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: -2.0
+  }
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: -3.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: -3.0
+  }
+}
+boundary_conditions {
+  name: "w"
+  boundary_info {
+    dim: 0
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: -2.0
+  }
+  boundary_info {
+    dim: 0
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: -2.0
+  }
+  boundary_info {
+    dim: 1
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 3.0
+  }
+  boundary_info {
+    dim: 1
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: 3.0
+  }
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: -1.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: -1.0
+  }
+}

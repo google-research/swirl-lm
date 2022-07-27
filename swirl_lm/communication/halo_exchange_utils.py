@@ -60,6 +60,7 @@ class BCType(enum.Enum):
   systematically.
   """
   NEUMANN = 1  # Neumann boundary condition.
+  NEUMANN_2 = 5  # Neumann boundary condition estimated with 2nd order scheme.
   DIRICHLET = 2  # Dirichlet boundary condition.
   NO_TOUCH = 3  # Preserves the boundary at its current value.
   ADDITIVE = 4  # Adds the given values at the boundary.

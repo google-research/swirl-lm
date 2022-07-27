@@ -33,6 +33,7 @@ from typing import Optional, Sequence, Union
 import numpy as np
 from six.moves import range
 from swirl_lm.communication import halo_exchange_utils
+from swirl_lm.utility import common_ops
 from swirl_lm.utility import types
 import tensorflow as tf
 
@@ -43,6 +44,37 @@ BoundaryConditionsSpec = halo_exchange_utils.BoundaryConditionsSpec
 FlowFieldVal = types.FlowFieldVal
 SideType = halo_exchange_utils.SideType
 _DTYPE = types.TF_DTYPE
+
+
+def _get_homogeneous_neumann_bc_order2(
+    f: types.FlowFieldVal,
+    dim: int,
+    face: int,
+    plane: int,
+) -> types.FlowFieldVal:
+  """Gets the 2D plane for homogeneous Neumann BC with second order difference.
+
+  Args:
+    f: A 3D tensor to which the homogeneous Neumann BC is applied.
+    dim: The dimension to apply the BC. Has to be one of 0, 1, or 2.
+    face: A binary indicator for the location of the boundary, with 0 and 1
+      being the lower and higher ends of the domain, respectively.
+    plane: The index of the plane to apply the BC. If `face` is 0, it counts
+      from the lower end of the domain; if `face` is 1, it counts from the
+      higher end of the domain.
+
+  Returns:
+    A 2D plane that corresponds to the homogeneous Neumann BC that is computed
+    with the second-order one-sided finite difference scheme.
+  """
+  # Define the function that computes the value of plane so that the gradient at
+  # this plane is 0.
+  bc_fn = lambda f_1, f_2: 4.0 / 3.0 * f_1 - f_2 / 3.0
+
+  f_near = common_ops.get_face(f, dim, face, plane + 1)[0]
+  f_far = common_ops.get_face(f, dim, face, plane + 2)[0]
+
+  return tf.nest.map_structure(bc_fn, f_near, f_far)
 
 
 def _do_exchange(replicas, replica_dim, high_halo_for_predecessor,
@@ -139,7 +171,7 @@ def _replace_halo(plane, bc, dim, side=None):
   def additive_value():
     return plane + bc_value
 
-  if bc_type == BCType.NEUMANN:
+  if bc_type in (BCType.NEUMANN, BCType.NEUMANN_2):
     return neumann_value()
   elif bc_type == BCType.DIRICHLET:
     return dirichlet_value()
@@ -276,7 +308,9 @@ def _inplace_halo_exchange_1d(z_list, dim, replica_id, replicas, replica_dim,
       elif bc_low[0] == BCType.ADDITIVE:
         return _replace_halo(low_plane_for_outermost_slice, bc_low, dim,
                              SideType.LOW)
-      else:
+      elif bc_low[0] == BCType.NEUMANN_2:
+        return _replace_halo(low_plane_for_neumann_2, bc_low, dim, SideType.LOW)
+      else:  # bc_low[0] == BCType.NEUMANN
         return _replace_halo(low_plane_for_neumann, bc_low, dim, SideType.LOW)
 
     def high_from_bc():
@@ -285,7 +319,10 @@ def _inplace_halo_exchange_1d(z_list, dim, replica_id, replicas, replica_dim,
       elif bc_high[0] == BCType.ADDITIVE:
         return _replace_halo(high_plane_for_outermost_slice, bc_high, dim,
                              SideType.HIGH)
-      else:
+      elif bc_high[0] == BCType.NEUMANN_2:
+        return _replace_halo(high_plane_for_neumann_2, bc_high, dim,
+                             SideType.HIGH)
+      else:  # bc_low[0] == BCType.NEUMANN
         return _replace_halo(high_plane_for_neumann, bc_high, dim,
                              SideType.HIGH)
 
@@ -308,6 +345,11 @@ def _inplace_halo_exchange_1d(z_list, dim, replica_id, replicas, replica_dim,
             pred=is_last,
             true_fn=high_from_bc,
             false_fn=lambda: high_halo_from_neighbor)
+
+  low_plane_for_neumann_2 = tf.concat(
+      _get_homogeneous_neumann_bc_order2(z_list, dim, 0, plane), dim)
+  high_plane_for_neumann_2 = tf.concat(
+      _get_homogeneous_neumann_bc_order2(z_list, dim, 1, plane), dim)
 
   plane_to_exchange = 2 * width - plane - 1
   if dim == 2:
@@ -547,12 +589,11 @@ def _validate_boundary_condition(bc, z_list, dim, width):
 
   bc_type, bc_value = bc
 
-  if bc_type not in (BCType.NEUMANN, BCType.DIRICHLET, BCType.NO_TOUCH,
-                     BCType.ADDITIVE):
-    raise ValueError("The first element of a boundary condition must be "
-                     "BCType.NEUMANN, BCType.DIRICHLET, BCType.NO_TOUCH, or "
-                     "or BCType.ADDITIVE. Got {} (type {}).".format(
-                         bc_type, type(bc_type)))
+  bc_types = list(BCType)
+  if bc_type not in bc_types:
+    raise ValueError("The first element of a boundary condition must be one of "
+                     "{}. Got {} (type {}).".format(bc_types, bc_type,
+                                                    type(bc_type)))
 
   # bc_value must be a float or a sequence.
   if isinstance(bc_value, float):

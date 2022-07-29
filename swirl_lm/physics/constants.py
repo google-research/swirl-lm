@@ -30,4 +30,4 @@ GAMMA = 1.4
 CP = GAMMA * R_D / (GAMMA - 1.0)
 
 # The constant volume heat capacity of dry air, in units of J/kg/K.
-CP = CP - R_D
+CV = CP - R_D

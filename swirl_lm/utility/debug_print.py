@@ -23,7 +23,10 @@ import sys
 from typing import Any, Optional
 
 from absl import flags
+from swirl_lm.utility import types
 import tensorflow as tf
+
+FlowFieldVal = types.FlowFieldVal
 
 
 class LogLevel(enum.Enum):
@@ -42,11 +45,30 @@ _LOG_LEVEL = flags.DEFINE_enum(
     'at or above the set severity level will be enabled.')
 
 
+def _log_enabled(log_flag_value, log_level):
+  if log_flag_value is None:
+    return False
+  log_flag_level = LogLevel[log_flag_value].value
+  return log_level.value >= log_flag_level
+
+
+def _get_log_msg(log_level, message, stack_info=True):
+  frame = inspect.stack()[2]
+  filename = frame.filename
+  line = frame.lineno
+  log_level_name = log_level.name
+  message = (f'TPU debug logging level: {log_level_name}. File: {filename} '
+             f'at line: {line}, message: {message}') if stack_info else (
+                 f'TPU debug: {message}')
+  return message
+
+
 def log(
-    t: tf.Tensor,
-    message: Optional[str] = None,
+    t: FlowFieldVal,
+    message: Optional[str] = '',
     log_level: LogLevel = LogLevel.INFO,
     summarize: Optional[int] = None,
+    stack_info: bool = True,
 ) -> Any:
   """Logging function for debug information that works on TPU.
 
@@ -58,6 +80,7 @@ def log(
       tensor in each dimension will be printed recursively. When specified to be
       `n`, then the first `n` and the last `n` elements will be printed. If set
       to `-1`, then the full tensor (all elements) will be printed.
+    stack_info: Whether to include stack information in the log message.
 
   Returns:
     The same input tensor `t` wired through tf.print (wrapped inside the outside
@@ -65,28 +88,62 @@ def log(
     is returned.
   """
 
-  def log_enabled(log_flag):
-    if log_flag is None:
-      return False
-    log_flag_level = LogLevel[log_flag].value
-    return log_level.value >= log_flag_level
-
-  if not log_enabled(_LOG_LEVEL.value):
+  if not _log_enabled(_LOG_LEVEL.value, log_level):
     return tf.constant(0)
 
-  if message is None:
-    message = t.name
-
-  frame = inspect.stack()[1]
-  filename = frame.filename
-  line = frame.lineno
-  message = (
-      'TPU debug logging level: {}. File: {} at line: {}, message: {}'.format(
-          log_level.name, filename, line, message))
+  message = _get_log_msg(log_level, message, stack_info)
   def _cpu_print(t):
     print_op = tf.print(
-        message, [tf.shape(t), t], output_stream=sys.stderr,
+        message, [t], output_stream=sys.stderr,
         summarize=summarize)
     with tf.control_dependencies([print_op]):
-      return tf.identity(t)
-  return tf.compat.v1.tpu.outside_compilation(_cpu_print, tf.identity(t))
+      return tf.nest.map_structure(tf.identity, t)
+  return tf.compat.v1.tpu.outside_compilation(
+      _cpu_print, tf.nest.map_structure(tf.identity, t))
+
+
+def log_mean_min_max(
+    t: FlowFieldVal,
+    step_id: Optional[tf.Tensor] = None,
+    replica_id: Optional[tf.Tensor] = None,
+    message: Optional[str] = '',
+    log_level: LogLevel = LogLevel.INFO,
+    stack_info: bool = True,
+) -> Any:
+  """Logging function for debug information that works on TPU.
+
+  Args:
+    t: The field from which the local mean, min and max value to be logged.
+    step_id: Optional. Representing the `step`.
+    replica_id: Optional. Representing the `replica_id`.
+    message: The optional message to be logged together with `t`.
+    log_level: The logging level that indicates the severity of the message.
+    stack_info: Whether to include stack information in the log message.
+
+  Returns:
+    The same input `t` wired through tf.print (wrapped inside the outside
+    compilation). If logging is not enabled, a dummy const tensor with value 0
+    is returned.
+  """
+
+  if not _log_enabled(_LOG_LEVEL.value, log_level):
+    return tf.constant(0)
+
+  message = _get_log_msg(log_level, message, stack_info)
+  def _cpu_print(t):
+    mean_val = tf.math.reduce_mean(tf.stack(t))
+    max_val = tf.math.reduce_max(tf.stack(t))
+    min_val = tf.math.reduce_min(tf.stack(t))
+    out_msg = tf.strings.join([
+        'step_id: ', '-1' if step_id is None else tf.strings.as_string(step_id),
+        ', replica_id: ',
+        '-1' if replica_id is None else tf.strings.as_string(replica_id),
+        ', mean: ', tf.strings.as_string(mean_val),
+        ', max: ', tf.strings.as_string(max_val),
+        ', min: ', tf.strings.as_string(min_val)])
+    print_op = tf.print(
+        message, [out_msg], output_stream=sys.stderr)
+    with tf.control_dependencies([print_op]):
+      return tf.nest.map_structure(tf.identity, t)
+  return tf.compat.v1.tpu.outside_compilation(
+      _cpu_print, tf.nest.map_structure(tf.identity, t))

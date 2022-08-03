@@ -99,8 +99,6 @@ kdd16y: Centered second-order finite difference in y (16th-order approximation).
                  - 94174080 * (u_{i, j+2} + u_{i, j-2})
                  + 538137600 * (u_{i, j+1} + u_{i, j-1})
                  - 9247086420 * u_{i, j}) / 302702400
-TODO(b/148241302): Introduce '-' for schemes with stencils biased towards the
-left.
 kf2x: Second-order flux reconstruction on the face of the mesh cell in x in the
   upwind condition, i.e. u_{i, j} > 0,
   f_{i, j} = -0.125 * u_{i-1, j} + 0.75 * u_{i, j} + 0.375 * u_{i+1, j}
@@ -853,10 +851,6 @@ class ApplyKernelConvOp(ApplyKernelOp):
         tiles, tf.cast(self._get_kernel(name), dtype))
 
 
-# TODO(b/131841635): Implement kernels via a spec-based identifier to make it
-# less ambiguous to callers what op they are applying and to reduce error-prone
-# aspects of specifying dimension by making that explicit in the kernel id as
-# opposed to in the method name.
 def _slice_kernel_dict(
     custom_kernel_dict: Optional[ExternalDictKernelType] = None
 ) -> Dict[Text, Callable[[tf.Tensor], tf.Tensor]]:

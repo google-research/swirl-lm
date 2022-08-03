@@ -37,7 +37,6 @@ from swirl_lm.utility import common_ops
 from swirl_lm.utility import types
 import tensorflow as tf
 
-# TODO(b/130560256): Review nomenclature in this file for consistency.
 
 BCType = halo_exchange_utils.BCType
 BoundaryConditionsSpec = halo_exchange_utils.BoundaryConditionsSpec

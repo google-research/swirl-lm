@@ -31,8 +31,6 @@ ValueFunction = Callable[[
 ], tf.Tensor]
 
 DEFAULT_PERMUTATION = (2, 0, 1)
-# TODO(wqing): This needs to be deprecated and replaced by
-# `params.num_boundary_points`.
 DEFAULT_NUM_BOUNDARY_POINTS = 2
 _DEFAULT_PAD_MODE = 'CONSTANT'
 _NP_DTYPE = types.NP_DTYPE
@@ -140,7 +138,6 @@ def partial_mesh_for_core(
   nx = params.nx
   ny = params.ny
   nz = params.nz
-  # TODO(b/138223446): Reconcile padwidth_* with params.halo_width.
   padwidth_x = (nx - core_nx) // 2 if core_nx else 0
   padwidth_y = (ny - core_ny) // 2 if core_ny else 0
   padwidth_z = (nz - core_nz) // 2 if core_nz else 0
@@ -204,7 +201,6 @@ def gen_cone(params,
 
   # Many of the initialization parameters for forcing function and other
   # functions should be encapsulated in a model specific param object.
-  # TODO(yifanchen): add a new class that handles all model specific parameters.
   def gen_cone_fn(xx, yy, zz, lx, ly, lz, coord):
     del zz, lz, coord
     return tf.clip_by_value(
@@ -233,8 +229,6 @@ def gen_smooth_sin(params, coordinate, amp=1e-4, perm=DEFAULT_PERMUTATION):
   return partial_mesh_for_core(params, coordinate, gen_smooth_sin_fn, perm)
 
 
-# TODO(yifanchen): rename this to other more representative name that is
-# independent of how it is used. For example, gen_ellipsoid.
 def gen_forcing(params, coordinate, alpha_max=0.05, perm=DEFAULT_PERMUTATION):
   """A simple wrapper for generating a forcing field."""
   inverse_sq_jet_size_x = params.inverse_sq_jet_size_x

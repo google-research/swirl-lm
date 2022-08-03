@@ -166,8 +166,6 @@ class BoundaryConditionKeysHelper(PhysicalVariableKeysHelper):
 
     It is assumed that the updated boundary condition prevserves the type but
     with its value being replaced by the additional state.
-    TODO(b/149403783): Reduce the size of the `additional_states` that is used
-    as boundary conditions.
 
     Args:
       additional_states: A dictionary of keyed variables that provides

@@ -178,7 +178,6 @@ def boundary_conditions_all_one_type(
     boundary_conditions: BoundaryConditionsSpec,
     boundary_condition_type: BCType) -> bool:
   """Returns `True` if every boundary type is NEUMANN."""
-  # TODO(dmpierce): Update for other types, e.g. continue in case of PERIODIC.
   if boundary_conditions is None:
     return False
   for bcs_per_dim in boundary_conditions:
@@ -433,7 +432,6 @@ def poisson_residual_norm(
     full_grids: bool = True) -> float:
   """Returns the Poisson residual norm."""
   rank = len(get_shape(x))
-  # TODO(b/218506593): Only halo width 1 is supported.
   inner = (slice(1, -1),) * rank
 
   res_no_border = poisson_residual(x, b, params, full_grids)[inner]

@@ -166,8 +166,6 @@ class JacobiSolver(base_poisson_solver.PoissonSolver):
     self._halo_width = solver_option.jacobi.halo_width
 
     self._factor_b = 0.5 / (params.dx**-2 + params.dy**-2 + params.dz**-2)
-    # TODO(b/190727604): Note that `_factor_x` defined in this way works, while
-    # saving the inverse will break the golden test.
     self._factor_x = params.dx**2 / self._factor_b
     self._factor_y = params.dy**2 / self._factor_b
     self._factor_z = params.dz**2 / self._factor_b

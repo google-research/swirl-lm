@@ -115,8 +115,6 @@ class ThermodynamicsManager(object):
         # the convection terms of the scalar transport equations. It's assumed
         # that Assumes density changes in the halos of the physical boundary
         # are the same as the first fluid layer.
-        # TODO(b/210157369): update the BC for drho to be consistent with that
-        # for scalars.
         drho = halo_exchange.inplace_halo_exchange(
             filters.filter_op(
                 kernel_op,

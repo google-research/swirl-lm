@@ -49,16 +49,14 @@ def first_order_upwinding(
   Args:
     kernel_op: An object holding a library of kernel operations.
     f: A list of `tf.Tensor` to which the backward difference is applied. Each
-      element in the `List` is an `x-y` plane (aka z-slice). TODO(b/148241302):
-      Replace the `f` with `f_minus` after b/148241302 is fixed.
+      element in the `List` is an `x-y` plane (aka z-slice).
     f_plus: A list of `tf.Tensor` to which the forward difference is applied.
       Each element in the `List` is an `x-y` plane (aka z-slice).
     velocity_in_dim: A list of `tf.Tensor` holding the velocity in the direction
       where the derivative is computed. Each element in the `List` is an `x-y`
       plane (aka z-slice).
     grid_spacing: The mesh size in the direction where the derivative is
-      computed. TODO(wqing): Make `grid_spacing` a `tf.Tensor` to account for a
-        non-uniform mesh.
+      computed.
     dim: The dimension of the derivative, with 0, 1, and 2 being x, y, and z,
       respectively.
 
@@ -97,8 +95,7 @@ def central2(kernel_op: get_kernel_fn.ApplyKernelOp, f: FlowFieldVal,
     f: A list of `tf.Tensor` to which the operator is applied. Each element in
       the `List` is an `x-y` plane (aka z-slice).
     grid_spacing: The mesh size in the direction where the derivative is
-      computed. TODO(wqing): Make `grid_spacing` a `tf.Tensor` to account for a
-        non-uniform mesh.
+      computed.
     dim: The dimension of the derivative, with 0, 1, and 2 being x, y, and z,
       respectively.
 
@@ -124,8 +121,7 @@ def central4(kernel_op: get_kernel_fn.ApplyKernelOp, f: FlowFieldVal,
     f: A list of `tf.Tensor` to which the operator is applied. Each element in
       the `List` is an `x-y` plane (aka z-slice).
     grid_spacing: The mesh size in the direction where the derivative is
-      computed. TODO(wqing): Make `grid_spacing` a `tf.Tensor` to account for a
-        non-uniform mesh.
+      computed.
     dim: The dimension of the derivative, with 0, 1, and 2 being x, y, and z,
       respectively.
 

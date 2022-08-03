@@ -30,9 +30,6 @@ from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import tpu_util
 import tensorflow as tf
 
-
-# TODO(b/142351512) Clean up the common flags. Consolidate them to a
-# configuration proto and use a common module to parse them.
 flags.DEFINE_integer('num_steps', 1, 'number of steps to run before generating '
                      'an output.')
 flags.DEFINE_integer('start_step', 0,
@@ -141,8 +138,6 @@ def _local_state(
 
 def _get_state_keys(params):
   """Returns essential, additional and helper var state keys."""
-  # TODO(b/149124896): Clean up `states` and `additional_states` so that to
-  # prevent allocating redundant memory.
   # Essential flow field variables:
   # u: velocity in dimension 0;
   # v: velocity in dimension 1;
@@ -164,7 +159,6 @@ def _get_state_keys(params):
 
 def _get_model(kernel_op, params):
   """Returns the appropriate Navier-Stokes model from `params`."""
-  # TODO(anudhyan): We should introduce a V2 ModelFn interface.
   if params.solver_procedure == parameters_lib.SolverProcedure.VARIABLE_DENSITY:
     return simulation.Simulation(kernel_op, params)
   raise ValueError('Solver procedure not recognized: '
@@ -333,10 +327,6 @@ def solver(
     params = parameters_lib.params_from_config_file_flag()
 
   # Initialize the TPU.
-  # TODO(anudhyan): Create a compound data structure, say a DistributionStrategy
-  # class, to associate the TPUStrategy and the various helper arrays:
-  # computation_shape, DeviceAssignment, logical_replicas, logical_coordinates.
-  # This should reduce boilerplate and help in factoring out modular functions.
   computation_shape = np.array([params.cx, params.cy, params.cz])
   strategy = driver_tpu.initialize_tpu(
       tpu_address=FLAGS.target, computation_shape=computation_shape)

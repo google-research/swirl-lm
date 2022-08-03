@@ -40,8 +40,6 @@ _NewtonState = collections.namedtuple(
     'NewtonState', ('x', 'x0', 'f', 'best_residual', 'best_x'))
 
 
-# TODO(wqing): Make the solver general and robust, so it can be moved to a
-# general utility function library in the simulation framework.
 def newton_method_multi_dim(
     objective_fn: Callable[[Fields], OutputFields],
     initial_position: Fields,
@@ -170,21 +168,6 @@ def newton_method_multi_dim(
     else:
       df = analytical_jacobian_fn(*x)
 
-    # TODO(b/195152582): Double check Jacobian's inverse, e.s.p. in multiple
-    # dimensions. For scalars and momentum, it's different:
-    # - Scalars:
-    #   * #equations = #cubes
-    #   * The equation holds elementwise, i.e. for each cell, so inverting
-    #     elementwise should be OK.
-    # - Momentum:
-    #   * #equations = #cubes * 3
-    #   * The system of equations holds elementwise, i.e. for each cell, so
-    #     inverting the Jacobian might be equivalent to inverting 3x3 matrices
-    #     #cell times.
-    #   * Fortunately, there are easy ways to compute 3x3 matrix inverse, as
-    #     long as det(A) != 0.
-    # - More general cases:
-    #   * Might be not that straightforward.
 
     if dimensions == 1:
       dx = [tf.nest.map_structure(tf.math.divide_no_nan, f[0], df[0][0])]

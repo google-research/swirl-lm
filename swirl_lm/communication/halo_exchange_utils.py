@@ -34,7 +34,6 @@ from typing import List, Optional, Sequence, Tuple, Union
 import numpy as np
 import tensorflow as tf
 
-# TODO(b/130560256): Review nomenclature in this file for consistency.
 
 
 class BCType(enum.Enum):
@@ -56,8 +55,6 @@ class BCType(enum.Enum):
     case of NO_TOUCH when boundary computation happens outside of the TPU
     computation loop, but results must be imposed within the TPU loop.
 
-  TODO(b/142678664): Document each boundary condition and example usage
-  systematically.
   """
   NEUMANN = 1  # Neumann boundary condition.
   NEUMANN_2 = 5  # Neumann boundary condition estimated with 2nd order scheme.
@@ -164,7 +161,6 @@ def apply_one_core_boundary_conditions_to_tensor_or_array(
         concat_plane = (neumann_plane +
                         sign * cast(broadcast_to(bc_value, shape_with_axis_1d)))
       else:
-        # TODO(dmpierce): Handle other cases (at least periodic).
         raise NotImplementedError("Only DIRICHLET, NEUMANN and NO_TOUCH "
                                   "boundary condition types are supported.")
 
@@ -226,7 +222,6 @@ def apply_one_core_boundary_conditions(
               plane + sign * cast(broadcast_to(bc_value, shape_2d_with_axis_1d))
               for plane in neumann_planes]
         else:
-          # TODO(dmpierce): Handle other cases (at least periodic).
           raise NotImplementedError("Only DIRICHLET, NEUMANN and NO_TOUCH "
                                     "boundary condition types are supported.")
 

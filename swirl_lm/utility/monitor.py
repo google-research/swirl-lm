@@ -92,10 +92,6 @@ class Monitor(object):
     # Boundary conditions.
     self._homogeneous_dims = params.periodic_dims
 
-    # TODO(b/204126949): We should place the monitor variables on the TPU rather
-    # than the CPU, by initializing them in a separate function rather than the
-    # constructor. That function should get called by `init_fn` in the
-    # Navier-Stokes solver.
     # The container that holds all analytical quantities.
     self._data = self.monitor_var_init()
 

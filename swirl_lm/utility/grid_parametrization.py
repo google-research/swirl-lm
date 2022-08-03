@@ -141,9 +141,6 @@ class GridParametrization(object):
   point, this means there are total core * c + 2 points, or core * c + 1
   spacings.
 
-  Some potential improvements:
-    1. TODO(yusef): Move the FLAG-based parameters into a protobuf.
-    2. Caching of properties.
   """
 
   def __init__(self, params=None):
@@ -350,7 +347,6 @@ class GridParametrization(object):
   def input_chunks(self) -> List[Tuple[int, int]]:
     """Input split for 2GB limitation workaround.
 
-    TODO(yifanchen): Add additional documentation and context.
 
     Returns:
       A list of integer tuples corresponding to ranges of the input in z.
@@ -364,7 +360,6 @@ class GridParametrization(object):
   def chunk_limits(self) -> List[Tuple[int, int]]:
     """Output split for 2GB limitation workaround.
 
-    TODO(yifanchen): Add additional documentation and context.
 
     Returns:
       A list of integer tuples corresponding to ranges of the output in z.

@@ -166,8 +166,6 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     self.density_update_option = config.density_update_option
 
     # Get the information required for sponge layers if applied.
-    # TODO(b/204558410): remove this field and replace it with "sponge" in
-    # "boundary_models".
     if (config.HasField('boundary_models') and
         config.boundary_models.HasField('sponge')):
       self.sponge = config.boundary_models.sponge
@@ -230,8 +228,6 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
       bc[bc_info.dim][bc_info.location] = self._parse_boundary_info(bc_info)
     return bc
 
-  # TODO(b/148540363): Replace the staticmethod with a private method outside
-  # of this class.
   @staticmethod
   def config_from_proto(config_filepath: Optional[Text] = None):
     """Reads the config text proto file."""

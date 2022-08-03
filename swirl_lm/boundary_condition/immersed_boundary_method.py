@@ -586,8 +586,6 @@ class ImmersedBoundaryMethod(object):
     additional_states_new.update(additional_states)
     for variable in self._ib_params.sponge.variables:
       if variable.name not in states.keys():
-        # TODO(wqing): Revise this condition so that the function captures the
-        # case with true incomplete states.
         logging.warn('%s is not a valid state. Available states are: %r',
                      variable.name, states.keys())
         continue

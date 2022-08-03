@@ -170,7 +170,6 @@ class PoissonSolver(object):
             *self._laplacian_terms(f, halo_update=halo_update))
     ]
 
-  # TODO(b/199428224): Use halo_width from self._params.
   def compute_residual(
       self,
       replica_id: tf.Tensor,

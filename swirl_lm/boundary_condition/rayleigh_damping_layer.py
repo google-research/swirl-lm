@@ -393,8 +393,6 @@ class RayleighDampingLayer(object):
     additional_states_updated.update(additional_states)
     for varname, var_info in self._sponge_info_map.items():
       if varname not in states.keys():
-        # TODO(wqing): Revise this condition so that the function captures the
-        # case with true incomplete states.
         logging.warn('%s is not a valid state. Available states are: %r',
                      varname, states.keys())
         continue

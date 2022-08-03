@@ -25,7 +25,6 @@ FlowFieldVal = types.FlowFieldVal
 FlowFieldMap = types.FlowFieldMap
 _MolecularWeightMap = Mapping[Text, float]
 
-# TODO(b/180362111): Store all constant in a standalone library.
 # Universal gas constant, in units of J/mol/K.
 R_UNIVERSAL = constants.R_UNIVERSAL
 # The precomputed gas constant for dry air, in units of J/kg/K.

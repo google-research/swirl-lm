@@ -387,42 +387,46 @@ class SyntheticTurbulentInflow(object):
 
     return {'r': r, 'u': u}
 
-  def additional_states_update_fn(
-      self,
-      kernel_op: get_kernel_fn.ApplyKernelOp,
-      replica_id: tf.Tensor,
-      replicas: np.ndarray,
-      states: FlowFieldMap,
-      additional_states: FlowFieldMap,
-      params: grid_parametrization.GridParametrization,
-  ) -> FlowFieldMap:
-    """Updates the inflow boundary condition with synthetic turbulence."""
-    del kernel_op, states
+  def generate_inflow_update_fn(self, seed: Optional[int] = None):
+    """Generates an additional_state_update_fn that computes the inflow."""
 
-    for key in self._required_keys:
-      if key not in additional_states.keys():
-        raise ValueError('{} is required by the synthetic turbulent inflow but '
-                         'was not found.'.format(key))
+    def additional_states_update_fn(
+        kernel_op: get_kernel_fn.ApplyKernelOp,
+        replica_id: tf.Tensor,
+        replicas: np.ndarray,
+        states: FlowFieldMap,
+        additional_states: FlowFieldMap,
+        params: grid_parametrization.GridParametrization,
+    ) -> FlowFieldMap:
+      """Updates the inflow boundary condition with synthetic turbulence."""
+      del kernel_op, states
 
-    inflow_info = self.compute_inflow_velocity(
-        [additional_states[key] for key in self._rand_keys],
-        [additional_states[key] for key in self._mean_keys],
-        [additional_states[key] for key in self._rms_keys], replica_id,
-        replicas)
+      for key in self._required_keys:
+        if key not in additional_states.keys():
+          raise ValueError('{} is required by the synthetic turbulent inflow '
+                           'but was not found.'.format(key))
 
-    additional_states_updated = {}
-    for key, value in additional_states.items():
-      if key in self._rand_keys:
-        additional_states_updated.update(
-            {key: inflow_info['r'][self._rand_keys.index(key)]})
-      if key in self._bc_keys:
-        additional_states_updated.update({
-            key:
-                self._inflow_plane_to_bc(
-                    inflow_info['u'][self._bc_keys.index(key)],
-                    params.halo_width)
-        })
-      else:
-        additional_states_updated.update({key: value})
+      inflow_info = self.compute_inflow_velocity(
+          [additional_states[key] for key in self._rand_keys],
+          [additional_states[key] for key in self._mean_keys],
+          [additional_states[key] for key in self._rms_keys], replica_id,
+          replicas, seed)
 
-    return additional_states_updated
+      additional_states_updated = {}
+      for key, value in additional_states.items():
+        if key in self._rand_keys:
+          additional_states_updated.update(
+              {key: inflow_info['r'][self._rand_keys.index(key)]})
+        elif key in self._bc_keys:
+          additional_states_updated.update({
+              key:
+                  self._inflow_plane_to_bc(
+                      inflow_info['u'][self._bc_keys.index(key)],
+                      params.halo_width)
+          })
+        else:
+          additional_states_updated.update({key: value})
+
+      return additional_states_updated
+
+    return additional_states_update_fn

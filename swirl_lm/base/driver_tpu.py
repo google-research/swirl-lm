@@ -50,8 +50,8 @@ ValueFn = Callable[[Array, Array], Structure]
 def initialize_tpu(
     tpu_address: str,
     computation_shape: Array,
-    num_attempts: int = 36,
-    back_off_time_sec: int = 300,
+    num_attempts: int = 180,
+    back_off_time_sec: int = 60,
 ) -> tf.distribute.TPUStrategy:
   """Initializes the TPU with the logical coordinates and returns a TPUStrategy.
 

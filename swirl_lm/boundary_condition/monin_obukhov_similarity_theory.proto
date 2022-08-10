@@ -19,7 +19,7 @@ package research.simulation;
 option java_multiple_files = true;
 
 // Parameters required by the Monin-Obukhov Similarity Theory.
-// Next id = 15;
+// Next id = 16;
 message MoninObukhovSimilarityTheory {
   // The roughness length, in units of m.
   optional float z_0 = 1;
@@ -61,4 +61,14 @@ message MoninObukhovSimilarityTheory {
   optional float theta_max = 13 [default = 300.0];
   // The minimum potential temperature for the model evaluation.
   optional float theta_min = 14 [default = 280.0];
+
+  // Specifies the reference value at the sea surface level.
+  // Next id: 3
+  message SeaLevelReference {
+    // The name of the variable.
+    optional string name = 1;
+    // The reference value of the variable at the sea level.
+    optional float value = 2;
+  }
+  repeated SeaLevelReference sea_level_ref = 15;
 }

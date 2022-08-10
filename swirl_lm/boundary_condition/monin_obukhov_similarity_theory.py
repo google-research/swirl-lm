@@ -39,7 +39,7 @@ The main idea for case #1 is the following:
 In both cases `tf.math.divide_no_nan` gives the desired output.
 """
 import functools
-from typing import Mapping, Text, Tuple
+from typing import Mapping, Optional, Sequence, Text, Tuple
 
 import numpy as np
 from swirl_lm.base import initializer
@@ -109,6 +109,10 @@ class MoninObukhovSimilarityTheory(object):
     dim_to_axis = (1, 2, 0)
     self.vertical_axis = dim_to_axis[self.vertical_dim]
     self.horizontal_axes = [dim_to_axis[dim] for dim in self.horizontal_dims]
+
+    self.sea_level_ref = {}
+    for var in params.sea_level_ref:
+      self.sea_level_ref.update({var.name: var.value})
 
   def _stability_correction_function(
       self,
@@ -460,6 +464,7 @@ class MoninObukhovSimilarityTheory(object):
   def surface_scalar_flux_update_fn(
       self,
       states: FlowFieldMap,
+      varname: Optional[str] = None,
   ) -> FlowFieldVal:
     """Computes the scalar flux at the surface.
 
@@ -469,6 +474,7 @@ class MoninObukhovSimilarityTheory(object):
     Args:
       states: A keyed dictionary of states. Must include 'u', 'v', 'w', 'theta',
       'rho', 'phi'.
+      varname: The name of the variable for which the scalar flux is computed.
 
     Returns:
       The flux of `phi` at the surface.
@@ -491,8 +497,14 @@ class MoninObukhovSimilarityTheory(object):
                               self.halo_width)[0]
     phi_zm = common_ops.get_face(states['phi'], self.vertical_dim, 0,
                                  self.halo_width)[0]
-    phi_z0 = common_ops.get_face(states['phi'], self.vertical_dim, 0,
-                                 self.halo_width - 1)[0]
+
+    # Use the user defined sea surface reference value in the configuration if
+    # available, otherwise use values at the first halo layer as the sea surface
+    # reference.
+    phi_z0 = self.sea_level_ref.get(
+        varname,
+        common_ops.get_face(states['phi'], self.vertical_dim, 0,
+                            self.halo_width - 1)[0])
 
     # Because the wall is at the mid-point face between the first fluid layer
     # and the halo layers, the height of the first fluid layer above the ground
@@ -511,8 +523,17 @@ class MoninObukhovSimilarityTheory(object):
       return -rho_i * c_h_i * tf.math.sqrt(u1_i**2 + u2_i**2) * (
           phi_zm_i - phi_z0_i)
 
-    return tf.nest.map_structure(scalar_flux, rho, c_h, u1, u2, phi_zm, phi_z0)
+    if isinstance(phi_z0, Sequence):
+      return tf.nest.map_structure(scalar_flux, rho, c_h, u1, u2, phi_zm,
+                                   phi_z0)
+    else:
+      return tf.nest.map_structure(
+          functools.partial(scalar_flux, phi_z0_i=phi_z0), rho, c_h, u1, u2,
+          phi_zm)
 
+  # BEGIN: GOOGLE_INTERNAL
+  # TODO(b/240981325): Remove functions in this class from this line below.
+  # END: GOOGLE_INTERNAL
   def _compute_obukhov_length(
       self,
       m: tf.Tensor,

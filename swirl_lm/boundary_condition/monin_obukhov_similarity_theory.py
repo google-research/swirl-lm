@@ -93,6 +93,7 @@ class MoninObukhovSimilarityTheory(object):
     self.gamma_m = params.gamma_m
     self.gamma_h = params.gamma_h
     self.alpha = params.alpha
+    self._active_scalars = list(params.active_scalar)
 
     self.enable_theta_reg = params.enable_theta_reg
     self.theta_max = params.theta_max
@@ -113,6 +114,10 @@ class MoninObukhovSimilarityTheory(object):
     self.sea_level_ref = {}
     for var in params.sea_level_ref:
       self.sea_level_ref.update({var.name: var.value})
+
+  def is_active_scalar(self, scalar_name: str) -> bool:
+    """Checks if MOST is applied to a specific scalar."""
+    return scalar_name in self._active_scalars
 
   def _stability_correction_function(
       self,
@@ -434,6 +439,7 @@ class MoninObukhovSimilarityTheory(object):
       u1: FlowFieldVal,
       u2: FlowFieldVal,
       height: float,
+      varname: Optional[str] = None,
   ) -> FlowFieldVal:
     """Computes the exchange coefficient for the energy equation.
 
@@ -446,6 +452,9 @@ class MoninObukhovSimilarityTheory(object):
       u1: The first component of the free stream velocity.
       u2: The second component of the free stream velocity.
       height: The height of the first grid point.
+      varname: The name of the variable for which the exchange coefficient is
+        computed. If not provided, assume this variable is a scalar instead of
+        an velocity/momentum component.
 
     Returns:
       The exchange coefficient for the energy equation.
@@ -455,18 +464,24 @@ class MoninObukhovSimilarityTheory(object):
 
     ln_z = tf.math.log(height / self.z_0)
 
+    phi_val = (
+        phi_m if varname in common.KEYS_MOMENTUM +
+        common.KEYS_VELOCITY else phi_h)
+
     # The coefficient is set to 0 when ln(z_m / z_0) equals Psi_M or Psi_H,
     # which suggests a 0 surface flux.
     return tf.nest.map_structure(
         lambda p_m, p_h: tf.math.divide_no_nan(_KAPPA**2, (ln_z - p_h) *  # pylint: disable=g-long-lambda
-                                               (ln_z - p_m)), phi_m, phi_h)
+                                               (ln_z - p_m)), phi_m, phi_val)
 
-  def surface_scalar_flux_update_fn(
+  def surface_flux_update_fn(
       self,
       states: FlowFieldMap,
       varname: Optional[str] = None,
   ) -> FlowFieldVal:
-    """Computes the scalar flux at the surface.
+    """Computes the diffusive flux at the surface.
+
+    Note that this function supports both scalar and velocity/momentum fluxes.
 
     Reference:
     Schneider, T. (n.d.). CLIMA Atmosphere Model. Caltech. (Eq. 5.7)
@@ -509,7 +524,7 @@ class MoninObukhovSimilarityTheory(object):
     # Because the wall is at the mid-point face between the first fluid layer
     # and the halo layers, the height of the first fluid layer above the ground
     # is half of the grid spacing.
-    c_h = self._exchange_coefficient(theta, u1, u2, self.height / 2.0)
+    c_h = self._exchange_coefficient(theta, u1, u2, self.height / 2.0, varname)
 
     def scalar_flux(
         rho_i: tf.Tensor,

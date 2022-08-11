@@ -47,7 +47,6 @@ from swirl_lm.boundary_condition import monin_obukhov_similarity_theory
 from swirl_lm.equations import common
 from swirl_lm.equations import utils as eq_utils
 from swirl_lm.numerics import numerics_pb2
-from swirl_lm.physics import constants
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import types
@@ -141,22 +140,16 @@ def diffusion_scalar(
     ]
 
     # Add the closure from Monin-Obukhov similarity theory if requested.
-    if most is not None and scalar_name in ('T', 'theta', 'e_t', 'q_t'):
+    if most is not None and most.is_active_scalar(scalar_name):
       required_variables = ('u', 'v', 'w', 'theta')
       for varname in required_variables:
         if varname not in helper_variables:
           raise ValueError(f'{varname} is missing for the MOS model.')
 
-      if scalar_name in ('T', 'theta'):
-        # Get the surface heat flux and convert it to the diffusion flux with
-        # correct unit.
-        _, _, q_3 = most.surface_shear_stress_and_heat_flux_update_fn(
-            helper_variables)
-        q_3 = tf.nest.map_structure(lambda q: q / constants.CP, q_3)
-      else:
-        scalar_flux_helper_variables = {'rho': rho, 'phi': phi}
-        scalar_flux_helper_variables.update(helper_variables)
-        q_3 = most.surface_scalar_flux_update_fn(scalar_flux_helper_variables)
+      scalar_flux_helper_variables = {'rho': rho, 'phi': phi}
+      scalar_flux_helper_variables.update(helper_variables)
+      q_3 = most.surface_flux_update_fn(scalar_flux_helper_variables,
+                                        scalar_name)
 
       # The sign of the heat flux needs to be reversed to be consistent with
       # the diffusion scheme. In the MOS formulation, the heat flux is positive

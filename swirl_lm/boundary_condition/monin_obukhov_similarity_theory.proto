@@ -19,7 +19,7 @@ package research.simulation;
 option java_multiple_files = true;
 
 // Parameters required by the Monin-Obukhov Similarity Theory.
-// Next id = 16;
+// Next id = 17;
 message MoninObukhovSimilarityTheory {
   // The roughness length, in units of m.
   optional float z_0 = 1;
@@ -71,4 +71,7 @@ message MoninObukhovSimilarityTheory {
     optional float value = 2;
   }
   repeated SeaLevelReference sea_level_ref = 15;
+
+  // Specifies scalars to which MOST is applied.
+  repeated string active_scalar = 16;
 }

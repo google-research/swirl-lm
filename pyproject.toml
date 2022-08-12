@@ -21,7 +21,13 @@ classifiers = [
 keywords = []
 
 # pip dependencies of the project
-dependencies = []
+dependencies = [
+    "absl",
+    "numpy",
+    "scipy",
+    "six",
+    "tensorflow",
+]
 
 # This is set automatically by flit using `swirl_lm.__version__`
 dynamic = ["version"]

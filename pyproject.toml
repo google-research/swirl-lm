@@ -41,8 +41,6 @@ repository = "https://github.com/google-research/swirl_lm"
 # Development deps (unittest, linting, formating,...)
 # Installed through `pip install .[dev]`
 dev = [
-    "pytest",
-    "pytest-xdist",
     "pylint>=2.6.0",
     "yapf",
 ]

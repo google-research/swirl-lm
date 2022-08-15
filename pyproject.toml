@@ -40,10 +40,7 @@ repository = "https://github.com/google-research/swirl_lm"
 [project.optional-dependencies]
 # Development deps (unittest, linting, formating,...)
 # Installed through `pip install .[dev]`
-dev = [
-    "pylint>=2.6.0",
-    "yapf",
-]
+dev = []
 
 [build-system]
 requires = ["flit_core >=3.5,<4"]

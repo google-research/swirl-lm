@@ -23,9 +23,10 @@ jobs:
     - run: pip install -e .[dev]
     - run: pip freeze
 
-    # Run tests (in parallel)
-    - name: Run core tests
-      run: pytest -vv -n auto
+    # Run tests (in parallel).
+    # Skip tests. Currently no tests exposed.
+    # - name: Run core tests
+    #  run: pytest -vv -n auto
 
   # Auto-publish when version is increased
   publish-job:

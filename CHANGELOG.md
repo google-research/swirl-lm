@@ -20,7 +20,8 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
   * Update the `[Unreleased]` url: `v1.0.0...HEAD` -> `v2.0.0...HEAD`
 
 ## [Unreleased]
-
+* Fixing pyproject.toml: 1. Correcting the dependent package absl to absl-py.
+ 2. Adding back optional-dependencies.
 ## [0.0.0] - 2022-08-15
 
 * Initial release

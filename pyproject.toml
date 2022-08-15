@@ -19,7 +19,7 @@ keywords = []
 
 # pip dependencies of the project
 dependencies = [
-    "absl",
+    "absl-py",
     "numpy",
     "scipy",
     "six",
@@ -37,7 +37,12 @@ repository = "https://github.com/google-research/swirl_lm"
 [project.optional-dependencies]
 # Development deps (unittest, linting, formating,...)
 # Installed through `pip install .[dev]`
-dev = []
+dev = [
+    "pytest",
+    "pytest-xdist",
+    "pylint>=2.6.0",
+    "yapf",
+]
 
 [build-system]
 requires = ["flit_core >=3.5,<4"]

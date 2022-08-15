@@ -1,9 +1,6 @@
 [project]
 name = "swirl_lm"
-description =
-  "Swirl-LM is a computational fluid dynamics simulation framework for low "
-  "Mach number turbulent flows with variable density implemented with "
-  "TensorFlow."
+description = "Swirl-LM is a computational fluid dynamics simulation framework for low Mach number turbulent flows with variable density implemented with TensorFlow."
 readme = "README.md"
 requires-python = ">=3.7"
 license = {file = "LICENSE"}

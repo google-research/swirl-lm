@@ -16,7 +16,7 @@ syntax = "proto2";
 
 package research.simulation;
 
-import "linalg/poisson_solver.proto";
+import "swirl_lm/linalg/poisson_solver.proto";
 
 // A library of parameters for solving the pressure equation.
 // Next id: 6

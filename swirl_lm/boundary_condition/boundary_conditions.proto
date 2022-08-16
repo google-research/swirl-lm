@@ -16,7 +16,7 @@ syntax = "proto2";
 
 package research.simulation;
 
-import "utility/grid_parametrization.proto";
+import "swirl_lm/utility/grid_parametrization.proto";
 
 option java_multiple_files = true;
 

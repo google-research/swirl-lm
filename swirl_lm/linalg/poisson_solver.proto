@@ -15,7 +15,7 @@ syntax = "proto2";
 
 package research.simulation;
 
-import "utility/grid_parametrization.proto";
+import "swirl_lm/utility/grid_parametrization.proto";
 
 // When evaluating convergence, one can use componentwise or elementwise
 // difference as a criterion. Given two vectors `lhs`, `rhs`:

@@ -16,9 +16,9 @@ syntax = "proto2";
 
 package research.simulation;
 
-import "boundary_condition/immersed_boundary_method.proto";
-import "boundary_condition/monin_obukhov_similarity_theory.proto";
-import "boundary_condition/rayleigh_damping_layer.proto";
+import "swirl_lm/boundary_condition/immersed_boundary_method.proto";
+import "swirl_lm/boundary_condition/monin_obukhov_similarity_theory.proto";
+import "swirl_lm/boundary_condition/rayleigh_damping_layer.proto";
 
 option java_multiple_files = true;
 

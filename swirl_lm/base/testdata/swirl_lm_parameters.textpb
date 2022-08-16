@@ -1,4 +1,4 @@
-# proto-file: base/parameters.proto
+# proto-file: swirl_lm/base/parameters.proto
 # proto-message: SwirlLMParameters
 
 solver_procedure: SEQUENTIAL

@@ -16,7 +16,7 @@ syntax = "proto2";
 
 package research.simulation;
 
-import "third_party/py/swirl_lm/numerics/numerics.proto";
+import "swirl_lm/numerics/numerics.proto";
 
 // A library for parameters required by the wood combustion model.
 // References:

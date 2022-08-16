@@ -16,7 +16,7 @@ syntax = "proto2";
 
 package research.simulation;
 
-import "third_party/py/swirl_lm/numerics/numerics.proto";
+import "swirl_lm/numerics/numerics.proto";
 
 // Defines the properties of a scalar to be included in the flow field.
 // Next id: 15
@@ -41,7 +41,7 @@ message Scalar {
   // The scheme to be used for time advancement for a scalar, and if absent it
   // will fall back to the shared time integration scheme, specified in
   // `SwirlLMParameters`'s `time_integration_scheme`:
-  // third_party/py/swirl_lm/base/parameters.proto
+  // swirl_lm/base/parameters.proto
   optional TimeIntegrationScheme time_integration_scheme = 10;
 
   // A reference value for the scalar.

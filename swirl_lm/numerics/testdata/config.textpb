@@ -1,4 +1,4 @@
-# proto-file: third_party/py/swirl_lm/base/parameters.proto
+# proto-file: swirl_lm/base/parameters.proto
 # proto-message: SwirlLMParameters
 
 p_thermal: 1.013e5

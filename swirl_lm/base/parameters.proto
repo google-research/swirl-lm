@@ -16,17 +16,17 @@ syntax = "proto2";
 
 package research.simulation;
 
-import "swirl_lm/boundary_condition/boundary_conditions.proto";
-import "swirl_lm/boundary_condition/boundary_models.proto";
-import "swirl_lm/boundary_condition/rayleigh_damping_layer.proto";
-import "swirl_lm/equations/pressure.proto";
-import "swirl_lm/equations/scalars.proto";
-import "swirl_lm/numerics/numerics.proto";
-import "swirl_lm/physics/combustion/combustion.proto";
-import "swirl_lm/physics/thermodynamics/thermodynamics.proto";
-import "swirl_lm/utility/grid_parametrization.proto";
-import "swirl_lm/utility/monitor.proto";
-import "swirl_lm/utility/probe.proto";
+import "boundary_condition/boundary_conditions.proto";
+import "boundary_condition/boundary_models.proto";
+import "boundary_condition/rayleigh_damping_layer.proto";
+import "equations/pressure.proto";
+import "equations/scalars.proto";
+import "numerics/numerics.proto";
+import "physics/combustion/combustion.proto";
+import "physics/thermodynamics/thermodynamics.proto";
+import "utility/grid_parametrization.proto";
+import "utility/monitor.proto";
+import "utility/probe.proto";
 
 // Specifies if the flow field is periodic in a direction.
 message PeriodicDimensions {

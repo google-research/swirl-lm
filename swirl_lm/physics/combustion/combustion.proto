@@ -16,7 +16,7 @@ syntax = "proto2";
 
 package research.simulation;
 
-import "swirl_lm/physics/combustion/wood.proto";
+import "physics/combustion/wood.proto";
 
 // A library for combustion models. Each model is represented as a separate
 // field to allow using a combination of models in one simulation.

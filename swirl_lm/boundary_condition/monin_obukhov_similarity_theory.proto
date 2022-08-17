@@ -19,7 +19,7 @@ package research.simulation;
 option java_multiple_files = true;
 
 // Parameters required by the Monin-Obukhov Similarity Theory.
-// Next id = 17;
+// Next id = 18;
 message MoninObukhovSimilarityTheory {
   // The roughness length, in units of m.
   optional float z_0 = 1;
@@ -62,15 +62,23 @@ message MoninObukhovSimilarityTheory {
   // The minimum potential temperature for the model evaluation.
   optional float theta_min = 14 [default = 280.0];
 
-  // Specifies the reference value at the sea surface level.
+  // Defines a generic type for the reference value of a scalar in the MOST
+  // model.
   // Next id: 3
-  message SeaLevelReference {
+  message MOSTScalarRef {
     // The name of the variable.
     optional string name = 1;
-    // The reference value of the variable at the sea level.
+    // The reference value of this variable.
     optional float value = 2;
   }
-  repeated SeaLevelReference sea_level_ref = 15;
+
+  // Specifies the reference value at the sea surface level.
+  repeated MOSTScalarRef sea_level_ref = 15;
+
+  // Specifies the exchange coefficient (if applicable) of scalars. If this
+  // field is provided, the exchange/drag coefficient for this particular
+  // variable will override the on computed from MOST.
+  repeated MOSTScalarRef exchange_coeff = 17;
 
   // Specifies scalars to which MOST is applied.
   repeated string active_scalar = 16;

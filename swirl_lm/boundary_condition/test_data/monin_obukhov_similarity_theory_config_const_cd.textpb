@@ -14,9 +14,13 @@ boundary_models {
     alpha: 1.0
     beta_m: 5.0
     beta_h: 6.0
+    sea_level_ref {
+      name: 'e_t'
+      value: 1.25e5
+    }
+    exchange_coeff {
+      name: 'e_t'
+      value: 4e-2
+    }
   }
-}
-scalars {
-  name: 'theta_li'
-  diffusivity: 4e-5
 }

@@ -45,7 +45,6 @@ import numpy as np
 from swirl_lm.base import initializer
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.base import physical_variable_keys_manager
-from swirl_lm.boundary_condition import monin_obukhov_similarity_theory_pb2
 from swirl_lm.equations import common
 from swirl_lm.numerics import root_finder
 from swirl_lm.utility import common_ops
@@ -71,33 +70,32 @@ class MoninObukhovSimilarityTheory(object):
 
   def __init__(
       self,
-      params: monin_obukhov_similarity_theory_pb2.MoninObukhovSimilarityTheory,
-      nu: float,
+      params: parameters_lib.SwirlLMParameters,
       vertical_dim: int,
-      height: float,
-      halo_width: int,
   ):
     """Initializes the library."""
-    self.nu = nu
-    self.height = height
-    self.halo_width = halo_width
+    self.params = params
+    self.nu = params.nu
+    self.height = (params.dx, params.dy, params.dz)[vertical_dim]
+    self.halo_width = params.halo_width
 
-    self.z_0 = params.z_0
-    self.z_t = params.z_t
-    self.u_star = params.u_star
-    self.t_0 = params.t_0
-    self.t_s = params.t_s
-    self.heat_flux = params.heat_flux
-    self.beta_m = params.beta_m
-    self.beta_h = params.beta_h
-    self.gamma_m = params.gamma_m
-    self.gamma_h = params.gamma_h
-    self.alpha = params.alpha
-    self._active_scalars = list(params.active_scalar)
+    most_params = params.boundary_models.most
+    self.z_0 = most_params.z_0
+    self.z_t = most_params.z_t
+    self.u_star = most_params.u_star
+    self.t_0 = most_params.t_0
+    self.t_s = most_params.t_s
+    self.heat_flux = most_params.heat_flux
+    self.beta_m = most_params.beta_m
+    self.beta_h = most_params.beta_h
+    self.gamma_m = most_params.gamma_m
+    self.gamma_h = most_params.gamma_h
+    self.alpha = most_params.alpha
+    self._active_scalars = list(most_params.active_scalar)
 
-    self.enable_theta_reg = params.enable_theta_reg
-    self.theta_max = params.theta_max
-    self.theta_min = params.theta_min
+    self.enable_theta_reg = most_params.enable_theta_reg
+    self.theta_max = most_params.theta_max
+    self.theta_min = most_params.theta_min
 
     self.bc_manager = (
         physical_variable_keys_manager.BoundaryConditionKeysHelper())
@@ -111,9 +109,13 @@ class MoninObukhovSimilarityTheory(object):
     self.vertical_axis = dim_to_axis[self.vertical_dim]
     self.horizontal_axes = [dim_to_axis[dim] for dim in self.horizontal_dims]
 
-    self.sea_level_ref = {}
-    for var in params.sea_level_ref:
-      self.sea_level_ref.update({var.name: var.value})
+    self.sea_level_ref = {
+        var.name: var.value for var in most_params.sea_level_ref
+    }
+
+    self.exchange_coeff = {
+        var.name: var.value for var in most_params.exchange_coeff
+    }
 
   def is_active_scalar(self, scalar_name: str) -> bool:
     """Checks if MOST is applied to a specific scalar."""
@@ -524,7 +526,11 @@ class MoninObukhovSimilarityTheory(object):
     # Because the wall is at the mid-point face between the first fluid layer
     # and the halo layers, the height of the first fluid layer above the ground
     # is half of the grid spacing.
-    c_h = self._exchange_coefficient(theta, u1, u2, self.height / 2.0, varname)
+    # Note that if an exchange coefficient is provided in the config, it will
+    # override the MOST model (not computed).
+    c_h = self.exchange_coeff.get(
+        varname,
+        self._exchange_coefficient(theta, u1, u2, self.height / 2.0, varname))
 
     def scalar_flux(
         rho_i: tf.Tensor,
@@ -538,13 +544,152 @@ class MoninObukhovSimilarityTheory(object):
       return -rho_i * c_h_i * tf.math.sqrt(u1_i**2 + u2_i**2) * (
           phi_zm_i - phi_z0_i)
 
-    if isinstance(phi_z0, Sequence):
+    if isinstance(phi_z0, Sequence) and isinstance(c_h, Sequence):
       return tf.nest.map_structure(scalar_flux, rho, c_h, u1, u2, phi_zm,
                                    phi_z0)
-    else:
+    elif isinstance(c_h, Sequence):
       return tf.nest.map_structure(
           functools.partial(scalar_flux, phi_z0_i=phi_z0), rho, c_h, u1, u2,
           phi_zm)
+    elif isinstance(phi_z0, Sequence):
+      flux_fn = lambda rho_i, u1_i, u2_i, phi_zm_i, phi_z0_i: scalar_flux(  # pylint: disable=g-long-lambda
+          rho_i, c_h, u1_i, u2_i, phi_zm_i, phi_z0_i)
+      return tf.nest.map_structure(flux_fn, rho, u1, u2, phi_zm, phi_z0)
+    else:
+      flux_fn = lambda rho_i, u1_i, u2_i, phi_zm_i: scalar_flux(  # pylint: disable=g-long-lambda
+          rho_i, c_h, u1_i, u2_i, phi_zm_i, phi_z0)
+      return tf.nest.map_structure(flux_fn, rho, u1, u2, phi_zm)
+
+  def neumann_bc_update_fn(
+      self,
+      kernel_op: get_kernel_fn.ApplyKernelOp,
+      replica_id: tf.Tensor,
+      replicas: np.ndarray,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
+      params: grid_parametrization.GridParametrization,
+  ) -> FlowFieldMap:
+    """Computes the Neumann BC for all variables.
+
+    Args:
+      kernel_op: An object holding a library of kernel operations.
+      replica_id: The id of the replica.
+      replicas: The replicas. In particular, a numpy array that maps grid
+        coordinates to replica id numbers.
+      states: A keyed dictionary of state variables.
+      additional_states: A list of states that are needed by the update fn, but
+        will not be updated by the main governing equations.
+      params: An instance of `grid_parametrization.GridParametrization`.
+
+    Returns:
+      An update function for `additional_states` that updates the boundary
+      condition.
+    """
+    del replica_id, replicas, params
+
+    # Computes the boundary condition for all variables in states except for
+    # those listed here.
+    excluded_vars = ('p', 'rho', common.KEYS_VELOCITY[self.vertical_dim])
+
+    helper_states = {
+        'u': states['u'],
+        'v': states['v'],
+        'w': states['w'],
+        'rho': states['rho'],
+    }
+
+    def get_potential_temperature(variables):
+      """Retrieves potential temperature from a dictionary of variables."""
+      if 'T' in variables:
+        # Temperature is used interchangably with potential temperature because
+        # they are almost identical on the ground.
+        return variables['T']
+      elif 'theta' in variables:
+        return variables['theta']
+      elif 'theta_li' in variables:
+        return variables['theta_li']
+      else:
+        return None
+
+    theta = get_potential_temperature(states)
+    if theta is None:
+      theta = get_potential_temperature(additional_states)
+    if theta is None:
+      raise ValueError(
+          'Potential temperature is required by the MOST model but is not '
+          'provided.')
+    helper_states.update({'theta': theta})
+
+    # Get the turbulent viscosity and diffusivity.
+    # BEGIN: GOOGLE_INTERNAL
+    # TODO(b/242739803): Add support for turbulent diffusivity computed from
+    # scalar gradients.
+    # END: GOOGLE_INTERNAL
+    nu_t = additional_states.get('nu_t', 0.0)
+    if self.params.sgs_model.WhichOneof('sgs_model_type') == 'smagorinsky':
+      pr_t = self.params.sgs_model.smagorinsky.pr_t
+    elif (self.params.sgs_model.WhichOneof('sgs_model_type') ==
+          'smagorinsky_lilly'):
+      pr_t = self.params.sgs_model.smagorinsky_lilly.pr_t
+    elif self.params.sgs_model.WhichOneof('sgs_model_type') == 'vreman':
+      pr_t = self.params.sgs_model.vreman.pr_t
+    else:
+      # The turbulent Prandtl number is set to 1 for other SGS models.
+      pr_t = 1.0
+
+    def tensor_op(op, a, b):
+      """Applies operation `op` to `a` and `b`."""
+      if isinstance(a, Sequence) and isinstance(b, Sequence):
+        return tf.nest.map_structure(op, a, b)
+      elif isinstance(a, Sequence):
+        return tf.nest.map_structure(lambda a_i: op(a_i, b), a)
+      elif isinstance(b, Sequence):
+        return tf.nest.map_structure(lambda b_i: op(a, b_i), b)
+      else:
+        return op(a, b)
+
+    d_t = tensor_op(tf.math.divide, nu_t, pr_t)
+    nu_total = tensor_op(tf.math.add, self.params.nu, nu_t)
+
+    sum_fn = (
+        lambda f: kernel_op.apply_kernel_op_x(f, 'ksx'),
+        lambda f: kernel_op.apply_kernel_op_y(f, 'ksy'),
+        lambda f: kernel_op.apply_kernel_op_z(f, 'ksz', 'kszsh'),
+    )[self.vertical_dim]
+    interp_fn = lambda f: tf.nest.map_structure(lambda g: 0.5 * g, sum_fn(f))
+
+    additional_states_new = dict(additional_states)
+    for key, val in states.items():
+      bc_key = self.bc_manager.generate_bc_key(key, self.vertical_dim, 0)
+      if key in excluded_vars or bc_key not in additional_states:
+        continue
+
+      helper_states.update({'phi': val})
+      flux = self.surface_flux_update_fn(helper_states, key)
+
+      # Compute the gradient of the variable at the surface. Note that the
+      # diffusive flux is computed as: flux = -\rho D \nabla\phi \delta_{ik},
+      # where `k` indicates the vertical direction.
+      if key in common.KEYS_VELOCITY:
+        d_total = nu_total
+      else:
+        d_total = tensor_op(tf.math.add, self.params.diffusivity(key), d_t)
+      rho_d = tensor_op(tf.math.multiply, states['rho'], d_total)
+      rho_d_face = common_ops.get_face(
+          interp_fn(rho_d), self.vertical_dim, 0, self.halo_width, -1.0)[0]
+      grad_phi = tensor_op(tf.math.divide, flux, rho_d_face)
+
+      # Assume the outer halo layers retains the same value.
+      zeros = tf.nest.map_structure(tf.zeros_like, grad_phi)
+      bc = []
+      for _ in range(self.halo_width - 1):
+        bc.append(zeros)
+      bc.append(grad_phi)
+
+      additional_states_new.update(
+          {bc_key: tensor_op(tf.math.multiply, bc, self.height)})
+
+    return additional_states_new
 
   # BEGIN: GOOGLE_INTERNAL
   # TODO(b/240981325): Remove functions in this class from this line below.
@@ -1131,7 +1276,4 @@ def monin_obukhov_similarity_theory_factory(
         'Gravity must be defined to use the Monin-Obukhov boundary layer '
         'model.')
 
-  return MoninObukhovSimilarityTheory(params.boundary_models.most, params.nu,
-                                      vertical_dim, (params.dx, params.dy,
-                                                     params.dz)[vertical_dim],
-                                      params.halo_width)
+  return MoninObukhovSimilarityTheory(params, vertical_dim)

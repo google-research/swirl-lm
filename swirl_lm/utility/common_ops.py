@@ -14,6 +14,7 @@
 
 """Library for common operations."""
 import enum
+import functools
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Text, Tuple, Union
 
 import numpy as np
@@ -29,6 +30,14 @@ MutableTensorMap = types.MutableTensorMap
 
 _DTYPE = types.TF_DTYPE
 _TensorEquivalent = Union[tf.Tensor, List[int], List[float], np.ndarray]
+
+
+def _is_state_variable(variable: FlowFieldVal) -> bool:
+  if isinstance(variable, tf.Tensor):
+    return True
+  if isinstance(variable, Sequence):
+    return isinstance(variable[0], tf.Tensor)
+  return False
 
 
 class NormType(enum.Enum):
@@ -47,26 +56,63 @@ def tensor_scatter_1d_update(
     index: int,
     updates: Union[FlowFieldVal, float],
 ) -> FlowFieldVal:
-  """Updates a plane in a 3D tensor represented as a list of `tf.Tensor`.
-
-  This is not an in-place update. A new tensor will be created.
+  """Updates a plane in a 3D tensor (as a 3D or a list of 2D `tf.Tensor`).
 
   Args:
-    tensor: The 3D tensor to be updated.
-    dim: The dimension of the plane normal to.
+    tensor: The 3D tensor (represented as a list of 2D or a 3D `tf.Tensor`) to
+      be updated. For the problem with physical/logical shape of [dim0, dim1,
+      dim2], if the `tensor` is a list of 2D `tf.Tensor`, the length of the list
+      represents the `dim2`, and the 2D `tf.Tensor` in the list have the shape
+      of [dim0, dim1]. If it is a single 3D `tf.Tensor`, then the shape is
+      [dim2, dim0, dim1].
+    dim: The dimension normal to the plane to be updated. For example, if the
+      update is for a x-y plane, `dim` will indicate `z` (i.e. dim=2).
     index: The index of the plane to be updated in `dim`.
     updates: The new values to be assigned in the plane specified by `dim` and
-      `index`. If it's a `FlowFieldVal`, its shape must be the same as
-      the plane to be updated; if it's a floating point number, the value of the
-      plane will be set to this number.
+      `index`. If this is not a `floating point` value, its format must match
+      the format of `tensor`: If `tensor` is a `Sequence[tf.Tensor]`, the shape
+      of `updates` must be the same as the plane to be updated in
+      `Sequence[tf.Tensor]` format, i.e. if the update is on a x-y plane, it
+      will have to be a length-one list of 2D `tf.Tensor` of shape [nx, ny]; if
+      the update is on a x-z plan, it must be a list with length of `nz` of 2D
+      `tf.Tensor`, with shape of [nx, 1]. If `tensor` is represented in a single
+      3D `tf.Tensor` format, then `updates` has to be also in a 3D `tf.Tensor`
+      with one dimension of size 1, matching the plane to be updated. If
+      `updates` is a floating point number, the value of the plane will be set
+      to this number.
 
   Returns:
-    A 3D tensor with values updated at specified plane.
+    A 3D tensor with values updated at specified plane, in the same format as
+    the input `tensor`.
 
   Raises:
     ValueError: If the shape of `updates` is different from the plane to be
       updated.
   """
+  # Handles the case where the input is a single tf.Tensor.
+  if isinstance(tensor, tf.Tensor):
+    input_shape = tensor.get_shape().as_list()
+    # The order of the dimensions in the tensor is [2, 0, 1], this
+    # shift gives the right index to access the corresponding dimension.
+    shifted_dim = (dim + 1) % 3
+    if isinstance(updates, float):
+      update_shape = input_shape
+      update_shape[shifted_dim] = 1
+      updates = updates * tf.ones(update_shape, dtype=tensor.dtype)
+    perm = [0, 1, 2]
+    perm_inv = [0, 1, 2]
+    for i in range(shifted_dim):
+      perm = np.roll(perm, -1)
+      perm_inv = np.roll(perm_inv, 1)
+
+    return tf.transpose(
+        tf.tensor_scatter_nd_update(tf.transpose(tensor, perm),
+                                    [[index]],
+                                    tf.transpose(updates, perm)),
+        perm_inv
+    )
+
+  # Below handles the case where the input is a sequence of 2D tf.Tensor.
   nz = len(tensor)
   nx, ny = tensor[0].get_shape().as_list()
   target_dims = [nx, ny, nz]
@@ -120,7 +166,9 @@ def tensor_scatter_1d_update(
         updates, Sequence) else updates * tf.ones_like(tensor[index])
   else:
     if isinstance(updates, float):
-      updates = [updates,] * nz
+      updates = [
+          updates,
+      ] * nz
     tensor_updated = tf.nest.map_structure(update_tensor, tensor, updates)
 
   return tensor_updated
@@ -142,18 +190,28 @@ def tensor_scatter_1d_update_global(
   Args:
     replica_id: The index of the current TPU replica.
     replicas: A numpy array that maps grid coordinates to replica id numbers.
-    tensor: The 3D tensor to be updated.
-    dim: The dimension of the plane normal to.
+    tensor: The (local portion of the global) 3D tensor to be updated.
+    dim: The dimension of the plane normal to. Note we follow the convention
+      here [x, y, z] = [0, 1, 2].
     core_index: The index of the core in `dim`, in which the plane will be
       updated. The 3D tensor with other indices will remain unchanged.
     plane_index: The local index of the plane to be updated in `dim`.
-    updates: The new values to be assigned in the plane specified by `dim` and
-      `index`. If it's a `FlowFieldVal`, its shape must be the same as
-      the plane to be updated; if it's a floating point number, the value of the
+    updates: The new (local portion of the global) values to be assigned in the
+      plane specified by `dim` and `index`. If this is not a `floating point`
+      value, its format must match the format of `tensor`: If `tensor` is a
+      `Sequence[tf.Tensor]`, the shape of `updates` must be the same as the
+      plane to be updated in `Sequence[tf.Tensor]` format, i.e. if the update is
+      on a x-y plane, it will have to be a length-one list of 2D `tf.Tensor` of
+      shape [nx, ny]; if the update is on a x-z plane, it must be a list with
+      length of `nz` of 2D `tf.Tensor`, with shape of [nx, 1]. If `tensor` is
+      represented in a single 3D `tf.Tensor` format, then `updates` has to be
+      also in a 3D `tf.Tensor` with one dimension of size 1, matching the plane
+      to be updated. If `updates` is a floating point number, the value of the
       plane will be set to this number.
 
   Returns:
-    A 3D tensor with values updated at specified plane.
+    A 3D tensor with values updated at specified plane, in the same format as
+    the input `tensor`.
 
   Raises:
     ValueError: If the shape of `updates` is different from the plane to be
@@ -170,19 +228,21 @@ def tensor_scatter_1d_update_global(
       false_fn=lambda: tf.nest.map_structure(tf.identity, tensor))
 
 
+# TODO(b/140431015): Clean up upsream callsites that passing down `None` as
+# dtype down.
 def tf_cast(tensor: FlowFieldVal, dtype) -> FlowFieldVal:
   """Casts a sequence of tensors to desired dtype."""
   if dtype is None:
-    return list(tensor)
+    return tensor
 
-  return [tf.cast(tensor_i, dtype) for tensor_i in tensor]
+  return tf.nest.map_structure(functools.partial(tf.cast, dtype=dtype),
+                               tensor)
 
 
 def average(
     a: FlowFieldVal,
     b: FlowFieldVal,
 ) -> FlowFieldVal:
-  """Utility function to compute average of tensors."""
   return tf.nest.map_structure(lambda x, y: 0.5 * (x + y), a, b)
 
 
@@ -232,7 +292,7 @@ def get_field(
     state: TensorMap,
     field_name: Text,
     nz: int,
-) -> FlowFieldVal:
+) -> List[tf.Tensor]:
   return [state[get_tile_name(field_name, i)] for i in range(nz)]
 
 
@@ -344,11 +404,11 @@ def prep_step_by_chunk_fn(
     field_name: Text,
     z_begin: int,
     z_end: int,
-    inputs: FlowFieldVal,
+    inputs: Sequence[tf.Tensor],
     keyed_queue_elements: TensorMap,
     state: MutableTensorMap,
     replicas: np.ndarray,
-) -> Tuple[FlowFieldVal, MutableTensorMap]:
+) -> Tuple[List[tf.Tensor], MutableTensorMap]:
   """Does an in-place update of replica states.
 
   Run once per-field and per-chunk. The necessary init values passed are in
@@ -370,18 +430,23 @@ def prep_step_by_chunk_fn(
   _, _ = replicas, keyed_queue_elements
   ind = tf.range(z_begin, z_end, dtype=tf.int32)
   state[field_name] = tf.tensor_scatter_nd_update(state[field_name],
-                                                  ind[..., tf.newaxis],
-                                                  inputs[1])
+                                                  ind[...,
+                                                      tf.newaxis], inputs[1])
 
   outputs = [tf.constant(0)]
   return outputs, state
 
 
 def apply_op_x(
-    tile_list: Iterable[tf.Tensor],
+    tile_list: FlowFieldVal,
     mulop: tf.Operation,
 ) -> FlowFieldVal:
   """Apply op in x."""
+  # Handles the case of a signel 3D tf.Tensor.
+  if isinstance(tile_list, tf.Tensor):
+    return tf.einsum('lj,ijk->ilk', mulop, tile_list)
+
+  # Below handles the case of list of 2D tf.Tensor.
   if mulop.shape.as_list()[0] != mulop.shape.as_list()[1]:
     raise RuntimeError(
         'apply_op_x requires a square mulop. mulop shape is {}.'.format(
@@ -400,10 +465,15 @@ def apply_op_x(
 
 
 def apply_op_y(
-    tile_list: Iterable[tf.Tensor],
+    tile_list: FlowFieldVal,
     mulop: tf.Operation,
 ) -> FlowFieldVal:
   """Apply op in y."""
+  # Handles the case of a single 3D tf.Tensor.
+  if isinstance(tile_list, tf.Tensor):
+    return tf.einsum('ijk,kl->ijl', tile_list, mulop)
+
+  # Below handles the case of a list of 2D tf.Tensor.
   if mulop.shape.as_list()[0] != mulop.shape.as_list()[1]:
     raise RuntimeError(
         'apply_op_y requires a square mulop. mulop shape is {}.'.format(
@@ -427,29 +497,44 @@ def apply_op_z(
     shift: Optional[Sequence[int]] = None,
 ) -> FlowFieldVal:
   """Apply op in z."""
-  if len(tile_list) < len(z_op_list):
-    raise RuntimeError('apply_op_z requires tile_list length ({}) be greater '
-                       'than or equal to z_op_list length ({}).'.format(
-                           len(tile_list), len(z_op_list)))
   if len(z_op_list) != len(shift):
     raise RuntimeError('apply_op_z requires z_op_list length ({}) be equal to '
                        'shift length ({}).'.format(len(z_op_list), len(shift)))
-  start_shift = min(shift)
-  end_shift = max(shift)
+
+  # This handles the case when the input is a single 3D `tf.Tensor`.
+  if isinstance(tile_list, tf.Tensor):
+    z_size = tile_list.shape.as_list()[0]
+    if z_size < len(z_op_list):
+      raise RuntimeError(
+          'apply_op_z requires the first dimension size ({}) be '
+          'greater than or equal to z_op_list length ({}).'.format(
+              z_size, len(z_op_list)))
+    result = tf.zeros_like(tile_list)
+    for s, op in zip(shift, z_op_list):
+      paddings = [[max(0, -s), max(0, s)], [0, 0], [0, 0]]
+      result += op * tf.pad(tile_list[max(0, s):z_size - max(0, -s), :, :],
+                            paddings)
+    return result
+
+  # This handles the case when the input is a list of 2D `tf.Tensor`.
+  z_len = len(tile_list)
+  if z_len < len(z_op_list):
+    raise RuntimeError('apply_op_z requires tile_list length ({}) be greater '
+                       'than or equal to z_op_list length ({}).'.format(
+                           z_len, len(z_op_list)))
+
   out_list = []
-  range_start = max(0, -start_shift)
-  range_end = min(len(tile_list) - end_shift, len(tile_list))
-  for i in range(range_start, range_end):
-    out = tile_list[i + shift[0]] * z_op_list[0]
-    for j in range(1, len(shift)):
-      out += tile_list[i + shift[j]] * z_op_list[j]
-    out_list.append(out)
-  return ([tile_list[i] for i in range(range_start)] + out_list +
-          [tile_list[i] for i in range(range_end, len(tile_list))])
+  for i in range(len(tile_list)):
+    new_tile = tf.zeros_like(tile_list[i])
+    for s, op in zip(shift, z_op_list):
+      if i + s >= 0 and i + s < z_len:
+        new_tile += op * tile_list[i + s]
+    out_list.append(new_tile)
+  return out_list
 
 
 def apply_convolutional_op_x(
-    tiles: Iterable[tf.Tensor],
+    tiles: FlowFieldVal,
     convop: tf.Operation,
 ) -> FlowFieldVal:
   r"""Apply convolutional op in x.
@@ -488,7 +573,9 @@ def apply_convolutional_op_x(
   should be 8, and the input tile dimensions should be multiples of 128.
 
   Args:
-    tiles: List of (square) 2D tensors of size [spatial_length, spatial_length].
+    tiles: List of length `nz` of (square) 2D `tf.Tensor` with size
+      [spatial_length, spatial_length] or equivalently a single 3D `tf.Tensor`
+      of size [nz, spatial_length, spatial_length].
     convop: 3D tensor with dimension: [spatial_width, kernel_size, kernel_size]
 
   Returns:
@@ -498,26 +585,43 @@ def apply_convolutional_op_x(
   if kernel_size[-1] != kernel_size[-2]:
     raise ValueError('Kernel must be squared-shaped.')
 
-  result = []
-  for tile in tiles:
-    x_size, y_size = tile.shape.as_list()
+  def do_convol_x(tile, x_size, perm, shape_in, shape_out):
     if x_size % kernel_size[-1] != 0:
       raise ValueError('Kernel size must divide tensor size evenly.')
     reshaped_transposed_input = tf.reshape(
-        tf.transpose(tile, perm=[1, 0]), [y_size, -1, kernel_size[-1]])
+        tf.transpose(tile, perm=perm), shape_in)
     convolved_output = tf.nn.conv1d(
-        reshaped_transposed_input,
-        filters=convop,
-        stride=1,
-        padding='SAME')
+        reshaped_transposed_input, filters=convop, stride=1, padding='SAME')
     reshaped_output = tf.transpose(
-        tf.reshape(convolved_output, [y_size, -1]), perm=[1, 0])
-    result.append(reshaped_output)
+        tf.reshape(convolved_output, shape_out), perm=perm)
+    return reshaped_output
+
+  # Handles the case when the input is a single 3D `tf.Tensor`.
+  if isinstance(tiles, tf.Tensor):
+    z_size, x_size, y_size = tiles.shape.as_list()
+    return do_convol_x(
+        tiles,
+        x_size,
+        perm=[0, 2, 1],
+        shape_in=[z_size, y_size, -1, kernel_size[-1]],
+        shape_out=[z_size, y_size, -1])
+
+  # Below handles the case when the input tile is a list of 2D `tf.Tensor`.
+  result = []
+  for tile in tiles:
+    x_size, y_size = tile.shape.as_list()
+    result.append(
+        do_convol_x(
+            tile,
+            x_size,
+            perm=[1, 0],
+            shape_in=[y_size, -1, kernel_size[-1]],
+            shape_out=[y_size, -1]))
   return result
 
 
 def apply_convolutional_op_y(
-    tiles: Iterable[tf.Tensor],
+    tiles: FlowFieldVal,
     convop: tf.Operation,
 ) -> FlowFieldVal:
   """Apply convolutional op in y.
@@ -526,7 +630,9 @@ def apply_convolutional_op_y(
   apply_convolutional_op_x.
 
   Args:
-    tiles: List of (square) 2D tensors of size [spatial_length, spatial_length].
+    tiles: List of length `nz` of (square) 2D `tf.Tensor` with size
+      [spatial_length, spatial_length] or equivalently a single 3D `tf.Tensor`
+      of size [nz, spatial_length, spatial_length].
     convop: 3D tensor with dimension: [spatial_width, kernel_size, kernel_size]
 
   Returns:
@@ -535,35 +641,59 @@ def apply_convolutional_op_y(
   kernel_size = convop.shape.as_list()
   if kernel_size[-1] != kernel_size[-2]:
     raise ValueError('Kernel must be squared-shaped.')
+
+  def do_convol_y(tile, y_size, shape_in, shape_out):
+    if y_size % kernel_size[-1] != 0:
+      raise ValueError('Kernel size must divide tensor size evenly.')
+    reshaped_input = tf.reshape(tile, shape_in)
+    convolved_output = tf.nn.conv1d(
+        reshaped_input, filters=convop, stride=1, padding='SAME')
+    reshaped_output = tf.reshape(convolved_output, shape_out)
+    return reshaped_output
+
+  # This handles the case where the input is a single 3D `tf.Tensor`.
+  if isinstance(tiles, tf.Tensor):
+    z_size, x_size, y_size = tiles.shape.as_list()
+    return do_convol_y(
+        tiles,
+        y_size,
+        shape_in=[z_size, x_size, -1, kernel_size[-1]],
+        shape_out=[z_size, x_size, -1])
+
+  # Below handles the case where the input is a liost of 2D `tf.Tensor`.
   result = []
   for tile in tiles:
     x_size, y_size = tile.shape.as_list()
-    if y_size % kernel_size[-1] != 0:
-      raise ValueError('Kernel size must divide tensor size evenly.')
-    reshaped_input = tf.reshape(tile, [x_size, -1, kernel_size[-1]])
-    convolved_output = tf.nn.conv1d(
-        reshaped_input, filters=convop, stride=1, padding='SAME')
-    reshaped_output = tf.reshape(convolved_output, [x_size, -1])
-    result.append(reshaped_output)
+    result.append(
+        do_convol_y(
+            tile,
+            y_size,
+            shape_in=[x_size, -1, kernel_size[-1]],
+            shape_out=[x_size, -1]))
   return result
 
 
 def _apply_slice_op(
-    tiles: Iterable[tf.Tensor],
+    tiles: FlowFieldVal,
     op: Callable[[Iterable[tf.Tensor]], tf.Tensor],
-) -> FlowFieldVal:
+) -> List[tf.Tensor]:
   """Helper to apply a slice op."""
-  return [op(tile) for tile in tiles]
+  if isinstance(tiles, tf.Tensor):
+    return tf.map_fn(op, tiles)
+  else:
+    return [op(tile) for tile in tiles]
 
 
 def apply_slice_op_x(
-    tiles: Iterable[tf.Tensor],
+    tiles: FlowFieldVal,
     sliceop: Callable[[Iterable[tf.Tensor]], tf.Tensor],
-) -> FlowFieldVal:
+) -> List[tf.Tensor]:
   """Apply slice op in x.
 
   Args:
-    tiles: List of (square) 2D tensors of size [spatial_length, spatial_length].
+    tiles: List of length `nz` of (square) 2D `tf.Tensor` with size
+      [spatial_length, spatial_length] or equivalently a single 3D `tf.Tensor`
+      of size [nz, spatial_length, spatial_length].
     sliceop: Function that applies a kernel to a 2D tensor and returns a 2D
       tensor of the same dimension.
 
@@ -574,13 +704,15 @@ def apply_slice_op_x(
 
 
 def apply_slice_op_y(
-    tiles: Iterable[tf.Tensor],
+    tiles: FlowFieldVal,
     sliceop: Callable[[Iterable[tf.Tensor]], tf.Tensor],
-) -> FlowFieldVal:
+) -> List[tf.Tensor]:
   """Apply slice op in y.
 
   Args:
-    tiles: List of (square) 2D tensors of size [spatial_length, spatial_length].
+    tiles: List of length `nz` of (square) 2D `tf.Tensor` with size
+      [spatial_length, spatial_length] or equivalently a single 3D `tf.Tensor`
+      of size [nz, spatial_length, spatial_length].
     sliceop: Function that applies a kernel to a 2D tensor and returns a 2D
       tensor of the same dimension.
 
@@ -717,25 +849,35 @@ def global_mean(
 ) -> FlowFieldVal:
   """Computes the mean of the tensor in a distributed setting.
 
-  The 3D tensor in the input argument is represented as a list of `tf.Tensor`.
+  The 3D tensor in the input argument can be represented as a list of 2D
+  `tf.Tensor` or a single 3D `tf.Tensor`. If it is a list of 2D `tf.Tensor`, the
+  length of the list represents `nz` while the shape of the 2D `tf.Tensor` is
+  [nx, ny]. If it is a single 3D `tf.Tensor`, its shape is [nz, nx, ny]. The
+  `halos` is always represented as [halo_x, halo_y, halo_z].
   If `axis` is None the result will be a scalar. Otherwise, the result will
   have the same structure as `f` and the reduction axes will be preserved. The
   halos are always removed from the output.
 
   Args:
-    f: The vectors for the mean computation.
+    f: The vectors for the mean computation. This is represented either as a
+      length `nz` list of 2D `tf.Tensor` with shape of [nx, ny], or a single 3D
+      `tf.Tensor` with shape of [nz, nx, ny].
     replicas: A 3D numpy array describing the grid of the TPU topology and
-    mapping replica grid coordinates to replica ids, e.g.
-      [[[0, 1], [2, 3]], [[4, 5], [6, 7]]] represents 8 cores partitioned into a
-      2 x 2 x 2 grid.
-    halos: Region to exclude in the calculation.
+      mapping replica grid coordinates to replica ids, e.g. [[[0, 1], [2, 3]],
+      [[4, 5], [6, 7]]] represents 8 cores partitioned into a 2 x 2 x 2 grid.
+    halos: Region to exclude in the calculation. Represented as [halo_x, halo_y,
+      halo_z].
     axis: The dimension to reduce. If None, all dimensions are reduced and the
-      result is a scalar.
+      result is a scalar. Note the indexing of dimension is [x, y, z] = [0, 1,
+      2].
 
   Returns:
     The reduced tensor. If `axis` is None, a scalar that is the global mean of
-    `f` is returned. Otherwise, the z-list of reduced tensors is returned. The
-    z-list will have a single tensor if `axis` includes 2.
+    `f` is returned. Otherwise, the reduced result along the `axis` will be
+    returned, with the reduced dimensions kept, while the non-reduced dimensions
+    will have the halos striped, the returned result will be in a format
+    consistent with the input (either a list of 2D `tf.Tensor` or a single 3D
+    `tf.Tensor`.
   """
   group_assignment = group_replicas(replicas, axis)
   group_count = len(group_assignment[0])
@@ -743,12 +885,23 @@ def global_mean(
 
   def grid_size_local(f, axes):
     size = 1
+    if isinstance(f, tf.Tensor):
+      shape = f.shape.as_list()
+      for axis in axes:
+        size *= shape[(axis + 1) % 3]
+      return size
+
     for axis in axes:
       shape = len(f) if axis == 2 else f[0].shape.as_list()[axis]
       size *= shape
     return size
 
   def reduce_local(x, axis, keep_dims=False):
+    if isinstance(x, tf.Tensor):
+      new_axis = [(ax + 1) % 3 for ax in axis]
+      local_sum = tf.reduce_sum(x, new_axis, keep_dims)
+      return local_sum
+
     dims = list(axis)
     if 2 in dims:
       x = [tf.math.add_n(x)]
@@ -757,12 +910,15 @@ def global_mean(
       x = [tf.math.reduce_sum(x_i, axis=dims, keepdims=keep_dims) for x_i in x]
     return x
 
+  denominator_type = f.dtype if isinstance(f, tf.Tensor) else f[0].dtype
   if axis is None:  # Returns a scalar.
     axis = list(range(3))
-    local_sum = reduce_local(f, axis, keep_dims=False)[0]
+    local_sum_temp = reduce_local(f, axis, keep_dims=False)
+    local_sum = local_sum_temp if isinstance(
+        f, tf.Tensor) else local_sum_temp[0]
     global_sum = tf1.tpu.cross_replica_sum(local_sum, group_assignment)
     count = group_count * grid_size_local(f, axis)
-    return global_sum / tf.cast(count, f[0].dtype)
+    return global_sum / tf.cast(count, denominator_type)
   else:
     if isinstance(axis, int):
       axis = [axis]
@@ -771,8 +927,12 @@ def global_mean(
 
     # Divide by the dimension of the physical full grid along `axis`.
     count = group_count * grid_size_local(f, axis)
-    mean = global_sum / tf.cast(count, f[0].dtype)
-    return tf.unstack(mean)
+    mean = global_sum / tf.cast(count, denominator_type)
+
+    # Recover the original format, since `cross_replica_sum` would implicitly
+    # do a stacking if the original input is list of `tf.Tensor`.
+    mean = tf.unstack(mean) if not isinstance(f, tf.Tensor) else mean
+    return mean
 
 
 def global_reduce(
@@ -823,11 +983,11 @@ def remove_global_mean(
   """
   f_mean = global_mean(f, replicas, (halo_width,) * 3)
 
-  return [f_i - f_mean for f_i in f]
+  return tf.nest.map_structure(lambda f_i: f_i - f_mean, f)
 
 
 def compute_norm(
-    v: Union[FlowFieldVal, tf.Tensor],
+    v: FlowFieldVal,
     norm_types: Sequence[NormType],
     replicas: np.ndarray,
 ) -> Dict[Text, tf.Tensor]:
@@ -885,7 +1045,7 @@ def compute_norm(
 def get_core_coordinate(
     replicas: np.ndarray,
     replica_id: tf.Tensor,
-    dtype: tf.DType = tf.int32,
+    dtype: tf.dtypes.DType = tf.int32,
 ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
   """Get the coordinate for the core with `replica_id`.
 
@@ -917,6 +1077,11 @@ def validate_fields(
     w: FlowFieldVal,
 ) -> None:
   """Validates the components of the input field have the same shape."""
+  if ((isinstance(u, tf.Tensor) ^ isinstance(v, tf.Tensor)) or
+      (isinstance(v, tf.Tensor) ^ isinstance(w, tf.Tensor))):
+    raise ValueError('All inputs `u`, `v`, and `w` must all be in the same '
+                     'format. They must all be lists of 2D `tf.Tensor` or '
+                     'single 3D `tf.Tensor`.')
   u_nx, u_ny, u_nz = get_field_shape(u)
   v_nx, v_ny, v_nz = get_field_shape(v)
   w_nx, w_ny, w_nz = get_field_shape(w)
@@ -926,16 +1091,18 @@ def validate_fields(
                      'number of x-y slices for `u`: %d, shape of slice: %s; '
                      'number of x-y slices for `v`: %d, shape of slice: %s; '
                      'number of x-y slices for `w`: %d, shape of slice: %s.' %
-                     (u_nz, str((u_nx, u_ny)),
-                      v_nz, str((v_nx, v_ny)),
-                      w_nz, str((w_nx, w_nz))))
+                     (u_nz, str((u_nx, u_ny)), v_nz, str(
+                         (v_nx, v_ny)), w_nz, str((w_nx, w_nz))))
 
 
 def get_field_shape(u: FlowFieldVal) -> Tuple[int, int, int]:
   """Gets the 3D volume shape of the sequence of Tensor represents."""
-  nz = len(u)
-  nx = u[0].shape.as_list()[0]
-  ny = u[0].shape.as_list()[1]
+  if isinstance(u, tf.Tensor):
+    nz, nx, ny = u.shape.as_list()
+  else:
+    nz = len(u)
+    nx = u[0].shape.as_list()[0]
+    ny = u[0].shape.as_list()[1]
   return nx, ny, nz
 
 
@@ -945,7 +1112,7 @@ def get_spectral_index_grid(
     core_nz: int,
     replicas: np.ndarray,
     replica_id: tf.Tensor,
-    dtype: tf.DType = tf.int32,
+    dtype: tf.dtypes.DType = tf.int32,
     halos: Sequence[int] = (0, 0, 0),
     pad_value=0,
 ) -> Mapping[Text, tf.Tensor]:
@@ -1006,13 +1173,9 @@ def get_spectral_index_grid(
     else:
       gg_c = -1 * gg
     gg = tf.pad(
-        gg,
-        paddings=[[halos[dim], halos[dim]]],
-        constant_values=pad_value)
+        gg, paddings=[[halos[dim], halos[dim]]], constant_values=pad_value)
     gg_c = tf.pad(
-        gg_c,
-        paddings=[[halos[dim], halos[dim]]],
-        constant_values=pad_value)
+        gg_c, paddings=[[halos[dim], halos[dim]]], constant_values=pad_value)
     return gg, gg_c
 
   xx, xx_c = get_grid(0)
@@ -1029,7 +1192,7 @@ def get_spectral_index_grid(
   }
 
 
-def get_tensor_shape(state: FlowFieldVal) -> Tuple[int, int, int]:
+def get_tensor_shape(state: Sequence[tf.Tensor]) -> Tuple[int, int, int]:
   """Retrieves the shape of a 3D tensor represented as a stack of 2D tf.Tensor.
 
   Args:
@@ -1064,7 +1227,7 @@ def integration_in_dim(
 ) -> Tuple[FlowFieldVal, FlowFieldVal]:
   """Computes the integration of `f` along the z dimension.
 
-  Integration with definite integrals is performed for `f` along the list
+  Integration with definite integrals is performed for `f` along the `dim`
   dimension. The integration is performed for tensors distributed across
   multiple TPUs along the integration direction.
 
@@ -1073,17 +1236,21 @@ def integration_in_dim(
     replicas: A 3D numpy array describing the grid of the TPU topology, e.g.
       [[[0, 1], [2, 3]], [[4, 5], [6, 7]]] represents 8 cores partitioned into a
       2 x 2 x 2 grid.
-    f: The field to be integrated. Note that `f` is represented as a list of 2D
-      x-y slices. The integration includes all nodes. If there are halos, those
-      nodes will also be included in the integration result.
+    f: The field to be integrated. Note that `f` is either represented as a list
+      of 2D `tf.Tensor` (x-y slices) or a single 3D `tf.Tensor`. The integration
+      includes all nodes. If there are halos, those nodes will also be included
+      in the integration result. Note if it is a list of 2D `tf.Tensor`, the
+      length of the list is `nz` and each silce has the shape [nx, ny]; if it is
+      a single 3D `tf.Tensor`, the shape is [nz, nx, ny].
     h: The uniform grid spacing in the integration direction.
-    dim: The dimension along which the integration is performed.
+    dim: The dimension along which the integration is performed. The indices
+      representing `dim` are in the convention of [x, y, z] = [0, 1, 2].
 
   Returns:
     Two decks of tensors that has the same size of `f`. In the first deck, each
-    layer is the integrated value from the first layer to the current one; in
-    the second one, each layer is the integrated value from the current layer to
-    the last one.
+    layer normal to the `dim` dimension is the integrated value from the first
+    layer to the current one; in the second one, each layer is the integrated
+    value from the current layer to the last one.
   """
   ix, iy, iz = get_core_coordinate(replicas, replica_id)
   group_assignment = group_replicas(replicas, dim)
@@ -1142,7 +1309,7 @@ def integration_in_dim(
 
     return tf.cumsum(g, axis=axis)
 
-  f_stacked = tf.stack(f)
+  f_stacked = f if isinstance(f, tf.Tensor) else tf.stack(f)
   local_cumsum = cumsum(f_stacked)
   # Because the last layer in `local_cumsum` is the sum of all layers in the
   # current TPU replica, the following operation provides block-level integrals
@@ -1184,8 +1351,12 @@ def integration_in_dim(
       tf.expand_dims(global_lim_low, axis=axis) + f_stacked)
   integral_to_end = cumsum_to_end + 0.5 * (
       f_stacked - tf.expand_dims(global_lim_high, axis=axis))
-
-  return (tf.unstack(h * integral_from_0), tf.unstack(h * integral_to_end))
+  # pylint: disable=g-long-ternary
+  integrated = ((h * integral_from_0,
+                 h * integral_to_end) if isinstance(f, tf.Tensor) else
+                (tf.unstack(h * integral_from_0),
+                 tf.unstack(h * integral_to_end)))
+  return integrated
 
 
 def strip_halos(
@@ -1196,19 +1367,27 @@ def strip_halos(
 
   Args:
     f: A field component. This is expected to be expressed in the form of a list
-      of 2D Tensors representing x-y slices, where each list element represents
-      the slice of at a given z coordinate in ascending z order. The halos of
-      the field are included.
+      of 2D `tf.Tensor` representing x-y slices, where each list element
+      represents the slice of at a given z coordinate in ascending z order, or a
+      single 3D `tf.Tensor` with the shape [nz, nx, ny]. The halos of the field
+      are included.
     halos: The width of the (symmetric) halos for each dimension: for example
       [1, 2, 3] means the halos for `f` have width of 1, 2, 3 on both sides in
-      x, y, z dimension respectively.
+      x, y, z dimension respectively. This is in the form of [halo_x, halo_y,
+      halo_z]
 
   Returns:
-    The inner part of the field component with the halo region removed. Still
-    represented as a list of 2D Tensors representing x-y slices (excluding halo)
-    , where each list element represents the slice of at a given z coordinate in
-    ascebdubg z order (but excluding the z index in the halo region).
+    The inner part of the field component with the halo region removed.
+    Represented as the same format as the input: a list of 2D `tf.Tensor` or a
+    single 3D `tf.Tensor` with the halo region excluded.
   """
+  # Handles the case of single 3D tensor.
+  if isinstance(f, tf.Tensor):
+    nz, nx, ny = f.get_shape().as_list()
+    return f[halos[2]:nz - halos[2], halos[0]:nx - halos[0],
+             halos[1]:ny - halos[1]]
+
+  # Handles the case of a list of 2D tensor.
   nx = f[0].get_shape().as_list()[0]
   ny = f[0].get_shape().as_list()[1]
   nz = len(f)
@@ -1226,30 +1405,32 @@ def get_field_inner(
 ) -> Tuple[FlowFieldVal, FlowFieldVal, FlowFieldVal]:
   """Validates and removes the halos of the input field components.
 
+  All three compoenents can be represented as a list of 2D `tf.Tensor` or a
+  single 3D `tf.Tensor` but they must all be in the same format.
+
   Args:
     u: The first component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order. The halos of the field are included.
+      expected to be expressed in the form of a length `nz` list of 2D
+      `tf.Tensor` with shape of [nx, ny] or a single 3D `tf.Tensor` with shape
+      of [nz, nx, ny]. The halos of the field are included.
     v: The second component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order. The halos of the field are included.
+      expected to be expressed in the form of a length `nz` list of 2D
+      `tf.Tensor` with shape of [nx, ny] or a single 3D `tf.Tensor` with shape
+      of [nz, nx, ny]. The halos of the field are included.
     w: The third component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order. The halos of the field are included.
-    halos: The width of the (symmetric) halos for each dimension: for example
-      [1, 2, 3] means the halos for `u`, `v`, and `w` have width of 1, 2, 3 on
-      both sides in x, y, z dimension respectively. The halo region of the field
-      is first removed in the calculation of the spectrum.
+      expected to be expressed in the form of a length `nz` list of 2D
+      `tf.Tensor` with shape of [nx, ny] or a single 3D `tf.Tensor` with shape
+      of [nz, nx, ny]. The halos of the field are included.
+    halos: The width of the (symmetric) halos for each dimension in the form of
+      [halo_x, halo_y, halo_z], for example:[1, 2, 3] means the halos for `u`,
+        `v`, and `w` have width of 1, 2, 3 on both sides in x, y, z dimension
+        respectively. The halo region of the field will be removed.
 
   Returns:
     A tuple with three components each representing the inner part of a field
-    component with the halo region removed. Each component is still represented
-    as a list of 2D Tensors representing x-y slices (excluding halo), where each
-    list element represents the slice of at a given z coordinate in ascending z
-    order (but excluding the z index in the halo region).
+    component with the halo region removed. Each component is represented in the
+    same format as they are pased in, either as a list of 2D `tf.Tensor` or a
+    single 3D `tf.Tensor`.
   """
   validate_fields(u, v, w)
   u_inner = strip_halos(u, halos)
@@ -1258,7 +1439,7 @@ def get_field_inner(
   return u_inner, v_inner, w_inner
 
 
-def cross_replica_gather(x: tf.Tensor, num_replicas: int) -> FlowFieldVal:
+def cross_replica_gather(x: tf.Tensor, num_replicas: int) -> List[tf.Tensor]:
   """Cross-replica gather of tensors.
 
   Args:
@@ -1291,11 +1472,11 @@ def pad(
   """Pads the input field with a given value.
 
   Args:
-    f: A field component. This is expected to be expressed in the form of a list
-      of 2D Tensors representing x-y slices, where each list element represents
-      the slice of at a given z coordinate in ascending z order. The halos of
-      the field are included.
-    paddings: The padding lengths for each dimension. For instance,
+    f: A field component. This is expected to be expressed in the form of a
+      length `nz` list of 2D `tf.Tensor` with shape of [nx, ny] or a single 3D
+      `tf.Tensor` with shape of [nz, nx, ny].
+    paddings: The padding lengths for each dimension in the format: [[pad_x_low,
+      pad_x_hi], [pad_y_low, pad_y_hi], [pad_z_low, pad_z_hi]]. For instance,
       ((0, 0), (2, 0), (0, 3)) means f will be padded with a width of 2 on the
       lower face of the y dimension and with a width of 3 on the upper face of
       the z dimension.
@@ -1304,6 +1485,10 @@ def pad(
   Returns:
     The padded input field as a list of 2D tensors.
   """
+  if isinstance(f, tf.Tensor):
+    rotated_paddings = [paddings[2], paddings[0], paddings[1]]
+    return tf.pad(f, rotated_paddings, constant_values=value)
+
   padded = [tf.pad(f_i, paddings[0:2], constant_values=value) for f_i in f]
   lower_pad = [value * tf.ones_like(padded[0])
               ] * paddings[2][0] if paddings[2][0] > 0 else []

@@ -409,7 +409,7 @@ def _make_backward_slice_kernel(
     stencil: Sequence[float],
     n: int,
     axis: Text,
-    offset: Optional[int] = None,
+    offset: Optional[int],
 ) -> Callable[[tf.Tensor], tf.Tensor]:
   """Generates a slice kernel with `stencil` as weights.
 
@@ -426,11 +426,11 @@ def _make_backward_slice_kernel(
   Returns:
     A slice-based finite difference operator.
   """
-  del n
+  del n, offset
 
   def kernel_fn(u: tf.Tensor) -> tf.Tensor:
     """The kernel function that performs slicing operation."""
-    return _make_slice_kernel(u, stencil, axis, offset)
+    return _make_slice_kernel(u, stencil, axis)
 
   return kernel_fn
 
@@ -550,12 +550,14 @@ class ApplyKernelOp(object):
     self._z_kernel_dict = _z_kernel_dict(custom_kernel_dict)
 
   @abc.abstractmethod
-  def apply_kernel_op_x(self, tiles: FlowFieldVal, name: Text) -> FlowFieldVal:
+  def apply_kernel_op_x(self, tiles: FlowFieldVal,
+                        name: Text) -> FlowFieldVal:
     """Applies a kernel op in x on a given FlowFieldVal input."""
     raise NotImplementedError('Calling an abstract method.')
 
   @abc.abstractmethod
-  def apply_kernel_op_y(self, tiles: FlowFieldVal, name: Text) -> FlowFieldVal:
+  def apply_kernel_op_y(self, tiles: FlowFieldVal,
+                        name: Text) -> FlowFieldVal:
     """Applies a kernel op in y on a given FlowFieldVal input."""
     raise NotImplementedError('Calling an abstract method.')
 
@@ -718,10 +720,12 @@ class ApplyKernelMulOp(ApplyKernelOp):
           kernel_generation_fn=_make_backward_banded_matrix,
           n=n)
 
-  def apply_kernel_op_x(self, tiles: FlowFieldVal, name: Text) -> FlowFieldVal:
+  def apply_kernel_op_x(self, tiles: FlowFieldVal,
+                        name: Text) -> FlowFieldVal:
     return common_ops.apply_op_x(tiles, self._get_kernel(name))  # pytype: disable=wrong-arg-types
 
-  def apply_kernel_op_y(self, tiles: FlowFieldVal, name: Text) -> FlowFieldVal:
+  def apply_kernel_op_y(self, tiles: FlowFieldVal,
+                        name: Text) -> FlowFieldVal:
     return common_ops.apply_op_y(tiles, self._get_kernel(name))  # pytype: disable=wrong-arg-types
 
 
@@ -838,17 +842,21 @@ class ApplyKernelConvOp(ApplyKernelOp):
         for key, value in numpy_kernels.items()
     })
 
-  def apply_kernel_op_x(self, tiles: FlowFieldVal, name: Text) -> FlowFieldVal:
+  def apply_kernel_op_x(self, tiles: FlowFieldVal,
+                        name: Text) -> FlowFieldVal:
     dtype = (
         tiles.dtype if isinstance(tiles, tf.Tensor) else list(tiles)[0].dtype)
     return common_ops.apply_convolutional_op_x(
-        tiles, tf.cast(self._get_kernel(name), dtype))
+        tiles,
+        tf.cast(self._get_kernel(name), dtype))
 
-  def apply_kernel_op_y(self, tiles: FlowFieldVal, name: Text) -> FlowFieldVal:
+  def apply_kernel_op_y(self, tiles: FlowFieldVal,
+                        name: Text) -> FlowFieldVal:
     dtype = (
         tiles.dtype if isinstance(tiles, tf.Tensor) else list(tiles)[0].dtype)
     return common_ops.apply_convolutional_op_y(
-        tiles, tf.cast(self._get_kernel(name), dtype))
+        tiles,
+        tf.cast(self._get_kernel(name), dtype))
 
 
 def _slice_kernel_dict(
@@ -1043,8 +1051,10 @@ class ApplyKernelSliceOp(ApplyKernelOp):
           axis,
           kernel_generation_fn=_make_backward_slice_kernel)
 
-  def apply_kernel_op_x(self, tiles: FlowFieldVal, name: Text) -> FlowFieldVal:
+  def apply_kernel_op_x(self, tiles: FlowFieldVal,
+                        name: Text) -> FlowFieldVal:
     return common_ops.apply_slice_op_x(tiles, self._get_kernel(name))  # pytype: disable=wrong-arg-types
 
-  def apply_kernel_op_y(self, tiles: FlowFieldVal, name: Text) -> FlowFieldVal:
+  def apply_kernel_op_y(self, tiles: FlowFieldVal,
+                        name: Text) -> FlowFieldVal:
     return common_ops.apply_slice_op_y(tiles, self._get_kernel(name))  # pytype: disable=wrong-arg-types

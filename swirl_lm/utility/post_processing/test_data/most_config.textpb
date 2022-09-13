@@ -1,0 +1,27 @@
+# proto-file: swirl_lm/base/parameters.proto
+# proto-message: SwirlLMParameters
+
+diffusion_scheme: DIFFUSION_SCHEME_CENTRAL_3
+kinematic_viscosity: 1e-5
+gravity_direction {
+  dim_0: 0.0
+  dim_1: 0.0
+  dim_2: -1.0
+}
+boundary_models {
+  most {
+    u_star: 0.25
+    t_0: 265.0
+    t_s: 265.0
+    z_0: 0.1
+    z_t: 0.1
+    heat_flux: 1.27e-2
+    alpha: 1.0
+    beta_m: 5.0
+    beta_h: 6.0
+  }
+}
+scalars {
+  name: 'theta_li'
+  diffusivity: 4e-5
+}

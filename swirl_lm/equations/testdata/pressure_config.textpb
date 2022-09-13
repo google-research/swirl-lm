@@ -1,6 +1,9 @@
 # proto-file: swirl_lm/base/parameters.proto
 # proto-message: SwirlLMParameters
 
+gravity_direction {
+  dim_0: 0.0 dim_1: 0.0 dim_2: -1.0
+}
 pressure {
   solver {
     jacobi {

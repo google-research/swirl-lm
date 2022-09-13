@@ -14,7 +14,7 @@
 
 """A library of boundary condition related utility functions."""
 
-import collections
+from collections import abc
 import enum
 import functools
 from typing import Dict, List, Optional, Sequence, Text
@@ -222,7 +222,7 @@ def dirichlet_ghost_cell_quick(
             constant_like = functools.partial(
                 (lambda val, x: tf.fill(x.shape, val)), boundary_val)
             boundary_cell = tf.nest.map_structure(constant_like, fluid_cell)
-          elif isinstance(bc_values[dim][face][1], collections.Sequence):
+          elif isinstance(bc_values[dim][face][1], abc.Sequence):
             if len(bc_values[dim][face][1]) < halo_width:
               raise ValueError(
                   'Insufficient slices provided as boundary condition. At least'

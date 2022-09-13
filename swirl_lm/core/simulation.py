@@ -176,7 +176,8 @@ class Simulation:
       })
 
     states_0.update(
-        self.pressure.update_pressure_halos(replica_id, replicas, states_0))
+        self.pressure.update_pressure_halos(replica_id, replicas, states_0,
+                                            additional_states))
 
     # Reserve a dictionary of variables for diagnostics. The name of these
     # diagnostic variables has to be in the `additional_states` for them to be
@@ -249,19 +250,6 @@ class Simulation:
           ],
       })
 
-      states_k.update(
-          self.pressure.update_pressure_halos(
-              replica_id, replicas, {
-                  'rho_u': states_k['rho_u'],
-                  'rho_v': states_k['rho_v'],
-                  'rho_w': states_k['rho_w'],
-                  'u': states_k['u'],
-                  'v': states_k['v'],
-                  'w': states_k['w'],
-                  'rho': rho_mid,
-                  'p': states_k['p'],
-              }))
-
       # Step 2: Update all scalars in conservative form. Boundary conditions are
       # not enforced for the conservative scalars, but they are enforced for the
       # temporary primitive scalars.
@@ -284,6 +272,20 @@ class Simulation:
                   states_k, additional_states),
           'drho': drho,
       })
+
+      states_k.update(
+          self.pressure.update_pressure_halos(
+              replica_id, replicas, {
+                  'rho_u': states_k['rho_u'],
+                  'rho_v': states_k['rho_v'],
+                  'rho_w': states_k['rho_w'],
+                  'u': states_k['u'],
+                  'v': states_k['v'],
+                  'w': states_k['w'],
+                  'rho': rho_mid,
+                  'rho_thermal': states_k['rho_thermal'],
+                  'p': states_k['p'],
+              }, additional_states))
 
       # Step 4: Update all primitive scalars with the latest density. Boundary
       # conditions are enforced for these scalars.

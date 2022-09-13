@@ -477,7 +477,7 @@ class Scalars(object):
       rho = states[_KEY_RHO]
 
       temperature = self.thermodynamics.model.saturation_adjustment(
-          'theta_li', theta_li, rho, q_t)
+          'theta_li', theta_li, rho, q_t, zz)
 
       # Compute the potential temperature.
       buf = self.thermodynamics.model.potential_temperatures(
@@ -953,16 +953,16 @@ class Scalars(object):
       # Compute the temperature.
       q_t = q if scalar_name == 'q_t' else states['q_t']
 
-      if 'T' in additional_states.keys():
-        temperature = additional_states['T']
+      if 'theta_li' in states:
+        temperature = self.thermodynamics.model.saturation_adjustment(
+            'theta_li', states['theta_li'], rho, q_t, zz=zz)
       elif 'e_t' in states:
         e = self.thermodynamics.model.internal_energy_from_total_energy(
             states['e_t'], states[_KEY_U], states[_KEY_V], states[_KEY_W], zz)
         temperature = self.thermodynamics.model.saturation_adjustment(
             'e_int', e, rho, q_t)
-      elif 'theta_li' in states:
-        temperature = self.thermodynamics.model.saturation_adjustment(
-            'theta_li', states['theta_li'], rho, q_t)
+      elif 'T' in additional_states.keys():
+        temperature = additional_states['T']
 
       # Compute the potential temperature.
       if 'theta' in additional_states:

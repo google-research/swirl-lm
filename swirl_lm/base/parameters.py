@@ -14,7 +14,7 @@
 
 """Library for input config for the incompressible Navier-Stokes solver."""
 
-from typing import Callable, List, Mapping, Optional, Sequence, Text, Tuple
+from typing import Callable, List, Mapping, Optional, Sequence, Tuple
 
 from absl import flags
 from absl import logging
@@ -52,7 +52,7 @@ SourceUpdateFn = Callable[[
     .FlowFieldMap, types.FlowFieldMap, grid_parametrization.GridParametrization
 ], types.FlowFieldMap]
 
-SourceUpdateFnLib = Mapping[Text, SourceUpdateFn]
+SourceUpdateFnLib = Mapping[str, SourceUpdateFn]
 
 _BCInfo = boundary_conditions_pb2.BoundaryCondition.BoundaryInfo
 _BCType = grid_parametrization_pb2.BoundaryConditionType
@@ -63,8 +63,13 @@ FLAGS = flags.FLAGS
 class SwirlLMParameters(grid_parametrization.GridParametrization):
   """Parameters for running the incompressible Navier-Stokes solver."""
 
-  def __init__(self, config):
-    super(SwirlLMParameters, self).__init__()
+  def __init__(
+      self,
+      config,
+      grid_params: Optional[
+          grid_parametrization_pb2.GridParametrization] = None,
+  ):
+    super(SwirlLMParameters, self).__init__(grid_params)
 
     self.kernel_op_type = config.kernel_op_type
 
@@ -193,7 +198,7 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     # Toggle if to run with the debug mode.
     self.dbg = FLAGS.simulation_debug
 
-  def __str__(self) -> Text:
+  def __str__(self) -> str:
     return super(SwirlLMParameters, self).__str__() + (
         ', rho: {}, nu: {}, nit: {}'.format(self.rho, self.nu, self.nit))
 
@@ -229,14 +234,12 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     return bc
 
   @staticmethod
-  def config_from_proto(config_filepath: Optional[Text] = None):
-    """Reads the config text proto file."""
-    if config_filepath is None:
-      raise IOError('Input file path is not specified.')
-
-    with tf.io.gfile.GFile(config_filepath, 'r') as f:
-      text_proto = f.read()
-
+  def config_from_text_proto(
+      text_proto: str,
+      grid_params: Optional[
+          grid_parametrization_pb2.GridParametrization] = None,
+  ) -> 'SwirlLMParameters':
+    """Parses the config proto in text format into SwirlLMParameters."""
     config = text_format.Parse(text_proto, parameters_pb2.SwirlLMParameters())
 
     # Sanity check for the solver procedure.
@@ -254,7 +257,19 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
         TimeIntegrationScheme.TIME_SCHEME_UNKNOWN):
       raise NotImplementedError('Time integration scheme is not specified.')
 
-    return SwirlLMParameters(config)
+    return SwirlLMParameters(config, grid_params)
+
+  @staticmethod
+  def config_from_proto(
+      config_filepath: str,
+      grid_params: Optional[
+          grid_parametrization_pb2.GridParametrization] = None,
+  ) -> 'SwirlLMParameters':
+    """Reads the config text proto file."""
+    with tf.io.gfile.GFile(config_filepath, 'r') as f:
+      text_proto = f.read()
+
+    return SwirlLMParameters.config_from_text_proto(text_proto, grid_params)
 
   @property
   def max_halo_width(self) -> int:
@@ -281,7 +296,7 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
       )
 
   @property
-  def scalars_names(self) -> List[Text]:
+  def scalars_names(self) -> List[str]:
     """Retrieves the names of all scalars in the flow system.
 
     Returns:
@@ -291,7 +306,7 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     return [scalar.name for scalar in self.scalars]
 
   @property
-  def transport_scalars_names(self) -> List[Text]:
+  def transport_scalars_names(self) -> List[str]:
     """Retrieves the names of transported scalars in the flow system.
 
     Returns:
@@ -342,7 +357,7 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     """Sets the library of functions that updates the source termss."""
     self._source_update_fn_lib = source_lib
 
-  def source_update_fn(self, varname: Text):
+  def source_update_fn(self, varname: str):
     """Retrieves the source term update function for `varname` if available.
 
     Args:
@@ -402,7 +417,7 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     """Sets the function that postprocesses `states`."""
     self._postprocessing_states_update_fn = update_fn
 
-  def diffusivity(self, scalar_name: Text) -> float:
+  def diffusivity(self, scalar_name: str) -> float:
     """Retrieves the diffusivity of a scalar.
 
     Args:
@@ -423,7 +438,7 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
         '{} is not in the flow field. Valid scalars are {}.'.format(
             scalar_name, self.scalars_names))
 
-  def density(self, scalar_name: Text) -> float:
+  def density(self, scalar_name: str) -> float:
     """Retrieves the density of a scalar.
 
     Args:
@@ -443,7 +458,7 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
         '{} is not in the flow field. Valid scalars are {}.'.format(
             scalar_name, self.scalars_names))
 
-  def molecular_weight(self, scalar_name: Text) -> float:
+  def molecular_weight(self, scalar_name: str) -> float:
     """Retrieves the molecular_weight of a scalar.
 
     Args:
@@ -463,8 +478,8 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
         '{} is not in the flow field. Valid scalars are {}.'.format(
             scalar_name, self.scalars_names))
 
-  def scalar_time_integration_scheme(
-      self, scalar_name: Text) -> TimeIntegrationScheme:
+  def scalar_time_integration_scheme(self,
+                                     scalar_name: str) -> TimeIntegrationScheme:
     """Retrieves the time integration scheme of a scalar.
 
     Args:
@@ -487,4 +502,7 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
 
 def params_from_config_file_flag() -> SwirlLMParameters:
   """Returns parameters loaded from --config_filepath flag."""
+  if not FLAGS.config_filepath:
+    raise ValueError('Flag --config_filepath is not set.')
+
   return SwirlLMParameters.config_from_proto(FLAGS.config_filepath)

@@ -51,11 +51,8 @@ def gen_computation_stride(computation_shape: np.ndarray,
   describing the shape of TPU topology, a rank-1 array of size 4, and in the
   format of `[nx, ny, nz, num_cores]` with `ni (i = x, y, z)` denoting the
   number of TPU chips along each dimension and `num_cores` denotes the number of
-  cores per requested chip. The recasting consists of two steps: first, it
-  counts the total number of TPU cores under request; second, recasting the
-  number of requested TPU cores per dimension in the sequence of
-  `num_cores -> nz -> ny -> nx`. Note that the recasting is based on the
-  assumption that the number of TPU cores per replica is always `1`.
+  cores per requested chip. The recasting finds the `strides` that pack the
+  requested number of TPU cores with the given `tpu_mesh_shape`.
 
   Args:
     computation_shape: A rank 1 array of size 3 representing the shape of the
@@ -85,16 +82,17 @@ def gen_computation_stride(computation_shape: np.ndarray,
                      'the topology.'.format(num_cores_requested,
                                             np.prod(tpu_mesh_shape)))
 
-  idx = 3
-  while idx >= 0:
-    div, mod = np.divmod(num_cores_requested, tpu_mesh_shape[idx])
+  sorted_idx = np.argsort(tpu_mesh_shape, kind='stable')
+  idx = 0
+  while idx <= 3:
+    div, mod = np.divmod(num_cores_requested, tpu_mesh_shape[sorted_idx[idx]])
     if mod == 0:
       num_cores_requested = div
-      computation_stride[idx] = tpu_mesh_shape[idx]
+      computation_stride[sorted_idx[idx]] = tpu_mesh_shape[sorted_idx[idx]]
     if div == 0:
-      computation_stride[idx] = mod
+      computation_stride[sorted_idx[idx]] = mod
       break
-    idx -= 1
+    idx += 1
 
   if np.prod(computation_stride) < np.prod(computation_shape):
     raise ValueError('Requested computation_shape ({}, {}, {}) does not fit '

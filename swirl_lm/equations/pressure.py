@@ -136,6 +136,7 @@ from swirl_lm.equations import pressure_pb2
 from swirl_lm.linalg import poisson_solver
 from swirl_lm.numerics import filters
 from swirl_lm.numerics import numerics_pb2
+from swirl_lm.physics import constants
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import thermodynamics_pb2
 from swirl_lm.utility import common_ops
@@ -151,6 +152,9 @@ FlowFieldMap = types.FlowFieldMap
 
 # The gravitational acceleration constant, in units of N/kg.
 _GRAVITY = 9.81
+
+_G_THRESHOLD = 1e-6
+
 # Poisson solver's dtype is the same as other parts by default (being `None` or
 # types.TF_DTYPE), but it doesn't have to. Useful if one needs higher precision
 # for the Poisson solver only.
@@ -428,6 +432,14 @@ class Pressure(object):
         params, self._kernel_op, self._pressure_params.solver)
 
     self._gravity_vec = params.gravity_direction or (0, 0, 0)
+
+    # Find the direction of gravity. Only vector along a particular dimension is
+    # considered currently.
+    self.g_dim = None
+    for i in range(3):
+      if np.abs(np.abs(self._gravity_vec[i]) - 1.0) < _G_THRESHOLD:
+        self.g_dim = i
+        break
 
     self._halo_dims = (0, 1, 2)
     self._replica_dims = (0, 1, 2)
@@ -715,34 +727,36 @@ class Pressure(object):
 
     return (dp, monitor_vars)
 
-  def _update_pressure_bc(self, states: FlowFieldMap):
+  def _update_pressure_bc(
+      self,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
+  ):
     """Updates the boundary condition of pressure based on the flow field."""
-    def convection_per_dim(
-        kernel_op,
-        rho_u,
-        u,
-        dx,
-    ):
-      """Computes the convection term in a specific dimension."""
-      flux = [rho_u_i * u_i for rho_u_i, u_i in zip(rho_u, u)]
-      return [-grad / (2.0 * dx) for grad in kernel_op(flux)]
-
-    def grad_per_dim(
-        kernel_op,
-        f,
-        dx,
-    ):
-      """Computes the diffusion term in a specific dimension."""
-      return [grad / (2.0 * dx) for grad in kernel_op(f)]
-
-    grad_op_x = lambda f: self._kernel_op.apply_kernel_op_x(f, 'kDx')
-    grad_op_y = lambda f: self._kernel_op.apply_kernel_op_y(f, 'kDy')
-    grad_op_z = lambda f: self._kernel_op.apply_kernel_op_z(f, 'kDz', 'kDzsh')
-    grad_ops = (grad_op_x, grad_op_y, grad_op_z)
+    bc_p = [[None, None], [None, None], [None, None]]
 
     velocity_keys = ['u', 'v', 'w']
     grid_spacing = (self._params.dx, self._params.dy, self._params.dz)
-    bc_p = [[None, None], [None, None], [None, None]]
+
+    def grad_per_dim(f, dim):
+      """Computes the diffusion term in a specific dimension."""
+      grad_ops = (
+          lambda f: self._kernel_op.apply_kernel_op_x(f, 'kDx'),
+          lambda f: self._kernel_op.apply_kernel_op_y(f, 'kDy'),
+          lambda f: self._kernel_op.apply_kernel_op_z(f, 'kDz', 'kDzsh'),
+      )
+      return tf.nest.map_structure(
+          lambda grad: grad / (2.0 * grid_spacing[dim]), grad_ops[dim](f))
+
+    def ddh_per_dim(f, dim):
+      """Computes the second order derivative of `f` along `dim`."""
+      diff_ops = [
+          lambda f: self._kernel_op.apply_kernel_op_x(f, 'kddx'),
+          lambda f: self._kernel_op.apply_kernel_op_y(f, 'kddy'),
+          lambda f: self._kernel_op.apply_kernel_op_z(f, 'kddz', 'kddzsh'),
+      ]
+      return tf.nest.map_structure(lambda diff: diff / grid_spacing[dim]**2,
+                                   diff_ops[dim](f))
 
     # The diffusion term for the 3 velocity component can be expressed in vector
     # form as:
@@ -756,39 +770,6 @@ class Pressure(object):
     # parallel/tangent to the wall.
     # In additional, we assume that there's no turbulence at the wall, therefore
     # 𝜇 is the molecular viscosity.
-    mu = [self._params.nu * rho_i for rho_i in states['rho']]
-    ddu_n = (
-        # The x component.
-        [
-            ddu_i / self._params.dx**2
-            for ddu_i in self._kernel_op.apply_kernel_op_x(states['u'], 'kddx')
-        ],
-        # The y component.
-        [
-            ddv_i / self._params.dy**2
-            for ddv_i in self._kernel_op.apply_kernel_op_y(states['v'], 'kddy')
-        ],
-        # The z component.
-        [
-            ddw_i / self._params.dz**2
-            for ddw_i in self._kernel_op.apply_kernel_op_z(
-                states['w'], 'kddz', 'kddzsh')
-        ])
-    du_dx = [
-        grad_per_dim(grad_ops[i], states[velocity_keys[i]], grid_spacing[i])
-        for i in range(3)
-    ]
-    du_t = (
-        # The x component.
-        [dv_dy_i + dw_dz_i for dv_dy_i, dw_dz_i in zip(du_dx[1], du_dx[2])],
-        # The y component.
-        [du_dx_i + dw_dz_i for du_dx_i, dw_dz_i in zip(du_dx[0], du_dx[2])],
-        # The z component.
-        [du_dx_i + dv_dy_i for du_dx_i, dv_dy_i in zip(du_dx[0], du_dx[1])])
-    ddu_t = [
-        grad_per_dim(grad_ops[i], du_t[i], grid_spacing[i]) for i in range(3)
-    ]
-
     def diff_fn(
         mu_i: tf.Tensor,
         ddu_n_i: tf.Tensor,
@@ -797,70 +778,77 @@ class Pressure(object):
       """Computes the diffusion term at walls."""
       return mu_i * (4.0 / 3.0 * ddu_n_i + 1.0 / 3.0 * ddu_t_i)
 
-    diff = [[
-        diff_fn(mu_i, ddu_n_i, ddu_t_i)
-        for mu_i, ddu_n_i, ddu_t_i in zip(mu, ddu_n[i], ddu_t[i])
-    ]
-            for i in range(3)]
+    mu = tf.nest.map_structure(lambda rho_i: self._params.nu * rho_i,
+                               states['rho'])
+    ddu_n = [ddh_per_dim(states[velocity_keys[i]], i) for i in range(3)]
+    du_dx = [grad_per_dim(states[velocity_keys[i]], i) for i in range(3)]
+    du_t = (
+        # The x component.
+        tf.nest.map_structure(tf.math.add, du_dx[1], du_dx[2]),
+        # The y component.
+        tf.nest.map_structure(tf.math.add, du_dx[0], du_dx[2]),
+        # The z component.
+        tf.nest.map_structure(tf.math.add, du_dx[0], du_dx[1]),
+    )
+    ddu_t = [grad_per_dim(du_t[i], i) for i in range(3)]
 
+    diff = [
+        tf.nest.map_structure(diff_fn, mu, ddu_n[i], ddu_t[i]) for i in range(3)
+    ]
+
+    # Updates the pressure boundary condition based on the simulation setup.
     for i in range(3):
-      u_key = velocity_keys[i]
       for j in range(2):
         if (self._params.bc_type[i][j] ==
             boundary_condition_utils.BoundaryType.PERIODIC):
           bc_p[i][j] = None
-          continue
-        elif self._params.bc_type[i][j] in (
-            boundary_condition_utils.BoundaryType.INFLOW,
-            boundary_condition_utils.BoundaryType.OUTFLOW):
 
-          # Enforce a pressure outlet boundary condition on demand.
-          if (self._params.bc_type[i][j]
-              == boundary_condition_utils.BoundaryType.OUTFLOW and
-              self._pressure_params.pressure_outlet):
+        elif (self._params.bc_type[i][j] ==
+              boundary_condition_utils.BoundaryType.INFLOW):
+          bc_p[i][j] = (halo_exchange.BCType.NEUMANN_2, 0.0)
+
+        elif (self._params.bc_type[i][j]
+              == boundary_condition_utils.BoundaryType.OUTFLOW):
+          if self._pressure_params.pressure_outlet:
+            # Enforce a pressure outlet boundary condition on demand.
             bc_p[i][j] = (halo_exchange.BCType.DIRICHLET, 0.0)
-            continue
-
-          conv_terms = zip(
-              convection_per_dim(grad_op_x, states['rho_u'], states[u_key],
-                                 self._params.dx),
-              convection_per_dim(grad_op_y, states['rho_v'], states[u_key],
-                                 self._params.dy),
-              convection_per_dim(grad_op_z, states['rho_w'], states[u_key],
-                                 self._params.dz),
-          )
-          conv = [
-              conv_x_i + conv_y_i + conv_z_i
-              for conv_x_i, conv_y_i, conv_z_i in conv_terms
-          ]
-
-          bc_value = common_ops.get_face(conv, i, j,
-                                         self._params.halo_width - 1,
-                                         grid_spacing[i])
+          else:
+            bc_p[i][j] = (halo_exchange.BCType.NEUMANN_2, 0.0)
 
         elif self._params.bc_type[i][j] in (
             boundary_condition_utils.BoundaryType.SLIP_WALL,
             boundary_condition_utils.BoundaryType.NON_SLIP_WALL,
             boundary_condition_utils.BoundaryType.SHEAR_WALL):
+
           bc_value = common_ops.get_face(diff[i], i, j,
                                          self._params.halo_width - 1,
-                                         grid_spacing[i])
+                                         grid_spacing[i])[0]
+          if i == self.g_dim:
+            # Ensures the pressure balances with the buoyancy at the first fluid
+            # layer by assigning values to the pressure in halos adjacent to the
+            # fluid domain.
+            b = tf.nest.map_structure(
+                lambda r, r_0: self._gravity_vec[self.g_dim] * constants.G *  # pylint: disable=g-long-lambda
+                (r - r_0), states['rho_thermal'],
+                self._thermodynamics.rho_ref(additional_states.get('zz', None)))
+            b = filters.filter_op(self._kernel_op, b, 2)
+            bc_value = tf.nest.map_structure(
+                tf.math.add, bc_value,
+                common_ops.get_face(b, i, j, self._params.halo_width - 1)[0])
+
+          # The boundary condition for pressure is applied at the interface
+          # between the boundary and fluid only. Assuming everything is
+          # homogeneous behind the halo layer that's closest to the fluid, a
+          # homogeneous Neumann BC is applied to all other layers for pressure.
+          zeros = [tf.nest.map_structure(tf.zeros_like, bc_value)] * (
+              self._params.halo_width - 1)
+
+          bc_planes = zeros + [bc_value] if j == 0 else [bc_value] + zeros
+
+          bc_p[i][j] = (halo_exchange.BCType.NEUMANN_2, bc_planes)
         else:
           raise ValueError('{} is not defined for pressure boundary.'.format(
               self._params.bc_type[i][j]))
-
-        # The boundary condition for pressure is applied at the interface
-        # between the boundary and fluid only. Assuming everything is
-        # homogeneous behind the halo layer that's closest to the fluid, a
-        # homogeneous Neumann BC is applied to all other layers for pressure.
-        zeros = [tf.nest.map_structure(tf.zeros_like, bc_value[0])] * (
-            self._params.halo_width - 1)
-
-        bc_planes = zeros + bc_value if j == 0 else bc_value + zeros
-
-        # Because only hydrodynamic pressure is considered here (in the momentum
-        # equation), the contribution by gravitational force is 0.
-        bc_p[i][j] = (halo_exchange.BCType.NEUMANN, bc_planes)
 
     self._bc['p'] = bc_p
 
@@ -869,6 +857,7 @@ class Pressure(object):
       replica_id: tf.Tensor,
       replicas: np.ndarray,
       states: FlowFieldMap,
+      additional_states: FlowFieldMap,
   ) -> FlowFieldMap:
     """Updates halos for p.
 
@@ -877,7 +866,8 @@ class Pressure(object):
       replicas: A numpy array that maps grid coordinates to replica id numbers.
       states: A dictionary that holds flow field variables from the latest
         prediction. Must have 'rho_u', 'rho_v', 'rho_w', 'u', 'v', 'w', 'p', and
-        'rho' in it.
+        'rho', 'rho_thermal' in it.
+      additional_states: A dictionary that holds helper variables.
 
     Returns:
       A dictionary of 'p' with halos updated.
@@ -889,7 +879,7 @@ class Pressure(object):
         self._exchange_halos, replica_id=replica_id, replicas=replicas)
 
     if self._pressure_params.update_p_bc_by_flow:
-      self._update_pressure_bc(states)
+      self._update_pressure_bc(states, additional_states)
 
     return {'p': exchange_halos(states['p'], self._bc['p'])}
 

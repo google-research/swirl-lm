@@ -553,6 +553,8 @@ class Velocity(object):
 
       if 'theta' in states:
         helper_variables.update({'theta': states['theta']})
+      elif 'theta_li' in states:
+        helper_variables.update({'theta': states['theta_li']})
       elif 'T' in states:
         # Because pressure is the same as the reference pressure on the ground,
         # potential temperatures are equivalent to temperature.

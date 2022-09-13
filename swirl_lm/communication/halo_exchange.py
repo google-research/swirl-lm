@@ -27,7 +27,7 @@
 # limitations under the License.
 """Helper library for performing Halo exchanges."""
 
-import collections
+from collections import abc
 from typing import Optional, Sequence, Union
 
 import numpy as np
@@ -146,7 +146,7 @@ def _replace_halo(plane, bc, dim, side=None):
   Raises:
     ValueError if parameters have incorrect values.
   """
-  if not isinstance(bc, collections.Sequence):
+  if not isinstance(bc, abc.Sequence):
     raise ValueError("`bc` must be a sequence `(type, value)`.")
 
   bc_type, bc_value = bc
@@ -598,7 +598,7 @@ def _validate_boundary_condition(bc, z_list, dim, width):
   if isinstance(bc_value, float):
     return
 
-  if not isinstance(bc_value, collections.Sequence):
+  if not isinstance(bc_value, abc.Sequence):
     raise ValueError("The boundary condition must be specified as a float "
                      "or a list.")
   if len(bc_value) != width:
@@ -621,7 +621,7 @@ def _validate_boundary_condition(bc, z_list, dim, width):
     # Each element of bc_value must be a list of length nz of tensors of shape
     # (1, ny) or (nx, 1).
     for bc_z_list in bc_value:
-      if not isinstance(bc_z_list, collections.Sequence):
+      if not isinstance(bc_z_list, abc.Sequence):
         raise ValueError(
             "If dim is 0 or 1 a boundary condition must be a "
             "float or a list of list of tensors. Found list of {}.".format(

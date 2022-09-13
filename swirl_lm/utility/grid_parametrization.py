@@ -25,7 +25,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 """Common grid parameterization."""
 
 from typing import List, Optional, Sequence, Tuple
@@ -34,6 +33,8 @@ from absl import flags
 import numpy as np
 from swirl_lm.utility import grid_parametrization_pb2
 import tensorflow as tf
+
+from google.protobuf import text_format
 
 # Set allow_override=True for these flags, so each simulation can have its own
 # default values.
@@ -62,7 +63,8 @@ flags.DEFINE_integer(
     allow_override=True)
 flags.DEFINE_integer(
     'num_boundary_points',
-    1, 'Number of points to be added to each end of the computational domain.',
+    1,
+    'Number of points to be added to each end of the computational domain.',
     allow_override=True)
 
 FLAGS = flags.FLAGS
@@ -101,7 +103,27 @@ def _get_full_grid(n: Optional[int], l: float) -> tf.Tensor:
   return tf.linspace(0.0, l, n_effective)
 
 
-def params_from_flags():
+def _get_pysical_full_grid_size(
+    params: grid_parametrization_pb2.GridParametrization
+) -> grid_parametrization_pb2.CoordinateInt:
+  # Some simulations have a physical grid size mandated externally, and add
+  # padding in order that the internal grid has dimensions appropriate for
+  # running on TPU (e.g. the grid sizes of dim 0 and 1 should be multiples of
+  # 128). The full physical size is set here assuming there is no padding. If
+  # there is padding, these values will be overridden.
+  return grid_parametrization_pb2.CoordinateInt(
+      dim_0=_get_full_grid_size(params.grid_size.dim_0, params.halo_width,
+                                params.computation_shape.dim_0,
+                                params.num_boundary_points),
+      dim_1=_get_full_grid_size(params.grid_size.dim_1, params.halo_width,
+                                params.computation_shape.dim_1,
+                                params.num_boundary_points),
+      dim_2=_get_full_grid_size(params.grid_size.dim_2, params.halo_width,
+                                params.computation_shape.dim_2,
+                                params.num_boundary_points))
+
+
+def params_from_flags() -> grid_parametrization_pb2.GridParametrization:
   """Returns a GridParametrization protobuf from flags."""
   params = grid_parametrization_pb2.GridParametrization()
   params.computation_shape.dim_0 = FLAGS.cx
@@ -113,23 +135,31 @@ def params_from_flags():
   params.grid_size.dim_0 = FLAGS.nx
   params.grid_size.dim_1 = FLAGS.ny
   params.grid_size.dim_2 = FLAGS.nz
-  # Some simulations have a physical grid size mandated externally, and add
-  # padding in order that the internal grid has dimensions appropriate for
-  # running on TPU (e.g. the grid sizes of dim 0 and 1 should be multiples of
-  # 128). The full physical size is set here assuming there is no padding. If
-  # there is padding, these values will be overridden.
-  params.physical_full_grid_size.dim_0 = _get_full_grid_size(
-      FLAGS.nx, FLAGS.halo_width, FLAGS.cx, FLAGS.num_boundary_points)
-  params.physical_full_grid_size.dim_1 = _get_full_grid_size(
-      FLAGS.ny, FLAGS.halo_width, FLAGS.cy, FLAGS.num_boundary_points)
-  params.physical_full_grid_size.dim_2 = _get_full_grid_size(
-      FLAGS.nz, FLAGS.halo_width, FLAGS.cz, FLAGS.num_boundary_points)
   params.halo_width = FLAGS.halo_width
   params.dt = FLAGS.dt
   params.kernel_size = FLAGS.kernel_size
   params.input_chunk_size = FLAGS.input_chunk_size
   params.num_output_splits = FLAGS.num_output_splits
   params.num_boundary_points = FLAGS.num_boundary_points
+  if not params.HasField('physical_full_grid_size'):
+    params.physical_full_grid_size.CopyFrom(_get_pysical_full_grid_size(params))
+  return params
+
+
+def params_from_text_proto(
+    text_proto: str) -> grid_parametrization_pb2.GridParametrization:
+  """Returns a GridParametrization protobuf from a text-formatted proto."""
+  # Get default values from flags.
+  params = params_from_flags()
+  # Clear physical_full_grid_size, which is a computed field. We'll recompute it
+  # at the end.
+  params.ClearField('physical_full_grid_size')
+  params.MergeFrom(
+      text_format.Parse(text_proto,
+                        grid_parametrization_pb2.GridParametrization()))
+  # Re-compute physical_full_grid_size if necessary.
+  if not params.HasField('physical_full_grid_size'):
+    params.physical_full_grid_size.CopyFrom(_get_pysical_full_grid_size(params))
   return params
 
 
@@ -143,7 +173,10 @@ class GridParametrization(object):
 
   """
 
-  def __init__(self, params=None):
+  def __init__(
+      self,
+      params: Optional[grid_parametrization_pb2.GridParametrization] = None,
+  ):
     """Creates an object from protobuf."""
     if not params:
       params = params_from_flags()
@@ -225,8 +258,7 @@ class GridParametrization(object):
       grid_lengths: Sequence[float],
       computation_shape: Sequence[int] = (1, 1, 1),
       subgrid_shape: Optional[Sequence[int]] = (4, 4, 4),
-      halo_width: int = 1
-  ):
+      halo_width: int = 1):
     """Same as `create_from_grid_lengths_and_etc`, but, with default arguments.
 
     If the default arguments for `computation_shape` and `subgrid_shape` are
@@ -252,17 +284,13 @@ class GridParametrization(object):
             'core_nx: {}, core_ny: {}, core_nz: {}, lx: {}, ly: {}, lz: {}, '
             'dt: {}, dx: {}, dy: {}, dz: {}, computation_shape: {}, '
             'halo_width: {}, kernel_size: {}, input_chunk_size: {}, '
-            'num_output_splits: {}' .format(
-                self.fx_physical, self.fy_physical, self.fz_physical,
-                self.fx, self.fy, self.fz,
-                self.cx, self.cy, self.cz,
-                self.nx, self.ny, self.nz,
-                self.core_nx, self.core_ny, self.core_nz,
-                self.lx, self.ly, self.lz,
-                self.dt,
-                self.dx, self.dy, self.dz, self.computation_shape,
-                self.halo_width, self.kernel_size, self.input_chunk_size,
-                self.num_output_splits))
+            'num_output_splits: {}'.format(
+                self.fx_physical, self.fy_physical, self.fz_physical, self.fx,
+                self.fy, self.fz, self.cx, self.cy, self.cz, self.nx, self.ny,
+                self.nz, self.core_nx, self.core_ny, self.core_nz, self.lx,
+                self.ly, self.lz, self.dt, self.dx, self.dy, self.dz,
+                self.computation_shape, self.halo_width, self.kernel_size,
+                self.input_chunk_size, self.num_output_splits))
 
   @property
   def computation_shape(self) -> np.ndarray:

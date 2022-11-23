@@ -284,6 +284,12 @@ def _one_cycle(
 
       # Perform a postprocessing step, if configured.
       if FLAGS.apply_postprocess:
+        # Split the updated_state into essential states and additional states.
+        additional_states = _stateless_update_if_present(
+            additional_states, updated_state)
+        essential_states = _stateless_update_if_present(essential_states,
+                                                        updated_state)
+
         essential_states, additional_states = _process_at_step_id(
             process_fn=functools.partial(params.postprocessing_states_update_fn,
                                          **common_kwargs),
@@ -292,6 +298,12 @@ def _one_cycle(
             step_id=step_id,
             process_step_id=FLAGS.postprocess_step_id,
             is_periodic=FLAGS.postprocess_periodic)
+
+        # Merge the essential states and additional states into updated_state.
+        updated_state = _stateless_update_if_present(updated_state,
+                                                     additional_states)
+        updated_state = _stateless_update_if_present(updated_state,
+                                                     essential_states)
 
       # Some state keys such as `replica_id` may not lie in either of the three
       # categories. Just pass them through.

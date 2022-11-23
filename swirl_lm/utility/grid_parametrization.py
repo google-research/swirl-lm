@@ -50,7 +50,7 @@ flags.DEFINE_integer(
     'ny', 256, 'y grid size for one core.', allow_override=True)
 flags.DEFINE_integer(
     'nz', 256, 'z grid size for one core.', allow_override=True)
-flags.DEFINE_integer('halo_width', 1, 'The halo width.', allow_override=True)
+flags.DEFINE_integer('halo_width', 2, 'The halo width.', allow_override=True)
 flags.DEFINE_float('dt', 0.00003, 'dt.', allow_override=True)
 flags.DEFINE_integer(
     'kernel_size', 128, 'The size of the 2D kernel.', allow_override=True)

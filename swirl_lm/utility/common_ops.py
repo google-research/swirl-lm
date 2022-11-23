@@ -1497,11 +1497,11 @@ def pad(
   return lower_pad + list(padded) + upper_pad
 
 
-def get_face(value: Sequence[tf.Tensor],
+def get_face(value: FlowFieldVal,
              dim: int,
              face: int,
              index: int,
-             scaling_factor: float = 1.) -> List[tf.Tensor]:
+             scaling_factor: float = 1.) -> FlowFieldVal:
   """Gets the face in `value` that is `index` number of points from boundary.
 
   This function extracts the requested plane from a 3D tensor represented as a
@@ -1514,8 +1514,11 @@ def get_face(value: Sequence[tf.Tensor],
       list has size nx x ny.
 
   Args:
-    value: A list of `tf.Tensor` representing a 3D field.
-    dim: The dimension of the plane to slice, should be on of 0, 1, and 2.
+    value: A list of 2D `tf.Tensor` or a single 3D `tf.Tensor` representing a 3D
+      field. If a list of 2D `tf.Tensor`, the length of the list is `nz` and
+      each 2D `tf.Tensor` has the shape [nx, ny]. If a single 3D `tf.Tensor`,
+      its shape is [nz, nx, ny].
+    dim: The dimension of the plane to slice, should be one of 0, 1, and 2.
     face: The face of the plane to slice, with 0 representing the lower face,
       and 1 representing the higher face.
     index: The number of points that is away from the boundary determined by
@@ -1527,6 +1530,20 @@ def get_face(value: Sequence[tf.Tensor],
     the length - index'th plane is returned. The returned slice will be
     multiplied by `scaling_factor`.
   """
+  if isinstance(value, tf.Tensor):
+    # Handles the case of single 3D tensor.
+    shifted_dim = (dim + 1) % 3
+    n = value.get_shape().as_list()[shifted_dim]
+
+    slices = [slice(None), slice(None), slice(None)]
+    if face == 0:  # low
+      slices[shifted_dim] = slice(index, index + 1)
+    elif face == 1:  # high
+      slices[shifted_dim] = slice(n - index - 1, n - index)
+
+    return scaling_factor * value[slices]
+
+  # Handles the case of list of 2D tensors.
   nz = len(value)
   nx, ny = value[0].get_shape().as_list()
   if dim == 0:  # X

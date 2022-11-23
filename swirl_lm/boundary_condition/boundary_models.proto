@@ -19,11 +19,12 @@ package research.simulation;
 import "swirl_lm/boundary_condition/immersed_boundary_method.proto";
 import "swirl_lm/boundary_condition/monin_obukhov_similarity_theory.proto";
 import "swirl_lm/boundary_condition/rayleigh_damping_layer.proto";
+import "swirl_lm/boundary_condition/simulated_turbulent_inflow.proto";
 
 option java_multiple_files = true;
 
 // Stores parameters required by boundary models.
-// Next id: 4
+// Next id: 5
 message BoundaryModels {
   // Parameters required by the immersed boundary method.
   optional ImmersedBoundaryMethod ib = 1;
@@ -31,4 +32,6 @@ message BoundaryModels {
   optional MoninObukhovSimilarityTheory most = 2;
   // Parameters required by the Rayleigh damping layer (a.k.a sponge layer).
   optional RayleighDampingLayer sponge = 3;
+  // Parameters required by the simulated turbulent inflow library.
+  optional SimulatedTurbulentInflow simulated_inflow = 4;
 }

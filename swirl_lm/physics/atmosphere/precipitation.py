@@ -101,16 +101,21 @@ class Precipitation(object):
     p_vs = tf.nest.map_structure(saturation_vapor_from_mixture_fraction, q_vs,
                                  rho, temperature)
 
-    def c_coefficient(q_r, rho):
-      return 1.6 + 30.3922 * tf.math.pow(q_r * rho, 0.2046)
+    precipitation_bulk_density = tf.nest.map_structure(
+        lambda q_r_i, rho_i: rho_i * tf.clip_by_value(  # pylint: disable=g-long-lambda
+            q_r_i, clip_value_min=0.0, clip_value_max=1.0), q_r, rho)
 
-    c = tf.nest.map_structure(c_coefficient, q_r, rho)
+    def c_coefficient(rho_qr):
+      return 1.6 + 30.3922 * tf.math.pow(rho_qr, 0.2046)
 
-    def evaporation_rate(rho, q_v, q_vs, c, q_r, p_vs):
+    c = tf.nest.map_structure(c_coefficient, precipitation_bulk_density)
+
+    def evaporation_rate(rho, q_v, q_vs, c, rho_qr, p_vs):
       return ((1.0 / rho) * (1.0 - q_v / q_vs) * c * tf.math.pow(
-          (rho * q_r), 0.525) / (2.03e4 + 9.584e6 / p_vs))
+          rho_qr, 0.525) / (2.03e4 + 9.584e6 / p_vs))
 
-    e_r = tf.nest.map_structure(evaporation_rate, rho, q_v, q_vs, c, q_r, p_vs)
+    e_r = tf.nest.map_structure(evaporation_rate, rho, q_v, q_vs, c,
+                                precipitation_bulk_density, p_vs)
     return e_r
 
   def cloud_liquid_to_rain_conversion_rate_kw1978(
@@ -150,12 +155,13 @@ class Precipitation(object):
     k_2 = 2.2
 
     def auto_conversion(q_l):
-      return k_1 * (q_l - a)
+      return k_1 * tf.math.maximum(q_l - a, 0.0)
 
     a_r = tf.nest.map_structure(auto_conversion, q_l)
 
     def colliding_conversion(q_r, q_l):
-      return k_2 * q_l * tf.math.pow(q_r, 0.875)
+      return k_2 * q_l * tf.math.pow(
+          tf.clip_by_value(q_r, clip_value_min=0.0, clip_value_max=1.0), 0.875)
 
     c_r = tf.nest.map_structure(colliding_conversion, q_r, q_l)
 
@@ -191,7 +197,9 @@ class Precipitation(object):
     sqrt_rho_ref = tf.math.sqrt(rho_ref)
 
     def factor1(rho, q_r):
-      return k1 * tf.math.pow(rho * q_r, k2)
+      return k1 * tf.math.pow(
+          rho * tf.clip_by_value(q_r, clip_value_min=0.0, clip_value_max=1.0),
+          k2)
 
     f1 = tf.nest.map_structure(factor1, rho, q_r)
 

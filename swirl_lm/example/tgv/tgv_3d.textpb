@@ -1,0 +1,19 @@
+solver_procedure: VARIABLE_DENSITY
+convection_scheme: CONVECTION_SCHEME_QUICK
+time_integration_scheme: TIME_SCHEME_CN_EXPLICIT_ITERATION
+periodic {
+  dim_0: true dim_1: true dim_2: true
+}
+pressure {
+  solver {
+    jacobi {
+      max_iterations: 10 halo_width: 2 omega: 0.67
+    }
+  }
+}
+thermodynamics {
+  constant_density {}
+}
+density: 1.0
+kinematic_viscosity: 6.25e-4
+use_sgs: false

@@ -26,6 +26,7 @@ from swirl_lm.equations import pressure as pressure_model
 from swirl_lm.equations import scalars as scalars_model
 from swirl_lm.equations import velocity as velocity_model
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
+from swirl_lm.physics.thermodynamics import thermodynamics_pb2
 from swirl_lm.utility import components_debug
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import monitor
@@ -178,6 +179,7 @@ class Simulation:
     states_0.update(
         self.pressure.update_pressure_halos(replica_id, replicas, states_0,
                                             additional_states))
+    states_0.update({'dp': tf.nest.map_structure(tf.zeros_like, states_0['p'])})
 
     # Reserve a dictionary of variables for diagnostics. The name of these
     # diagnostic variables has to be in the `additional_states` for them to be
@@ -260,18 +262,25 @@ class Simulation:
       # Step 3: Update the density with the temporary primitive scalars. NB:
       # Because the boundary conditions are enforced for the temporary primitive
       # variables, the density at the boundary is valid.
-      rho, drho = self.thermodynamics.update_density(self._kernel_op,
-                                                     replica_id, replicas,
-                                                     states_k,
-                                                     additional_states,
-                                                     states_0)
-      states_k.update({
-          'rho': rho,
-          'rho_thermal':
-              self.thermodynamics.update_thermal_density(
-                  states_k, additional_states),
-          'drho': drho,
-      })
+      if self._params.solver_mode == thermodynamics_pb2.Thermodynamics.LOW_MACH:
+        rho, drho = self.thermodynamics.update_density(self._kernel_op,
+                                                       replica_id, replicas,
+                                                       states_k,
+                                                       additional_states,
+                                                       states_0)
+        states_k.update({
+            'rho': rho,
+            'rho_thermal':
+                self.thermodynamics.update_thermal_density(
+                    states_k, additional_states),
+            'drho': drho,
+        })
+      else:
+        states_k.update({
+            'rho_thermal':
+                self.thermodynamics.update_thermal_density(
+                    states_k, additional_states),
+        })
 
       states_k.update(
           self.pressure.update_pressure_halos(
@@ -289,7 +298,8 @@ class Simulation:
 
       # Step 4: Update all primitive scalars with the latest density. Boundary
       # conditions are enforced for these scalars.
-      if self._params.enable_scalar_recorrection:
+      if (self._params.enable_scalar_recorrection and self._params.solver_mode
+          != thermodynamics_pb2.Thermodynamics.ANELASTIC):
         states_k.update(
             self.scalars.correction_step(replica_id, replicas, states_k,
                                          states_0, additional_states))
@@ -303,16 +313,14 @@ class Simulation:
 
       # Step 6: Get the pressure correction. NB: the boundary condition for
       # density is set to be Neumann everywhere.
-      p_k, dp = self.pressure.step(replica_id, replicas, states_k, states_0,
-                                   additional_states, i)
-      states_k.update(p_k)
+      states_k.update(
+          self.pressure.step(replica_id, replicas, states_k, states_0,
+                             additional_states, i))
 
       # Step 7: Update the velocity and pressure.
-      helper_states = {'dp': dp}
-      helper_states.update(additional_states)
       states_k.update(
           self.velocity.correction_step(replica_id, replicas, states_k,
-                                        states_0, helper_states))
+                                        states_0, additional_states))
 
       return (i + 1, states_k)
 
@@ -344,5 +352,7 @@ class Simulation:
 
     if 'drho' not in additional_states:
       states_new.pop('drho')
+    if 'dp' not in additional_states:
+      states_new.pop('dp')
 
     return states_new

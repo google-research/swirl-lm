@@ -179,7 +179,7 @@ def diffusion_scalar(
         plane_index = (
             params.halo_width if flux_info.face == 0 else
             (params.nx, params.ny, params.nz)[flux_info.dim] -
-            params.halo_width - 1)
+            params.halo_width)
         f_diff[flux_info.dim] = common_ops.tensor_scatter_1d_update_global(
             replica_id, replicas, f_diff[flux_info.dim], flux_info.dim,
             core_index, plane_index, flux_info.value)

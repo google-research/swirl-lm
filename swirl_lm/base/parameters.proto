@@ -103,7 +103,7 @@ message SubGridScaleModel {
 }
 
 // Stores the parameters required by an incompressible Navier-Stokes simulation.
-// Next id: 31
+// Next id: 33
 message SwirlLMParameters {
   // Defines the type of the simulation procedure to be used in the solver.
   enum SolverProcedureType {
@@ -178,6 +178,14 @@ message SwirlLMParameters {
   // in cases with combustion.
   optional bool enable_scalar_recorrection = 30 [default = true];
 
+  // An option for enabling the Rhie-Chow correction of the face-interpolated
+  // momentum in the convection term of the momentum equation. This correction
+  // mitigates oscillations in the pressure field and flow field by coupling the
+  // two explitictly. Default set to `true` for backward compatibility. Note
+  // that this may create instability if the solver is already introducing some
+  // degree of coupling between the pressure and the flow field.
+  optional bool enable_rhie_chow_correction = 31 [default = true];
+
   // The periodicity in each dimension.
   optional PeriodicDimensions periodic = 4;
   // The boundary conditions for all variables.
@@ -226,6 +234,8 @@ message SwirlLMParameters {
   // A filter of variable names to be loaded from files if the filter is used.
   // The option for using this filter will be set by a command line flag.
   repeated string states_from_file = 17;
+  // A filter of variable names to be dumped to files.
+  repeated string states_to_file = 32;
   // Information required for sponge layers if applied. This will be deprecated,
   // and contained in `boundary_models`.
   optional RayleighDampingLayer sponge_layer = 21 [deprecated = true];

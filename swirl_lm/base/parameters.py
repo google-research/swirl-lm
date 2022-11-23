@@ -24,6 +24,7 @@ from swirl_lm.boundary_condition import boundary_condition_utils
 from swirl_lm.boundary_condition import boundary_conditions_pb2
 from swirl_lm.communication import halo_exchange
 from swirl_lm.numerics import numerics_pb2
+from swirl_lm.physics.thermodynamics import thermodynamics_pb2
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import grid_parametrization_pb2
@@ -79,6 +80,7 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     self.time_integration_scheme = config.time_integration_scheme
 
     self.enable_scalar_recorrection = config.enable_scalar_recorrection
+    self.enable_rhie_chow_correction = config.enable_rhie_chow_correction
 
     logging.info('Convection scheme: %s, Diffusion scheme: %s, Time scheme: %s',
                  ConvectionScheme.Name(self.convection_scheme),
@@ -88,12 +90,19 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     self.thermodynamics = config.thermodynamics if config.HasField(
         'thermodynamics') else None
 
+    if (self.thermodynamics is not None and
+        self.thermodynamics.HasField('solver_mode')):
+      self.solver_mode = self.thermodynamics.solver_mode
+    else:
+      self.solver_mode = thermodynamics_pb2.Thermodynamics.LOW_MACH
+
     self.combustion = config.combustion if config.HasField(
         'combustion') else None
 
     self.additional_state_keys = config.additional_state_keys
     self.helper_var_keys = config.helper_var_keys
     self.states_from_file = config.states_from_file
+    self.states_to_file = list(config.states_to_file)
     self.monitor_spec = config.monitor_spec
     self.probe = config.probe if config.HasField('probe') else None
 

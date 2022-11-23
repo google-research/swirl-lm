@@ -272,7 +272,7 @@ def face_interpolation(
             f'`halo_width` must be provided to enforce wall boundary condition '
             f'for {varname}')
 
-      plane_idx = halo_width if face == 0 else n_grid - halo_width - 1
+      plane_idx = halo_width if face == 0 else n_grid - halo_width
       core_idx = 0 if face == 0 else n_core - 1
 
       state_face = common_ops.tensor_scatter_1d_update_global(

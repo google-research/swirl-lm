@@ -19,6 +19,9 @@ import numpy as np
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.boundary_condition import monin_obukhov_similarity_theory
 from swirl_lm.numerics import calculus
+from swirl_lm.numerics import filters
+from swirl_lm.physics import constants
+from swirl_lm.physics.thermodynamics import thermodynamics_pb2
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import types
@@ -471,7 +474,39 @@ def source_by_subsidence_velocity(
 
   df_dh = [df_i / (2.0 * h) for df_i in df]
   w = subsidence_velocity_stevens(height)
-  return [
-      -rho_i * w_i * df_dh_i
-      for rho_i, w_i, df_dh_i in zip(rho, w, df_dh)
-  ]
+  return [-rho_i * w_i * df_dh_i for rho_i, w_i, df_dh_i in zip(rho, w, df_dh)]
+
+
+def buoyancy_source(
+    kernel_op: get_kernel_fn.ApplyKernelOp,
+    rho: FlowFieldVal,
+    rho_0: FlowFieldVal,
+    params: parameters_lib.SwirlLMParameters,
+    dim: int,
+) -> FlowFieldVal:
+  """Computes the gravitational force of the momentum equation.
+
+  Args:
+    kernel_op: A library of finite difference operators.
+    rho: The density of the flow field.
+    rho_0: The reference density of the environment.
+    params: The simulation parameter context. `thermodynamics.solver_mode` is
+      used here.
+    dim: The spatial dimension that this source corresponds to.
+
+  Returns:
+    The source term of the momentum equation due to buoyancy.
+  """
+  def drho_fn(rho_i, rho_0_i):
+    if params.solver_mode == thermodynamics_pb2.Thermodynamics.ANELASTIC:
+      return (rho_i - rho_0_i) * rho_0_i / rho_i
+    else:
+      return rho_i - rho_0_i
+
+  # Computes the gravitational force.
+  drho = filters.filter_op(
+      kernel_op,
+      tf.nest.map_structure(drho_fn, rho, rho_0),
+      order=2)
+  return tf.nest.map_structure(
+      lambda drho_i: drho_i * params.gravity_direction[dim] * constants.G, drho)

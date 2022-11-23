@@ -48,9 +48,9 @@ from swirl_lm.boundary_condition import boundary_condition_utils
 from swirl_lm.boundary_condition import immersed_boundary_method
 from swirl_lm.communication import halo_exchange
 from swirl_lm.equations import common
+from swirl_lm.equations import utils as eq_utils
 from swirl_lm.numerics import convection
 from swirl_lm.numerics import diffusion
-from swirl_lm.numerics import filters
 from swirl_lm.numerics import numerics_pb2
 from swirl_lm.numerics import time_integration
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
@@ -320,14 +320,8 @@ class Velocity(object):
         """Computes the RHS of the momentum equation in `dim`."""
         f = states[velocity_key[dim]]
 
-        # Computes the gravitational force.
-        drho = filters.filter_op(self._kernel_op, [
-            rho_mix_i - rho_ref_i
-            for rho_mix_i, rho_ref_i in zip(rho_mix, rho_ref)
-        ], order=2)
-        gravity = [
-            drho_i * self._gravity_vec[dim] * _GRAVITY for drho_i in drho
-        ]
+        gravity = eq_utils.buoyancy_source(self._kernel_op, rho_mix, rho_ref,
+                                           self._params, dim)
 
         # Computes the convection term.
         g_corr = None if np.abs(
@@ -358,7 +352,9 @@ class Velocity(object):
                 momentum_key[i],
                 self._params.halo_width,
                 self._params.convection_scheme,
-                src=g_corr) for i in range(3)
+                src=g_corr,
+                apply_correction=self._params.enable_rhie_chow_correction)
+            for i in range(3)
         ]
 
         # Computes the diffusion term.
@@ -757,10 +753,9 @@ class Velocity(object):
     rho_mid = common_ops.average(states[_KEY_RHO], states_0[_KEY_RHO])
     if (self._thermodynamics.solver_mode ==
         thermodynamics_pb2.Thermodynamics.ANELASTIC):
-      dp = tf.nest.map_structure(tf.math.divide,
-                                 additional_states[common.KEY_DP], rho_mid)
+      dp = tf.nest.map_structure(tf.math.divide, states[common.KEY_DP], rho_mid)
     else:
-      dp = additional_states[common.KEY_DP]
+      dp = states[common.KEY_DP]
 
     def generate_correction_fn(dim):
       dh = (self._params.dx, self._params.dy, self._params.dz)[dim]

@@ -133,10 +133,9 @@ from swirl_lm.base import physical_variable_keys_manager
 from swirl_lm.boundary_condition import boundary_condition_utils
 from swirl_lm.communication import halo_exchange
 from swirl_lm.equations import pressure_pb2
+from swirl_lm.equations import utils as eq_utils
 from swirl_lm.linalg import poisson_solver
 from swirl_lm.numerics import filters
-from swirl_lm.numerics import numerics_pb2
-from swirl_lm.physics import constants
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import thermodynamics_pb2
 from swirl_lm.utility import common_ops
@@ -451,9 +450,6 @@ class Pressure(object):
 
     self._src_manager = (physical_variable_keys_manager.SourceKeysHelper())
 
-    self._apply_correction = (
-        self._params.convection_scheme != numerics_pb2.CONVECTION_SCHEME_WENO)
-
   def _exchange_halos(
       self,
       f,
@@ -492,14 +488,10 @@ class Pressure(object):
     A reference to the thesis can be found at:
     https://drive.google.com/corp/drive/u/0/folders/18iBZ6ltE_526HncSXOhPU-1lsSG1piAG
 
-    To remove the numerical fluctuation of pressure, the Rhie-Chow correction is
-    enforced in the pressure correction step, following the reference:
-
-    C. M. Rhie, W. L. Chow, Numerical Stud of the Turbulent Flow Past an Airfoil
-    with Trailing Edge Separation, AIAA Journal, Vol. 21, No. 11, Nov 1983.
-
-    A copy of the reference can be found at:
-    https://drive.google.com/corp/drive/u/0/folders/18iBZ6ltE_526HncSXOhPU-1lsSG1piAG
+    The second-order approximation used to compute the Laplacian of the pressure
+    introduces an inconsistency between the pressure gradient approximation and
+    the velocity divergence approximation. To account for this inconsistency, we
+    introduce an explicit correction to the right-hand side.
 
     Args:
       replica_id: The ID number of the replica.
@@ -558,30 +550,30 @@ class Pressure(object):
         """Computes the divergence of the velocity field."""
         # Compute the fourth order derivative of the pressure for the face
         # velocity correction.
-        d4p_dx4 = self._kernel_op.apply_kernel_op_x(states['p'], 'k4d2x')
-        d4p_dy4 = self._kernel_op.apply_kernel_op_y(states['p'], 'k4d2y')
-        d4p_dz4 = self._kernel_op.apply_kernel_op_z(states['p'], 'k4d2z',
+        p_corr = (
+            states['p']
+            if self._params.enable_rhie_chow_correction else states['dp'])
+        d4p_dx4 = self._kernel_op.apply_kernel_op_x(p_corr, 'k4d2x')
+        d4p_dy4 = self._kernel_op.apply_kernel_op_y(p_corr, 'k4d2y')
+        d4p_dz4 = self._kernel_op.apply_kernel_op_z(p_corr, 'k4d2z',
                                                     'k4d2zsh')
 
         # Compute velocity gradient based on interpolated values on cell faces.
-        coeff_x = (
-            dt / (4. * coeff_rho * dx**2) if self._apply_correction else 0.0)
+        coeff_x = dt / (4. * coeff_rho * dx**2)
         du = self._kernel_op.apply_kernel_op_x(momentum_x, 'kDx')
         du_dx = [
             du_i / (2. * dx) + coeff_x * d4p_dx4_i
             for du_i, d4p_dx4_i in zip(du, d4p_dx4)
         ]
 
-        coeff_y = (
-            dt / (4. * coeff_rho * dy**2) if self._apply_correction else 0.0)
+        coeff_y = dt / (4. * coeff_rho * dy**2)
         dv = self._kernel_op.apply_kernel_op_y(momentum_y, 'kDy')
         dv_dy = [
             dv_i / (2. * dy) + coeff_y * d4p_dy4_i
             for dv_i, d4p_dy4_i in zip(dv, d4p_dy4)
         ]
 
-        coeff_z = (
-            dt / (4. * coeff_rho * dz**2) if self._apply_correction else 0.0)
+        coeff_z = dt / (4. * coeff_rho * dz**2)
         dw = self._kernel_op.apply_kernel_op_z(momentum_z, 'kDz', 'kDzsh')
         dw_dz = [
             dw_i / (2. * dz) + coeff_z * d4p_dz4_i
@@ -827,14 +819,15 @@ class Pressure(object):
             # Ensures the pressure balances with the buoyancy at the first fluid
             # layer by assigning values to the pressure in halos adjacent to the
             # fluid domain.
-            b = tf.nest.map_structure(
-                lambda r, r_0: self._gravity_vec[self.g_dim] * constants.G *  # pylint: disable=g-long-lambda
-                (r - r_0), states['rho_thermal'],
-                self._thermodynamics.rho_ref(additional_states.get('zz', None)))
-            b = filters.filter_op(self._kernel_op, b, 2)
+            rho_0 = self._thermodynamics.rho_ref(
+                additional_states.get('zz', None))
+            b = eq_utils.buoyancy_source(self._kernel_op, states['rho_thermal'],
+                                         rho_0, self._params, i)
+
             bc_value = tf.nest.map_structure(
                 tf.math.add, bc_value,
-                common_ops.get_face(b, i, j, self._params.halo_width - 1)[0])
+                common_ops.get_face(b, i, j, self._params.halo_width - 1,
+                                    grid_spacing[i])[0])
 
           # The boundary condition for pressure is applied at the interface
           # between the boundary and fluid only. Assuming everything is
@@ -915,7 +908,7 @@ class Pressure(object):
       states_0: FlowFieldMap,
       additional_states: FlowFieldMap,
       subiter: tf.Tensor = None,
-  ) -> Tuple[FlowFieldMap, FlowFieldVal]:  # pytype: disable=annotation-type-mismatch
+  ) -> FlowFieldMap:  # pytype: disable=annotation-type-mismatch
     """Updates the pressure and its correction for the current subiteration.
 
     Args:
@@ -982,6 +975,9 @@ class Pressure(object):
                                                        states, rho_info,
                                                        subiter)
 
-    states_updated = {'p': [p_ + dp_ for p_, dp_ in zip(states['p'], dp)]}
+    states_updated = {
+        'p': tf.nest.map_structure(lambda p_, dp_: p_ + dp_, states['p'], dp),
+        'dp': dp
+    }
     states_updated.update(monitor_vars)
-    return states_updated, dp
+    return states_updated

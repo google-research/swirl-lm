@@ -38,6 +38,7 @@ from swirl_lm.physics import constants
 from swirl_lm.physics.atmosphere import cloud
 from swirl_lm.physics.atmosphere import precipitation
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
+from swirl_lm.physics.thermodynamics import thermodynamics_pb2
 from swirl_lm.physics.thermodynamics import water
 from swirl_lm.physics.turbulence import sgs_model
 from swirl_lm.utility import common_ops
@@ -154,6 +155,12 @@ class Scalars(object):
     for scalar in self._params.scalars:
       self._scalars.update({scalar.name: scalar})
 
+    self._grad_central = [
+        lambda f: self._kernel_op.apply_kernel_op_x(f, 'kDx'),
+        lambda f: self._kernel_op.apply_kernel_op_y(f, 'kDy'),
+        lambda f: self._kernel_op.apply_kernel_op_z(f, 'kDz', 'kDzsh'),
+    ]
+
   def _exchange_halos(self, f, bc_f, replica_id, replicas):
     """Performs halo exchange for the variable f."""
     return halo_exchange.inplace_halo_exchange(
@@ -223,6 +230,8 @@ class Scalars(object):
           order=2)
       gravity = [drho_i * self._g_vec[dim] * constants.G for drho_i in drho]
 
+    momentum_component = common.KEYS_MOMENTUM[dim]
+
     return convection.convection_term(
         self._kernel_op,
         replica_id,
@@ -233,6 +242,9 @@ class Scalars(object):
         h,
         dt,
         dim,
+        bc_types=tuple(self._params.bc_type[dim]),
+        varname=momentum_component,
+        halo_width=self._params.halo_width,
         scheme=self._scalars[sc_name].scheme,
         src=gravity,
         apply_correction=apply_correction)
@@ -405,7 +417,6 @@ class Scalars(object):
 
     h = (self._params.dx, self._params.dy, self._params.dz)
     dt = self._params.dt
-    velocity = [states[_KEY_U], states[_KEY_V], states[_KEY_W]]
     momentum = [states[_KEY_RHO_U], states[_KEY_RHO_V], states[_KEY_RHO_W]]
     zz = additional_states.get(
         'zz', tf.nest.map_structure(tf.zeros_like, states[_KEY_RHO_U]))
@@ -417,18 +428,6 @@ class Scalars(object):
         'w': states[_KEY_W],
     }
 
-    # Compute the shear stress tensor.
-    if self._params.use_sgs:
-      mu = tf.nest.map_structure(
-          lambda nu_t_, rho_: (self._params.nu + nu_t_) * rho_,
-          additional_states['nu_t'], states[_KEY_RHO])
-    else:
-      mu = tf.nest.map_structure(lambda rho_: self._params.nu * rho_,
-                                 states[_KEY_RHO])
-
-    tau = eq_utils.shear_stress(self._kernel_op, mu, h[0], h[1], h[2],
-                                states[_KEY_U], states[_KEY_V], states[_KEY_W])
-
     include_radiation = (
         self._scalars['theta_li'].HasField('potential_temperature') and
         self._scalars['theta_li'].potential_temperature.include_radiation and
@@ -439,25 +438,6 @@ class Scalars(object):
         self._scalars['theta_li'].potential_temperature.include_subsidence and
         self._g_dim is not None)
 
-    def compute_u_tau(
-        tau_0j: FlowFieldVal,
-        tau_1j: FlowFieldVal,
-        tau_2j: FlowFieldVal,
-    ) -> FlowFieldVal:
-      """Computes 'rho u_i tau_ij'."""
-      def u_tau_fn(u, v, w, tau_0j, tau_1j, tau_2j):
-        return u * tau_0j + v * tau_1j + w * tau_2j
-
-      return tf.nest.map_structure(u_tau_fn, velocity[0], velocity[1],
-                                   velocity[2], tau_0j, tau_1j, tau_2j)
-
-    u_tau = [
-        compute_u_tau(tau['xx'], tau['yx'], tau['zx']),
-        compute_u_tau(tau['xy'], tau['yy'], tau['zy']),
-        compute_u_tau(tau['xz'], tau['yz'], tau['zz'])
-    ]
-
-    div_terms = u_tau
     source_ext = (
         self._source['theta_li'] if self._source['theta_li'] else
         tf.nest.map_structure(tf.zeros_like, states[_KEY_RHO]))
@@ -475,38 +455,41 @@ class Scalars(object):
       # Compute the temperature.
       q_t = states['q_t']
       rho = states[_KEY_RHO]
+      rho_thermal = states['rho_thermal']
 
       temperature = self.thermodynamics.model.saturation_adjustment(
-          'theta_li', theta_li, rho, q_t, zz)
+          'theta_li', theta_li, rho_thermal, q_t, zz)
 
       # Compute the potential temperature.
       buf = self.thermodynamics.model.potential_temperatures(
-          temperature, q_t, rho, zz)
+          temperature, q_t, rho_thermal, zz)
       theta = buf['theta']
       helper_variables_most.update({'theta': theta})
 
       q_l, q_i = self.thermodynamics.model.equilibrium_phase_partition(
-          temperature, rho, q_t)
+          temperature, rho_thermal, q_t)
 
       # Compute the source terms due to dilatation, wind shear, radiation,
       # subsidence velocity, and precipitation.
+      source = tf.nest.map_structure(tf.zeros_like, zz)
+
       if include_radiation:
         halos = [self._params.halo_width] * 3
-        f_r = self.cloud.source_by_radiation(q_l, rho, zz, h[self._g_dim],
-                                             self._g_dim, halos, replica_id,
-                                             replicas)
-        def add_radiation_source_fn(div_i, rho_i, f_r_i):
-          return div_i - rho_i * f_r_i
+        f_r = self.cloud.source_by_radiation(q_l, rho_thermal, zz,
+                                             h[self._g_dim], self._g_dim, halos,
+                                             replica_id, replicas)
 
-        div_terms[self._g_dim] = tf.nest.map_structure(add_radiation_source_fn,
-                                                       div_terms[self._g_dim],
-                                                       rho, f_r)
+        def radiation_source_fn(rho_i, f_r_i):
+          return - rho_i * f_r_i
 
-      source = calculus.divergence(self._kernel_op, div_terms, h)
+        rad_src = tf.nest.map_structure(radiation_source_fn, rho, f_r)
+        source = tf.nest.map_structure(lambda f: f / (2.0 * h[self._g_dim]),
+                                       self._grad_central[self._g_dim](rad_src))
 
       cp_m = self.thermodynamics.model.cp_m(q_t, q_l, q_i)
       cp_m_inv = tf.nest.map_structure(tf.math.reciprocal, cp_m)
-      exner_inv = self.thermodynamics.model.dry_exner_inverse(zz)
+      exner_inv = self.thermodynamics.model.exner_inverse(
+          rho_thermal, q_t, temperature, zz)
       cp_m_exner_inv = tf.nest.map_structure(tf.math.multiply, cp_m_inv,
                                              exner_inv)
       source = tf.nest.map_structure(tf.math.multiply, cp_m_exner_inv, source)
@@ -694,36 +677,39 @@ class Scalars(object):
       # Compute the temperature.
       q_t = states['q_t']
       rho = states[_KEY_RHO]
+      rho_thermal = states['rho_thermal']
+
       if 'T' in additional_states.keys():
         temperature = additional_states['T']
       else:
         e = self.thermodynamics.model.internal_energy_from_total_energy(
             e_t, states[_KEY_U], states[_KEY_V], states[_KEY_W], zz)
         temperature = self.thermodynamics.model.saturation_adjustment(
-            'e_int', e, rho, q_t)
+            'e_int', e, rho_thermal, q_t)
 
       # Compute the potential temperature.
       if 'theta' in additional_states:
         theta = additional_states['theta']
       else:
         buf = self.thermodynamics.model.potential_temperatures(
-            temperature, q_t, rho, zz)
+            temperature, q_t, rho_thermal, zz)
         theta = buf['theta']
       helper_variables_most.update({'theta': theta})
 
       # Compute the total enthalpy.
-      h_t = self.thermodynamics.model.total_enthalpy(e_t, rho, q_t, temperature)
+      h_t = self.thermodynamics.model.total_enthalpy(e_t, rho_thermal, q_t,
+                                                     temperature)
       if include_radiation or include_precipitation:
         q_l, _ = self.thermodynamics.model.equilibrium_phase_partition(
-            temperature, rho, q_t)
+            temperature, rho_thermal, q_t)
 
       # Compute the source terms due to dilatation, wind shear, radiation,
       # subsidence velocity, and precipitation.
       if include_radiation:
         halos = [self._params.halo_width] * 3
-        f_r = self.cloud.source_by_radiation(q_l, rho, zz, h[self._g_dim],
-                                             self._g_dim, halos, replica_id,
-                                             replicas)
+        f_r = self.cloud.source_by_radiation(q_l, rho_thermal, zz,
+                                             h[self._g_dim], self._g_dim, halos,
+                                             replica_id, replicas)
         div_terms[self._g_dim] = [
             div_term_i - rho_i * f_r_i for div_term_i, rho_i, f_r_i in zip(
                 div_terms[self._g_dim], rho, f_r)
@@ -743,12 +729,13 @@ class Scalars(object):
         cloud_liquid_to_rain_water_rate = (
             self.precipitation.cloud_liquid_to_rain_conversion_rate_kw1978(
                 q_r, q_l))
-        q_c = self.thermodynamics.model.saturation_excess(temperature, rho, q_t)
+        q_c = self.thermodynamics.model.saturation_excess(
+            temperature, rho_thermal, q_t)
         # Find q_v from the invariant q_t = q_c + q_v = q_l + q_i + q_v.
         q_v = tf.nest.map_structure(tf.math.subtract, q_t, q_c)
         rain_water_evaporation_rate = (
             self.precipitation.rain_evaporation_rate_kw1978(
-                rho, temperature, q_r, q_v, q_l, q_c))
+                rho_thermal, temperature, q_r, q_v, q_l, q_c))
         # Get potential energy.
         phi = tf.nest.map_structure(lambda zz_i: constants.G * zz_i, zz)
         # Calculate source terms for vapor and liquid conversions, respectively.
@@ -925,13 +912,15 @@ class Scalars(object):
             ' True is not well-defined.')
 
       rho = states[_KEY_RHO]
+      rho_thermal = states['rho_thermal']
 
       # Compute momentum term
       corrected_momentum = momentum
       if scalar_name == 'q_r':
         # Subtract term for rain terminal velocity from the vertical momentum.
         rain_water_terminal_velocity = (
-            self.precipitation.rain_water_terminal_velocity_kw1978(rho, q))
+            self.precipitation.rain_water_terminal_velocity_kw1978(
+                rho_thermal, q))
         rain_water_momentum = tf.nest.map_structure(
             tf.math.multiply, rain_water_terminal_velocity, rho)
         corrected_momentum[self._g_dim] = tf.nest.map_structure(
@@ -955,12 +944,12 @@ class Scalars(object):
 
       if 'theta_li' in states:
         temperature = self.thermodynamics.model.saturation_adjustment(
-            'theta_li', states['theta_li'], rho, q_t, zz=zz)
+            'theta_li', states['theta_li'], rho_thermal, q_t, zz=zz)
       elif 'e_t' in states:
         e = self.thermodynamics.model.internal_energy_from_total_energy(
             states['e_t'], states[_KEY_U], states[_KEY_V], states[_KEY_W], zz)
         temperature = self.thermodynamics.model.saturation_adjustment(
-            'e_int', e, rho, q_t)
+            'e_int', e, rho_thermal, q_t)
       elif 'T' in additional_states.keys():
         temperature = additional_states['T']
 
@@ -969,19 +958,20 @@ class Scalars(object):
         theta = additional_states['theta']
       else:
         buf = self.thermodynamics.model.potential_temperatures(
-            temperature, q_t, rho, zz)
+            temperature, q_t, rho_thermal, zz)
         theta = buf['theta']
       helper_variables_most.update({'theta': theta})
 
       if include_precipitation or include_subsidence:
         # Compute condensate mass fraction.
-        q_c = self.thermodynamics.model.saturation_excess(temperature, rho, q_t)
+        q_c = self.thermodynamics.model.saturation_excess(
+            temperature, rho_thermal, q_t)
 
       # Compute vapor to rain water conversion term if needed.
       if include_precipitation:
         q_r = q if scalar_name == 'q_r' else states['q_r']
         q_l, _ = self.thermodynamics.model.equilibrium_phase_partition(
-            temperature, rho, q_t)
+            temperature, rho_thermal, q_t)
         cloud_liquid_to_rain_water_rate = (
             self.precipitation.cloud_liquid_to_rain_conversion_rate_kw1978(
                 q_r, q_l))
@@ -989,7 +979,7 @@ class Scalars(object):
         q_v = tf.nest.map_structure(tf.math.subtract, q_t, q_l)
         rain_water_evaporation_rate = (
             self.precipitation.rain_evaporation_rate_kw1978(
-                rho, temperature, q_r, q_v, q_l, q_c))
+                rho_thermal, temperature, q_r, q_v, q_l, q_c))
         # Net vapor to rain water rate is
         #   (vapor to rain water rate) - (evaporation rate).
         net_cloud_liquid_to_rain_water_rate = tf.nest.map_structure(
@@ -1160,10 +1150,17 @@ class Scalars(object):
     states_mid.update(states)
     states_mid.update(
         {_KEY_RHO: common_ops.average(states[_KEY_RHO], states_0[_KEY_RHO])})
+    states_mid.update(
+        {'rho_thermal': common_ops.average(states['rho_thermal'],
+                                           states_0['rho_thermal'])})
+
+    for sc_name in self._params.transport_scalars_names:
+      states_mid.update(
+          {sc_name: common_ops.average(states[sc_name], states_0[sc_name])})
 
     updated_scalars = {}
     for sc_name in self._params.transport_scalars_names:
-      sc_mid = common_ops.average(states[sc_name], states_0[sc_name])
+      sc_mid = states_mid[sc_name]
       if self._use_sgs:
         diff_t = self._sgs_model.turbulent_diffusivity(
             (sc_mid,), (states[_KEY_U], states[_KEY_V], states[_KEY_W]),
@@ -1180,28 +1177,43 @@ class Scalars(object):
       helper_states.update(additional_states)
       scalar_rhs_fn = self._scalar_update(replica_id, replicas, sc_name,
                                           states_mid, helper_states)
+
+      def time_advance_cn_explicit(rhs, sc_name):
+        updated_vars = {}
+        if (self._params.solver_mode ==
+            thermodynamics_pb2.Thermodynamics.ANELASTIC):
+          alpha = tf.nest.map_structure(tf.math.reciprocal, states[_KEY_RHO])
+          new_sc = tf.nest.map_structure(
+              lambda sc, b, a: sc + self._params.dt * b * a, states_0[sc_name],
+              rhs, alpha)
+          updated_vars.update({sc_name: exchange_halos(new_sc, sc_name)})
+        else:
+          new_sc = tf.nest.map_structure(lambda a, b: a + self._params.dt * b,
+                                         states_0['rho_{}'.format(sc_name)],
+                                         rhs)
+          updated_vars.update({'rho_{}'.format(sc_name): new_sc})
+
+          # Updates scalar, to be consistent with rho * scalar.
+          updated_vars.update({
+              sc_name:
+                  exchange_halos(
+                      tf.nest.map_structure(
+                          tf.math.divide,
+                          updated_vars['rho_{}'.format(sc_name)],
+                          states[_KEY_RHO]), sc_name),
+          })
+        return updated_vars
+
       # Time advancement for rho * scalar.
       time_scheme = self._params.scalar_time_integration_scheme(sc_name)
       if (time_scheme ==
           numerics_pb2.TimeIntegrationScheme.TIME_SCHEME_CN_EXPLICIT_ITERATION):
-        new_sc = tf.nest.map_structure(lambda a, b: a + self._params.dt * b,
-                                       states_0['rho_{}'.format(sc_name)],
-                                       scalar_rhs_fn(sc_mid))
+        updated_scalars.update(
+            time_advance_cn_explicit(scalar_rhs_fn(sc_mid), sc_name))
       else:
         raise ValueError(
             'Time integration scheme %s is not supported yet for scalars.' %
             time_scheme)
-
-      updated_scalars.update({'rho_{}'.format(sc_name): new_sc})
-
-      # Updates scalar, to be consistent with rho * scalar.
-      updated_scalars.update({
-          sc_name:
-              exchange_halos(
-                  tf.nest.map_structure(
-                      tf.math.divide, updated_scalars['rho_{}'.format(sc_name)],
-                      states[_KEY_RHO]), sc_name),
-      })
 
       if self._dbg is not None:
         terms = (

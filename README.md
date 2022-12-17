@@ -9,7 +9,9 @@ collocated structured mesh. It is implemented in TensorFlow.
 
 ## Citation
 
-If you extend or use this package in your work, please cite the
+If you extend or use this package in your work (except the compoenents in the
+`ext`  subpackage, in which case please reference the information within that
+subpackage), please cite the
 [paper](https://www.sciencedirect.com/science/article/abs/pii/S0010465522000108)
 as
 

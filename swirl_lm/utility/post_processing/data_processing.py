@@ -326,13 +326,13 @@ def coordinates_to_indices(
 
   # Find the indices of the core. Assumes that all probes are in the same
   # partition.
-  c_indices = [np.int(locations[0][i] // core_l[i]) for i in range(3)]
+  c_indices = [int(locations[0][i] // core_l[i]) for i in range(3)]
 
   # Finds the indices of the physical coordinates inside the core.
-  indices = np.zeros_like(locations, dtype=np.int)
+  indices = np.zeros_like(locations, dtype=int)
   for i in range(3):
     indices[:, i] = np.array(
         (locations[:, i] - c_indices[i] * core_l[i]) // h[i] + halo_width,
-        dtype=np.int)
+        dtype=int)
 
   return c_indices, indices

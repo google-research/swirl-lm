@@ -15,34 +15,24 @@
 """A library for the interpolation schemes."""
 
 import functools
-from typing import Tuple
+from typing import Tuple, Dict, Sequence, Union
 
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import types
 import tensorflow as tf
 
 
-def weno(
-    v: types.FlowFieldVal,
-    dim: str,
+def _get_weno_kernel_op(
     k: int = 3,
-) -> Tuple[types.FlowFieldVal, types.FlowFieldVal]:
-  """Performs the WENO interpolation from cell centers to faces.
+)-> get_kernel_fn.ApplyKernelConvOp:
+  """Initializes a convolutional kernel operator with WENO related weights.
 
   Args:
-    v: A 3D tensor to which the interpolation is performed.
-    dim: The dimension along with the interpolation is performed.
     k: The order/stencil width of the interpolation.
 
   Returns:
-    A tuple of the interpolated values on the faces, with the first and second
-    elements being the negative and postive fluxes at face i + 1/2,
-    respectively.
+    A kernel of convolutional finite-difference operators.
   """
-  # A small constant that prevents division by zero when computing the weights
-  # for stencil selection.
-  eps = 1e-6
-
   # Coefficients for the interpolation and stencil selection.
   c = {
       3: {
@@ -51,9 +41,6 @@ def weno(
           1: [-1.0 / 6.0, 5.0 / 6.0, 1.0 / 3.0],
           2: [1.0 / 3.0, -7.0 / 6.0, 11.0 / 6.0],
           }
-  }
-  d = {
-      3: {0: 0.3, 1: 0.6, 2: 0.1},
   }
 
   # Define the kernel operator with WENO customized weights.
@@ -75,6 +62,38 @@ def weno(
       'b2_1': ([1.0, -4.0, 3.0], 2),
   })
   kernel_op = get_kernel_fn.ApplyKernelConvOp(4, kernel_lib)
+  return kernel_op
+
+
+def _calculate_weno_weights(
+    v: types.FlowFieldVal,
+    kernel_op: get_kernel_fn.ApplyKernelConvOp,
+    dim: str,
+    k: int = 3,
+) -> Tuple[Dict[int, Union[Sequence[tf.Tensor], tf.Tensor]], Dict[int, Union[
+    Sequence[tf.Tensor], tf.Tensor]]]:
+  """Calculates the weights for WENO interpolation from cell centered values.
+
+  Args:
+    v: A 3D tensor to which the interpolation is performed.
+    kernel_op: A kernel of convolutional finite-difference operators.
+    dim: The dimension along with the interpolation is performed.
+    k: The order/stencil width of the interpolation.
+
+  Returns:
+    A tuple of the weights for WENO interpolated values on the faces, with the
+    first and second elements being the negative and postive weights at face i +
+    1/2, respectively.
+  """
+  # A small constant that prevents division by zero when computing the weights
+  # for stencil selection.
+  eps = 1e-6
+
+  # Linear coefficients for the interpolation using upwind
+  d = {
+      3: {0: 0.3, 1: 0.6, 2: 0.1},
+  }
+
   kernel_fn = {
       'x':
           lambda u, name: kernel_op.apply_kernel_op_x(u, f'{name}x'),
@@ -84,13 +103,6 @@ def weno(
           lambda u, name: kernel_op.apply_kernel_op_z(u, f'{name}z',  # pylint: disable=g-long-lambda
                                                       f'{name}zsh')
   }[dim]
-
-  # Comppute the reconstructed values on faces.
-  vr_neg = {}
-  vr_pos = {}
-  for r in range(k):
-    vr_neg.update({r: kernel_fn(v, f'c{r}')})
-    vr_pos.update({r: kernel_fn(v, f'cr{r}')})
 
   # Compute the smoothness measurement.
   beta_fn = lambda f0, f1: 13.0 / 12.0 * f0**2 + 0.25 * f1**2
@@ -125,6 +137,79 @@ def weno(
     w_neg[r] = tf.nest.map_structure(tf.math.divide_no_nan, w_neg[r], w_neg_sum)
     w_pos[r] = tf.nest.map_structure(tf.math.divide_no_nan, w_pos[r], w_pos_sum)
 
+  return w_neg, w_pos
+
+
+def _reconstruct_weno_face_values(
+    v: types.FlowFieldVal,
+    kernel_op: get_kernel_fn.ApplyKernelConvOp,
+    dim: str,
+    k: int = 3,
+) -> Tuple[Dict[int, Union[Sequence[tf.Tensor], tf.Tensor]], Dict[int, Union[
+    Sequence[tf.Tensor], tf.Tensor]]]:
+  """Computes the reconstructed face values from cell centered values.
+
+  Args:
+    v: A 3D tensor to which the interpolation is performed.
+    kernel_op: A kernel of convolutional finite-difference operators.
+    dim: The dimension along with the interpolation is performed.
+    k: The order/stencil width of the interpolation.
+
+  Returns:
+    A tuple of the reconstructed face values for WENO interpolated values on the
+    faces, with the first and second elements being the negative and postive
+    weights at face i + 1/2, respectively.
+  """
+  kernel_fn = {
+      'x':
+          lambda u, name: kernel_op.apply_kernel_op_x(u, f'{name}x'),
+      'y':
+          lambda u, name: kernel_op.apply_kernel_op_y(u, f'{name}y'),
+      'z':
+          lambda u, name: kernel_op.apply_kernel_op_z(u, f'{name}z',  # pylint: disable=g-long-lambda
+                                                      f'{name}zsh')
+  }[dim]
+
+  # Compute the reconstructed values on faces.
+  vr_neg = {}
+  vr_pos = {}
+  for r in range(k):
+    vr_neg.update({r: kernel_fn(v, f'c{r}')})
+    vr_pos.update({r: kernel_fn(v, f'cr{r}')})
+
+  return vr_neg, vr_pos
+
+
+def _interpolate_with_weno_weights(
+    v: types.FlowFieldVal,
+    w_neg: Dict[int, Union[Sequence[tf.Tensor], tf.Tensor]],
+    w_pos: Dict[int, Union[Sequence[tf.Tensor], tf.Tensor]],
+    vr_neg: Dict[int, Union[Sequence[tf.Tensor], tf.Tensor]],
+    vr_pos: Dict[int, Union[Sequence[tf.Tensor], tf.Tensor]],
+    dim: str,
+    k: int = 3,
+) -> Tuple[types.FlowFieldVal, types.FlowFieldVal]:
+  """Performs the WENO interpolation from cell centers to faces.
+
+  Args:
+    v: A 3D tensor to which the interpolation is performed.
+    w_neg: A dictionary of 1D tensors with weights for negative side of WENO
+      interpolation.
+    w_pos: A dictionary of 1D tensors with weights for negative side of WENO
+      interpolation.
+    vr_neg: A dictionary of 1D tensors with reconstructed face values for
+      negative side of WENO interpolation.
+    vr_pos: A dictionary of 1D tensors with reconstructed face values for
+      positive side of WENO interpolation.
+    dim: The dimension along with the interpolation is performed.
+    k: The order/stencil width of the interpolation.
+
+  Returns:
+    A tuple of the interpolated values on the faces, with the first and second
+    elements being the negative and postive fluxes at face i + 1/2,
+    respectively.
+  """
+
   # Compute the weighted interpolated face values.
   v_neg = tf.nest.map_structure(tf.zeros_like, v)
   v_pos = tf.nest.map_structure(tf.zeros_like, v)
@@ -148,5 +233,31 @@ def weno(
       v_pos = tf.concat([v_pos[1:, ...], v[-1:, ...]], 0)
     else:  # v and v_pos are lists.
       v_pos = v_pos[1:] + [v[-1]]
+
+  return v_neg, v_pos
+
+
+def weno(
+    v: types.FlowFieldVal,
+    dim: str,
+    k: int = 3,
+) -> Tuple[types.FlowFieldVal, types.FlowFieldVal]:
+  """Performs the WENO interpolation from cell centers to faces.
+
+  Args:
+    v: A 3D tensor to which the interpolation is performed.
+    dim: The dimension along with the interpolation is performed.
+    k: The order/stencil width of the interpolation.
+
+  Returns:
+    A tuple of the interpolated values on the faces, with the first and second
+    elements being the negative and postive fluxes at face i + 1/2,
+    respectively.
+  """
+  kernel_op = _get_weno_kernel_op(k)
+  w_neg, w_pos = _calculate_weno_weights(v, kernel_op, dim, k)
+  vr_neg, vr_pos = _reconstruct_weno_face_values(v, kernel_op, dim, k)
+  v_neg, v_pos = _interpolate_with_weno_weights(v, w_neg, w_pos, vr_neg, vr_pos,
+                                                dim, k)
 
   return v_neg, v_pos

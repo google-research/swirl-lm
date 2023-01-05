@@ -35,6 +35,11 @@ def _get_weno_kernel_op(
   """
   # Coefficients for the interpolation and stencil selection.
   c = {
+      2: {
+          -1: [1.5, -0.5,],
+          0: [0.5, 0.5,],
+          1: [-0.5, 1.5,],
+          },
       3: {
           -1: [11.0 / 6.0, -7.0 / 6.0, 1.0 / 3.0,],
           0: [1.0 / 3.0, 5.0 / 6.0, -1.0 / 6.0],
@@ -53,14 +58,20 @@ def _get_weno_kernel_op(
       f'cr{r}': (c[k][r - 1], r) for r in range(k)
   })
   # Weights for the smoothness measurement.
-  kernel_lib.update({
-      'b0_0': ([1.0, -2.0, 1.0], 0),
-      'b1_0': ([1.0, -2.0, 1.0], 1),
-      'b2_0': ([1.0, -2.0, 1.0], 2),
-      'b0_1': ([3.0, -4.0, 1.0], 0),
-      'b1_1': ([1.0, 0.0, -1.0], 1),
-      'b2_1': ([1.0, -4.0, 3.0], 2),
-  })
+  if k == 2:  # WENO-3
+    kernel_lib.update({
+        'b0_0': ([1.0, -1.0], 0),
+        'b1_0': ([1.0, -1.0], 1),
+    })
+  elif k == 3:  # WENO-5
+    kernel_lib.update({
+        'b0_0': ([1.0, -2.0, 1.0], 0),
+        'b1_0': ([1.0, -2.0, 1.0], 1),
+        'b2_0': ([1.0, -2.0, 1.0], 2),
+        'b0_1': ([3.0, -4.0, 1.0], 0),
+        'b1_1': ([1.0, 0.0, -1.0], 1),
+        'b2_1': ([1.0, -4.0, 3.0], 2),
+    })
   kernel_op = get_kernel_fn.ApplyKernelConvOp(4, kernel_lib)
   return kernel_op
 
@@ -91,7 +102,8 @@ def _calculate_weno_weights(
 
   # Linear coefficients for the interpolation using upwind
   d = {
-      3: {0: 0.3, 1: 0.6, 2: 0.1},
+      2: {0: 2.0 / 3.0, 1: 1.0 / 3.0},  # WENO-3
+      3: {0: 0.3, 1: 0.6, 2: 0.1},  # WENO-5
   }
 
   kernel_fn = {
@@ -105,11 +117,20 @@ def _calculate_weno_weights(
   }[dim]
 
   # Compute the smoothness measurement.
-  beta_fn = lambda f0, f1: 13.0 / 12.0 * f0**2 + 0.25 * f1**2
-  beta = {
-      r: tf.nest.map_structure(beta_fn, kernel_fn(v, f'b{r}_0'),
-                               kernel_fn(v, f'b{r}_1')) for r in range(k)
-  }
+  if k == 2:  # WENO-3
+    beta_fn = lambda f0: f0**2
+    beta = {
+        r: tf.nest.map_structure(beta_fn, kernel_fn(v, f'b{r}_0'))
+        for r in range(k)
+    }
+  elif k == 3:  # WENO-5
+    beta_fn = lambda f0, f1: 13.0 / 12.0 * f0**2 + 0.25 * f1**2
+    beta = {
+        r: tf.nest.map_structure(
+            beta_fn, kernel_fn(v, f'b{r}_0'), kernel_fn(v, f'b{r}_1')
+        )
+        for r in range(k)
+    }
 
   # Compute the WENO weights.
   w_neg = {}

@@ -20,6 +20,9 @@ keywords = []
 # pip dependencies of the project
 dependencies = [
     "absl-py",
+    "attrs",
+    "einops",
+    "jax",
     "numpy",
     "scipy",
     "six",

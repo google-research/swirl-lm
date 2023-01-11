@@ -30,7 +30,7 @@ Cloud TPUs.
 
    This step creates a slice of 32 TPUs (v3) and a GCE VM. The TPU hosts and
    the VM are automatically configured to be able to communicate. The VM image
-   includes tensorflow.
+   includes TensorFlow.
 
    See https://cloud.google.com/tpu/docs/regions-zones for regions and TPU
    configurations. For most up-to-date info, use:
@@ -56,35 +56,20 @@ Cloud TPUs.
 
    Run the next set of steps on the VM.
 
-1. (VM) Clone Swirl LM from github:
+1. (VM) Clone Swirl-LM from github:
 
    ```sh
    git clone https://github.com/google-research/swirl-lm.git
    ```
 
-1. (VM) Install protobuf compiler, and if you plan to edit files, your favorite
-editor:
+1. (VM) Install Swirl-LM.
 
    ```sh
-   sudo apt-get install protobuf-compiler <editor>  # e.g., <editor>=emacs-nox
+   ./swirl-lm/setup.sh
    ```
 
-1. (VM) Install Swirl LM.
-
-   ```sh
-   pip install ./swirl-lm
-   ```
-
-   Note: this uses the files in the local repo and not in github; and also
-   installs the package in the user directory and not in site-packages.
-
-1. (VM) Run Swirl LM's set up script.
-
-   ```sh
-   bash ./swirl-lm/swirl_lm/example/tgv/setup.sh
-   ```
-
-   This script compiles proto files.
+   Note: this uses the files in the local repo and installs the package in the
+   user directory and not in site-packages.
 
 1. (VM) Run the solver.
 

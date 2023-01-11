@@ -7,9 +7,23 @@ variable-density Navier-Stokes equation using a low-Mach approximation, and the
 governing equations are discretized by a finite-difference method on a
 collocated structured mesh. It is implemented in TensorFlow.
 
+## Installation
+
+To use Swirl-LM, you will need access to@
+[TPUs on Google Cloud](https://cloud.google.com/tpu/docs/tpus).
+For small simulations, the easiest way to access TPUs is to use Google Colab. To
+see a demo, you can open one of
+[the example notebooks](https://github.com/google-research/swirl-lm/tree/main/swirl_lm/example)
+and follow the notebook's instructions.
+
+To run large simulations, you will need to create TPU VMs in your Google Cloud
+project. See
+[the instructions](https://github.com/google-research/swirl-lm/tree/main/swirl_lm/example/tgv)
+for the stand-alone demo on how to set up TPU VMs.
+
 ## Citation
 
-If you extend or use this package in your work (except the compoenents in the
+If you extend or use this package in your work (except the components in the
 `ext`  subpackage, in which case please reference the information within that
 subpackage), please cite the
 [paper](https://www.sciencedirect.com/science/article/abs/pii/S0010465522000108)

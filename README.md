@@ -1,3 +1,4 @@
+[![DOI](https://zenodo.org/badge/445670579.svg)](https://zenodo.org/badge/latestdoi/445670579)
 # Swirl-LM: Computational Fluid Dynamics in TensorFlow
 *This is not an official Google product*
 

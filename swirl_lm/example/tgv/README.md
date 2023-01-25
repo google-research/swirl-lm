@@ -65,7 +65,7 @@ Cloud TPUs.
 1. (VM) Install Swirl-LM.
 
    ```sh
-   ./swirl-lm/setup.sh
+   ./swirl-lm/swirl_lm/setup.sh
    ```
 
    Note: this uses the files in the local repo and installs the package in the

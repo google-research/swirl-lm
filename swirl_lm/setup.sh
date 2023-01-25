@@ -44,7 +44,7 @@ function install_swirl_lm() {
   python3 -m pip install .
 }
 
-cd $(dirname "$0")
+cd $(dirname "$0")/..  # cd to parent of swirl_lm.
 install_protoc
 run_protoc
 install_swirl_lm

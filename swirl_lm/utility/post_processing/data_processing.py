@@ -15,6 +15,7 @@
 """A library with tools that processes simulation data."""
 
 import itertools
+import math
 from multiprocessing import pool
 from typing import List, Optional, Sequence, Tuple
 
@@ -101,6 +102,260 @@ def interpolate_data(
     prev = tf.transpose(buf, (1, 2, 0))
 
   return prev
+
+
+def _get_global_interp_info(
+    source_nc: Tuple[int, int, int],
+    source_halo: Tuple[int, int, int],
+    source_grid: Tuple[int, int, int],
+    target_nc: Tuple[int, int, int],
+    target_halo: Tuple[int, int, int],
+    target_grid: Tuple[int, int, int],
+) -> Tuple[
+    Tuple[int, int, int],
+    Tuple[int, int, int],
+    Tuple[float, float, float],
+    Tuple[np.ndarray, np.ndarray, np.ndarray],
+    Tuple[np.ndarray, np.ndarray, np.ndarray],
+    Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+  """Generates global interpolation mapping information.
+
+  Args:
+    source_nc: The partition of the source data.
+    source_halo: The halo width of the source data.
+    source_grid: The number of data points in each dimension in a single
+      partition for source data, including halos.
+    target_nc: The partition of the target data.
+    target_halo: The halo width of the target data.
+    target_grid: The number of data points in each dimension in a single
+      partition for the target data, including halos.
+
+  Returns:
+    A tuple of the following:
+      * A 3-tuple of integers representing the single partition grid size for
+        the source data, in the order of `x-y-z`.
+      * A 3-tuple of integers representing the single partition grid size for
+        the target data, in the order of `x-y-z`.
+      * A length 3 float tuple representing the ratios of the target grid
+        spacing to the source grid spacing in three dimensions. Always ordered
+        in `x-y-z`.
+      * A length 3 tuple of 1-D Numpy array representing the global indices
+        of the left point on the source grid from which the interpolation is
+        calculated. The 3 components are ordered in `x-y-z`.
+      * A length 3 tuple of 1-D Numpy array representing the global indices
+        of the right point on the source grid from which the interpolation is
+        calculated. The 3 components are ordered in `x-y-z`.
+      * A length 3 tuple of 1-D Numpy array representing the fraction of the
+        distance between the interpolation evaluation point and the left point
+        normalized to the interval distance between the left point and the
+        right point. The 3 components are ordered in `x-y-z`.
+  """
+  inner_source_grid = []
+  inner_target_grid = []
+  h_ratio = []
+  j_0 = []
+  j_1 = []
+  factor = []
+  for dim in range(3):
+    inner_source_grid.append(source_grid[dim] - 2 * source_halo[dim])
+    total_source_grid = source_nc[dim] * inner_source_grid[-1]
+    inner_target_grid.append(target_grid[dim] - 2 * target_halo[dim])
+    total_target_grid = target_nc[dim] * inner_target_grid[-1]
+    h_ratio.append(float(total_source_grid - 1) / float(total_target_grid - 1))
+    j_0.append(np.array([math.floor(i * h_ratio[-1])
+                         for i in range(total_target_grid)]))
+    j_1.append(np.minimum(j_0[-1] + 1, total_source_grid - 1))
+    factor.append(np.array([math.fmod(i * h_ratio[-1], 1.0)
+                            for i in range(total_target_grid)]))
+
+  return (tuple(inner_source_grid), tuple(inner_target_grid), tuple(h_ratio),
+          tuple(j_0), tuple(j_1), tuple(factor))
+
+
+def _interpolate_for_one_target_core(
+    source_prefix: str,
+    source_step: int,
+    source_nc: Tuple[int, int, int],
+    source_halo: Tuple[int, int, int],
+    target_halo: Tuple[int, int, int],
+    inner_source_grid: Tuple[int, int, int],
+    inner_target_grid: Tuple[int, int, int],
+    j_0: Tuple[np.ndarray, np.ndarray, np.ndarray],
+    j_1: Tuple[np.ndarray, np.ndarray, np.ndarray],
+    factor: Tuple[np.ndarray, np.ndarray, np.ndarray],
+    target_core_id: Tuple[int, int, int],
+    varname: str,
+    mode: str = 'zxy',) -> tf.Tensor:
+  """Interpolates for a single target core.
+
+  Args:
+    source_prefix: The prefix of the data source.
+    source_step: The step id of the data source.
+    source_nc: The partition of the source data. Ordered in `x-y-z`.
+    source_halo: The halo width of the source data. Ordered in `x-y-z`.
+    target_halo: The halo width of the target data. Ordered in `x-y-z`.
+    inner_source_grid: The grid size of a signel soruce partition excluding the
+      halo. Ordered in `x-y-z`.
+    inner_target_grid: The grid size of a signel target partition excluding the
+      halo. Ordered in `x-y-z`.
+    j_0: A length 3 tuple of 1-D Numpy array representing the global indices
+      of the left point on the source grid from which the interpolation is
+      calculated. The 3 components are ordered in `x-y-z`.
+    j_1: A length 3 tuple of 1-D Numpy array representing the global indices
+      of the right point on the source grid from which the interpolation is
+      calculated. The 3 components are ordered in `x-y-z`.
+    factor: A length 3 tuple of 1-D Numpy array representing the fraction of
+      the distance between the interpolation evaluation point and the left point
+      normalized to the interval distance between the left point and the right
+      point. The 3 components are ordered in `x-y-z`.
+    target_core_id: The core id for which the partial target interpolation to
+      be generated. Ordered in `x-y-z`.
+    varname: The name of the variable to be processed.
+    mode: The orientation of the tensor. Valid options are 'z-x-y', 'x-y-z'.
+      Assumes to be the same for the source and target data.
+
+  Returns:
+    The local/partial iterpolation results for the specified target core.
+  """
+  axis = [mode.find(d) for d in ('x', 'y', 'z')]
+  dims = _get_dimension_from_mode(mode)
+  start_source_core = []
+  end_source_core = []
+  partial_factor = []
+  local_j_0 = []
+  local_j_1 = []
+  for dim in range(3):
+    target_grid_start = inner_target_grid[dim] * target_core_id[dim]
+    partial_j_0 = j_0[dim][
+        target_grid_start:(target_grid_start + inner_target_grid[dim])]
+    partial_j_1 = j_1[dim][
+        target_grid_start:(target_grid_start + inner_target_grid[dim])]
+    partial_factor.append(factor[dim][
+        target_grid_start:(target_grid_start + inner_target_grid[dim])])
+
+    start_source_core.append(partial_j_0[0] // inner_source_grid[dim])
+    end_source_core.append(partial_j_1[-1] // inner_source_grid[dim])
+    local_j_0.append(partial_j_0 -
+                     (start_source_core[-1] * inner_source_grid[dim]))
+    local_j_1.append(partial_j_1 -
+                     (start_source_core[-1] * inner_source_grid[dim]))
+
+  core_limits = [(i, j + 1) for i, j in
+                 zip(start_source_core, end_source_core)]
+  data = tf.transpose(
+      load_and_merge_serialized_tensor(source_prefix, varname, source_step,
+                                       source_nc, source_halo, mode,
+                                       tuple(core_limits)), axis)
+
+  prev = tf.identity(data)
+  for dim in range(3):
+    shape = prev.get_shape().as_list()
+    shape[0] = inner_target_grid[dim]
+    buf = (
+        # Calculates (1 - f) * y(j_0) + f * y(j_1).
+        # Reshapes (1 - f) so it is broadcastable to y(j_0)
+        tf.reshape(tf.cast(1.0 - partial_factor[dim], tf.float32), [-1, 1, 1])
+        # y(j_0) is created from gathering the data at the indices specified
+        # with j_0.
+        * tf.gather_nd(prev, np.expand_dims(local_j_0[dim], 1)) +
+        # Reshaps f so it is broadcastable to y(j_1)
+        tf.reshape(tf.cast(partial_factor[dim], tf.float32), [-1, 1, 1])
+        # y(j_1) is created from gathering the data at the indicies specified
+        # with j_1.
+        * tf.gather_nd(prev, np.expand_dims(local_j_1[dim], 1)))
+    prev = tf.transpose(buf, [1, 2, 0])
+
+  return tf.transpose(tf.pad(prev, [[target_halo[0],] * 2,
+                                    [target_halo[1],] * 2,
+                                    [target_halo[2],] * 2]), dims)
+
+
+def sequential_interpolate_distributed_serialized_tensor(
+    source_prefix: str,
+    source_step: int,
+    source_nc: Tuple[int, int, int],
+    source_halo: Tuple[int, int, int],
+    target_prefix: str,
+    target_step: int,
+    target_nc: Tuple[int, int, int],
+    target_halo: Tuple[int, int, int],
+    target_grid: Tuple[int, int, int],
+    varname: str,
+    mode: str = 'zxy',
+) -> None:
+  """Interpolates distributed tensor and repartitions it.
+
+  This function does the interpolation sequentially through the output cores
+  one by one to limit the peak memory usage.
+
+  Args:
+    source_prefix: The prefix of the data source.
+    source_step: The step id of the data source.
+    source_nc: The partition of the source data.
+    source_halo: The halo width of the source data.
+    target_prefix: The prefix of the target data.
+    target_step: The step id of the target data.
+    target_nc: The partition of the target data.
+    target_halo: The halo width of the target data.
+    target_grid: The number of data points in each dimension in a single
+      partition, including halos.
+    varname: The name of the variable to be processed.
+    mode: The orientation of the tensor. Valid options are 'z-x-y', 'x-y-z'.
+      Assumes to be the same for the source and target data.
+  """
+  dims = _get_dimension_from_mode(mode)
+
+  # Load source data from the first core to get the shape of the source.
+  # Note we are not stripping the halos here. This will be handled later.
+  filename = FILE_FMT.format(source_prefix, varname, 0, 0, 0, source_step)
+  single_tensor = read_serialized_tensor(filename)
+
+  tensor_shape = single_tensor.get_shape().as_list()
+  source_grid = [None,] * 3
+  for i, dim in enumerate(dims):
+    source_grid[dim] = tensor_shape[i]
+  source_grid = tuple(source_grid)
+
+  # Get the interploation mapping information. Note everything is in the order
+  # of x, y, z.
+  (inner_source_grid,
+   inner_target_grid,
+   _,
+   j_0,
+   j_1,
+   factor) = _get_global_interp_info(source_nc,
+                                     source_halo,
+                                     source_grid,
+                                     target_nc,
+                                     target_halo,
+                                     target_grid)
+
+  for cx in range(target_nc[0]):
+    for cy in range(target_nc[1]):
+      for cz in range(target_nc[2]):
+        interpolated = _interpolate_for_one_target_core(
+            source_prefix=source_prefix,
+            source_step=source_step,
+            source_nc=source_nc,
+            source_halo=source_halo,
+            target_halo=target_halo,
+            inner_source_grid=inner_source_grid,
+            inner_target_grid=inner_target_grid,
+            j_0=j_0,
+            j_1=j_1,
+            factor=factor,
+            target_core_id=(cx, cy, cz),
+            varname=varname,
+            mode=mode)
+
+        filename = FILE_FMT.format(
+            target_prefix,
+            varname,
+            cx,
+            cy,
+            cz,
+            target_step)
+        write_serialized_tensor(filename, interpolated)
 
 
 def load_and_merge_serialized_tensor(

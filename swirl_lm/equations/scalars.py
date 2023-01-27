@@ -36,7 +36,7 @@ from swirl_lm.numerics import filters
 from swirl_lm.numerics import numerics_pb2
 from swirl_lm.physics import constants
 from swirl_lm.physics.atmosphere import cloud
-from swirl_lm.physics.atmosphere import precipitation
+from swirl_lm.physics.atmosphere import microphysics_kw1978
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import thermodynamics_pb2
 from swirl_lm.physics.thermodynamics import water
@@ -112,7 +112,7 @@ class Scalars(object):
         self._params)
 
     if isinstance(self.thermodynamics.model, water.Water):
-      self.precipitation = precipitation.Precipitation(
+      self.precipitation = microphysics_kw1978.MicrophysicsKW1978(
           self.thermodynamics.model)
       self.cloud = cloud.Cloud(
           self.thermodynamics.model)
@@ -727,14 +727,14 @@ class Scalars(object):
         # vapor phase).
         q_r = states['q_r']
         cloud_liquid_to_rain_water_rate = (
-            self.precipitation.cloud_liquid_to_rain_conversion_rate_kw1978(
+            self.precipitation.autoconversion_and_accretion(
                 q_r, q_l))
         q_c = self.thermodynamics.model.saturation_excess(
             temperature, rho_thermal, q_t)
         # Find q_v from the invariant q_t = q_c + q_v = q_l + q_i + q_v.
         q_v = tf.nest.map_structure(tf.math.subtract, q_t, q_c)
         rain_water_evaporation_rate = (
-            self.precipitation.rain_evaporation_rate_kw1978(
+            self.precipitation.evaporation(
                 rho_thermal, temperature, q_r, q_v, q_l, q_c))
         # Get potential energy.
         phi = tf.nest.map_structure(lambda zz_i: constants.G * zz_i, zz)
@@ -919,7 +919,7 @@ class Scalars(object):
       if scalar_name == 'q_r':
         # Subtract term for rain terminal velocity from the vertical momentum.
         rain_water_terminal_velocity = (
-            self.precipitation.rain_water_terminal_velocity_kw1978(
+            self.precipitation.terminal_velocity(
                 rho_thermal, q))
         rain_water_momentum = tf.nest.map_structure(
             tf.math.multiply, rain_water_terminal_velocity, rho)
@@ -973,12 +973,12 @@ class Scalars(object):
         q_l, _ = self.thermodynamics.model.equilibrium_phase_partition(
             temperature, rho_thermal, q_t)
         cloud_liquid_to_rain_water_rate = (
-            self.precipitation.cloud_liquid_to_rain_conversion_rate_kw1978(
+            self.precipitation.autoconversion_and_accretion(
                 q_r, q_l))
         # q_v = q_t - q_l - q_i. Not: We assume q_i == 0 here.
         q_v = tf.nest.map_structure(tf.math.subtract, q_t, q_l)
         rain_water_evaporation_rate = (
-            self.precipitation.rain_evaporation_rate_kw1978(
+            self.precipitation.evaporation(
                 rho_thermal, temperature, q_r, q_v, q_l, q_c))
         # Net vapor to rain water rate is
         #   (vapor to rain water rate) - (evaporation rate).

@@ -25,14 +25,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""A class for handling precipitation modeling."""
+"""A library of the microphysics from Klemp & Wilhelmson, 1978."""
 
 
 from swirl_lm.physics.thermodynamics import water
 import tensorflow as tf
 
 
-class Precipitation(object):
+class MicrophysicsKW1978(object):
   """An object for handling precipitation modeling."""
 
   def __init__(self, water_model: water.Water) -> None:
@@ -44,7 +44,7 @@ class Precipitation(object):
     """The underlying water thermodynamics model."""
     return self._water_model
 
-  def rain_evaporation_rate_kw1978(
+  def evaporation(
       self,
       rho: water.FlowFieldVal,
       temperature: water.FlowFieldVal,
@@ -118,7 +118,7 @@ class Precipitation(object):
                                 precipitation_bulk_density, p_vs)
     return e_r
 
-  def cloud_liquid_to_rain_conversion_rate_kw1978(
+  def autoconversion_and_accretion(
       self,
       q_r: water.FlowFieldVal,
       q_l: water.FlowFieldVal,
@@ -154,20 +154,20 @@ class Precipitation(object):
     k_1 = 0.001
     k_2 = 2.2
 
-    def auto_conversion(q_l):
+    def autoconversion(q_l):
       return k_1 * tf.math.maximum(q_l - a, 0.0)
 
-    a_r = tf.nest.map_structure(auto_conversion, q_l)
+    a_r = tf.nest.map_structure(autoconversion, q_l)
 
-    def colliding_conversion(q_r, q_l):
+    def accretion(q_r, q_l):
       return k_2 * q_l * tf.math.pow(
           tf.clip_by_value(q_r, clip_value_min=0.0, clip_value_max=1.0), 0.875)
 
-    c_r = tf.nest.map_structure(colliding_conversion, q_r, q_l)
+    c_r = tf.nest.map_structure(accretion, q_r, q_l)
 
     return tf.nest.map_structure(tf.math.add, a_r, c_r)
 
-  def rain_water_terminal_velocity_kw1978(
+  def terminal_velocity(
       self,
       rho: water.FlowFieldVal,
       q_r: water.FlowFieldVal,

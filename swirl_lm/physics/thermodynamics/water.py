@@ -1219,6 +1219,77 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
     return t
 
+  def temperature_to_potential_temperature(
+      self,
+      theta_name: Text,
+      temperature: FlowFieldVal,
+      q_tot: FlowFieldVal,
+      q_liq: FlowFieldVal,
+      q_ice: FlowFieldVal,
+      zz: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldVal:
+    """Computes potential temperature from temperature.
+
+    Args:
+      theta_name: The name of the potential temperature variable `theta`, should
+        be one of the following: 'theta' (the potential temperature of the moist
+          air mixture), 'theta_v' (the virtual potential temperature),
+          'theta_li' (the liquid-ice potential temperature).
+      temperature: The temperature flow field.
+      q_tot: The total humidity.
+      q_liq: The liquid humidity.
+      q_ice: The ice humidity.
+      zz: The vertical coordinates.
+
+    Returns:
+      The potential temperature in units of K.
+
+    Raises:
+      ValueError: If `theta_name` is not in ('theta', 'theta_v', 'theta_li').
+    """
+    zz = zz if zz is not None else [
+        tf.zeros_like(t_i, dtype=t_i.dtype) for t_i in temperature
+    ]
+
+    q_c = tf.nest.map_structure(tf.math.add, q_liq, q_ice)
+    r_m = self.r_mix(q_tot, q_c)
+    cp_m = self.cp_m(q_tot, q_liq, q_ice)
+
+    p_ref = self.p_ref(zz)
+    exner = tf.nest.map_structure(
+        lambda p, r, cp: tf.pow(p / self._p_thermal, r / cp), p_ref, r_m, cp_m)
+
+    if theta_name == PotentialTemperature.THETA.value:
+      theta = tf.nest.map_structure(tf.math.divide, temperature, exner)
+    elif theta_name == PotentialTemperature.THETA_V.value:
+      theta = tf.nest.map_structure(
+          lambda t, exner_i, r: t / (_R_D / r * exner_i),
+          temperature,
+          exner,
+          r_m,
+      )
+    elif theta_name == PotentialTemperature.THETA_LI.value:
+      theta = tf.nest.map_structure(
+          lambda t_k, q_l_k, q_i_k, cp_m_k, exner_k: (  # pylint: disable=g-long-lambda
+              t_k - (self._lh_v0 * q_l_k + self._lh_s0 * q_i_k) / cp_m_k
+          )
+          / exner_k,
+          temperature,
+          q_liq,
+          q_ice,
+          cp_m,
+          exner,
+      )
+    else:
+      raise ValueError(
+          f'`theta_name` has to be either "{PotentialTemperature.THETA.value}" '
+          f'(the potential temperature of the air mixture), '
+          f'"{PotentialTemperature.THETA_V.value}" (the virtual potential '
+          f'temperature), or "{PotentialTemperature.THETA_LI.value}" (the '
+          f'liquid-ice potential temperature), but {theta_name} is provided.')
+
+    return theta
+
   def update_density(self, states: FlowFieldMap,
                      additional_states: FlowFieldMap) -> FlowFieldVal:
     """Updates the density of the flow field with water thermodynamics."""

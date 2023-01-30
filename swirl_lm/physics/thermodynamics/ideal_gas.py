@@ -233,7 +233,7 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
       zz = [tf.constant(0, dtype=TF_DTYPE)] * self._params.nz
 
     return [
-        self.density_by_ideal_gas_law(p_ref, self.r_d, t_ref)
+        self.density_by_ideal_gas_law(p_ref, self.r_d, t_ref)  # pytype: disable=wrong-arg-types  # always-use-return-annotations
         for p_ref, t_ref in zip(self.p_ref(zz), self.t_ref(zz))
     ]
 

@@ -27,12 +27,12 @@
 # limitations under the License.
 """A library of the microphysics from Klemp & Wilhelmson, 1978."""
 
-
+from swirl_lm.physics.atmosphere import microphysics_generic
 from swirl_lm.physics.thermodynamics import water
 import tensorflow as tf
 
 
-class MicrophysicsKW1978(object):
+class MicrophysicsKW1978(microphysics_generic.Microphysics):
   """An object for handling precipitation modeling."""
 
   def __init__(self, water_model: water.Water) -> None:

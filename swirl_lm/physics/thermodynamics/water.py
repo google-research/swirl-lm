@@ -119,6 +119,11 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     """The gas constant of water vapor."""
     return self._r_v
 
+  @property
+  def lh_v0(self):
+    """The latent heat of vaporization."""
+    return self._lh_v0
+
   def cv_m(
       self,
       q_tot: FlowFieldVal,
@@ -138,12 +143,16 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     Returns:
       The isovolumetric specific heat capacity of moist air.
     """
-    return [  # pylint: disable=g-complex-comprehension
-        self._cv_d + (self._cv_v - self._cv_d) * q_tot_i +
-        (self._cv_l - self._cv_v) * q_liq_i +
-        (self._cv_i - self._cv_v) * q_ice_i
-        for q_tot_i, q_liq_i, q_ice_i in zip(q_tot, q_liq, q_ice)
-    ]
+    def cv_m_fn(q_t, q_l, q_i):
+      """Computes the isovolumetric specific heat of moist air."""
+      return (
+          self._cv_d
+          + (self._cv_v - self._cv_d) * q_t
+          + (self._cv_l - self._cv_v) * q_l
+          + (self._cv_i - self._cv_v) * q_i
+      )
+
+    return tf.nest.map_structure(cv_m_fn, q_tot, q_liq, q_ice)
 
   def cp_m(
       self,
@@ -163,10 +172,11 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     Returns:
       The isobaric specific heat capacity of moist air.
     """
-    return [
-        (1 - q_tot_i) * self.cp_d + (q_tot_i - q_liq_i - q_ice_i) * self._cp_v
-        for q_tot_i, q_liq_i, q_ice_i in zip(q_tot, q_liq, q_ice)
-    ]
+    def cp_m_fn(q_t, q_l, q_i):
+      """Computes the isobaric specific heat of moist air."""
+      return (1 - q_t) * self.cp_d + (q_t - q_l - q_i) * self._cp_v
+
+    return tf.nest.map_structure(cp_m_fn, q_tot, q_liq, q_ice)
 
   def r_m(
       self,
@@ -210,10 +220,9 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     """
     eps = self._r_v / _R_D
 
-    return [
-        _R_D * (1.0 + (eps - 1.0) * q_tot_i - eps * q_c_i)
-        for q_tot_i, q_c_i in zip(q_tot, q_c)
-    ]
+    r_mix_fn = lambda q_t, q_c: _R_D * (1.0 + (eps - 1.0) * q_t - eps * q_c)
+
+    return tf.nest.map_structure(r_mix_fn, q_tot, q_c)
 
   def p_ref(
       self,
@@ -276,7 +285,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       raise ValueError('Unsupported reference state for pressure: {}'.format(
           self._ref_state_type))
 
-    return [pressure_fn(zz_i) for zz_i in zz]
+    return tf.nest.map_structure(pressure_fn, zz)
 
   def t_ref(self, zz: Optional[FlowFieldVal] = None) -> FlowFieldVal:
     """Generates the reference temperature considering the geopotential.
@@ -295,11 +304,11 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
     def temperature_with_geo_static() -> FlowFieldVal:
       """Computes the reference temperature following the presumed profile."""
-      return [
-          self._ref_state.t_s -
-          self._ref_state.delta_t * tf.math.tanh(z / self._ref_state.height)
-          for z in zz
-      ]
+      return tf.nest.map_structure(
+          lambda z: self._ref_state.t_s  # pylint: disable=g-long-lambda
+          - self._ref_state.delta_t * tf.math.tanh(z / self._ref_state.height),
+          zz,
+      )
 
     def temperature_with_const_theta() -> FlowFieldVal:
       """Computes reference temperature for constant potential temperature."""
@@ -312,9 +321,9 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
     def temperature_with_constant() -> FlowFieldVal:
       """Provides a constant temperature as the reference state."""
-      return [
-          self._ref_state.t_ref * tf.ones_like(z, dtype=z.dtype) for z in zz
-      ]
+      return tf.nest.map_structure(
+          lambda z: self._ref_state.t_ref * tf.ones_like(z), zz
+      )
 
     if self._ref_state_type == 'geo_static_reference_state':
       temperature = temperature_with_geo_static()
@@ -1085,10 +1094,9 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       temperature_sat = self.saturation_adjustment(target_var_name, target_var,
                                                    rho, q_tot, zz)
       r_mix = self.r_m(temperature_sat, rho, q_tot)
-      return [
-          p_i / t_sat / r_m
-          for p_i, t_sat, r_m in zip(p, temperature_sat, r_mix)
-      ]
+      return tf.nest.map_structure(
+          lambda p_i, t_sat, r_m: p_i / t_sat / r_m, p, temperature_sat, r_mix
+      )
 
     if rho_0 is None:
       rho_0 = tf.nest.map_structure(tf.ones_like, target_var)

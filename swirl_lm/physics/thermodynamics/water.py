@@ -23,7 +23,7 @@ This library supports the following pairs of prognostic variables:
 """
 import enum
 
-from typing import List, Optional, Sequence, Text
+from typing import Optional, Sequence, Text
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.numerics import root_finder
 from swirl_lm.physics import constants
@@ -349,10 +349,11 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     Returns:
       The reference density as a function of height.
     """
-    return [
-        p_ref / _R_D / t_ref
-        for p_ref, t_ref in zip(self.p_ref(zz), self.t_ref(zz))
-    ]
+    return tf.nest.map_structure(
+        lambda p_ref, t_ref: p_ref / _R_D / t_ref,
+        self.p_ref(zz),
+        self.t_ref(zz),
+    )
 
   def dry_exner(self, zz: FlowFieldVal) -> FlowFieldVal:
     """Computes the exner function using the dry air gas constant.
@@ -451,12 +452,27 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     Returns:
       The air temeprature.
     """
-    var_list = zip(e_int, q_tot, q_liq, q_ice, self.cv_m(q_tot, q_liq, q_ice))
-    return [
-        self._t_0 + (e_int_i - (q_tot_i - q_liq_i) * self._e_int_v0 + q_ice_i *
-                     (self._e_int_v0 + self._e_int_i0)) / cv_m_i
-        for e_int_i, q_tot_i, q_liq_i, q_ice_i, cv_m_i in var_list
-    ]
+
+    def air_temperature_fn(e_int_i, q_tot_i, q_liq_i, q_ice_i, cv_m_i):
+      """Computes the air temperature."""
+      return (
+          self._t_0
+          + (
+              e_int_i
+              - (q_tot_i - q_liq_i) * self._e_int_v0
+              + q_ice_i * (self._e_int_v0 + self._e_int_i0)
+          )
+          / cv_m_i
+      )
+
+    return tf.nest.map_structure(
+        air_temperature_fn,
+        e_int,
+        q_tot,
+        q_liq,
+        q_ice,
+        self.cv_m(q_tot, q_liq, q_ice),
+    )
 
   def _saturation_vapor_pressure(
       self,
@@ -630,10 +646,11 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       The saturation excess in equilibrium.
     """
     q_vap_sat = self.saturation_q_vapor(temperature, rho, q_liq, q_c)
-    return [
-        tf.maximum(0.0, q_tot_i - q_vap_sat_i)
-        for q_tot_i, q_vap_sat_i in zip(q_tot, q_vap_sat)
-    ]
+    return tf.nest.map_structure(
+        lambda q_tot_i, q_vap_sat_i: tf.maximum(0.0, q_tot_i - q_vap_sat_i),
+        q_tot,
+        q_vap_sat,
+    )
 
   def liquid_fraction(
       self,
@@ -699,11 +716,14 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     """
     liquid_frac = self.liquid_fraction(temperature)
     q_c = self.saturation_excess(temperature, rho, q_tot)
-    q_liq = [
-        liquid_frac_i * q_c_i for liquid_frac_i, q_c_i in zip(liquid_frac, q_c)
-    ]
-    q_ice = [(1.0 - liquid_frac_i) * q_c_i
-             for liquid_frac_i, q_c_i in zip(liquid_frac, q_c)]
+    q_liq = tf.nest.map_structure(
+        lambda liquid_frac_i, q_c_i: liquid_frac_i * q_c_i, liquid_frac, q_c
+    )
+    q_ice = tf.nest.map_structure(
+        lambda liquid_frac_i, q_c_i: (1.0 - liquid_frac_i) * q_c_i,
+        liquid_frac,
+        q_c,
+    )
     return q_liq, q_ice
 
   def internal_energy_components(
@@ -751,13 +771,23 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       The specific internal energy at the given temperature and humidity
       condition.
     """
-    var_list = zip(
-        self.cv_m(q_tot, q_liq, q_ice), temperature, q_tot, q_liq, q_ice)
-    return [
-        cv_m_i * (t_i - self._t_0) + (q_tot_i - q_liq_i) * self._e_int_v0 -
-        q_ice_i * (self._e_int_v0 + self._e_int_i0)
-        for cv_m_i, t_i, q_tot_i, q_liq_i, q_ice_i in var_list
-    ]
+
+    def internal_energy_fn(cv_m_i, t_i, q_tot_i, q_liq_i, q_ice_i):
+      """Computes the internal energy."""
+      return (
+          cv_m_i * (t_i - self._t_0)
+          + (q_tot_i - q_liq_i) * self._e_int_v0
+          - q_ice_i * (self._e_int_v0 + self._e_int_i0)
+      )
+
+    return tf.nest.map_structure(
+        internal_energy_fn,
+        self.cv_m(q_tot, q_liq, q_ice),
+        temperature,
+        q_tot,
+        q_liq,
+        q_ice,
+    )
 
   def internal_energy_from_total_energy(
       self,
@@ -782,11 +812,14 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     Returns:
       The specific internal energy.
     """
-    zz = [tf.zeros_like(e_t_i, dtype=e_t_i.dtype) for e_t_i in e_t
-         ] if zz is None else zz
-    ke = [0.5 * (u_i**2 + v_i**2 + w_i**2) for u_i, v_i, w_i in zip(u, v, w)]
-    pe = [_G * zz_i for zz_i in zz]
-    return [e_t_i - ke_i - pe_i for e_t_i, ke_i, pe_i in zip(e_t, ke, pe)]
+    zz = tf.nest.map_structure(tf.zeros_like, e_t) if zz is None else zz
+    ke = tf.nest.map_structure(
+        lambda u_i, v_i, w_i: 0.5 * (u_i**2 + v_i**2 + w_i**2), u, v, w
+    )
+    pe = tf.nest.map_structure(lambda zz_i: _G * zz_i, zz)
+    return tf.nest.map_structure(
+        lambda e_t_i, ke_i, pe_i: e_t_i - ke_i - pe_i, e_t, ke, pe
+    )
 
   def total_energy(
       self,
@@ -811,14 +844,17 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     Returns:
       The specific total energy.
     """
-    zz = [tf.zeros_like(e_i, dtype=e_i.dtype) for e_i in e
-         ] if zz is None else zz
-    ke = [0.5 * (u_i**2 + v_i**2 + w_i**2) for u_i, v_i, w_i in zip(u, v, w)]
-    pe = [_G * zz_i for zz_i in zz]
+    zz = tf.nest.map_structure(tf.zeros_like, e) if zz is None else zz
+    ke = tf.nest.map_structure(
+        lambda u_i, v_i, w_i: 0.5 * (u_i**2 + v_i**2 + w_i**2), u, v, w
+    )
+    pe = tf.nest.map_structure(lambda zz_i: _G * zz_i, zz)
 
     # Note, we are doing 1.0 * (e_i + ke_i) + pe_i here to work around a
     # non-deterministic issue. See b/221776082.
-    return [1.0 * (e_i + ke_i) + pe_i for e_i, ke_i, pe_i in zip(e, ke, pe)]
+    return tf.nest.map_structure(
+        lambda e_i, ke_i, pe_i: 1.0 * (e_i + ke_i) + pe_i, e, ke, pe
+    )
 
   def total_enthalpy(
       self,
@@ -842,10 +878,12 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       The total enthalpy, in units of J/(kg/m^3).
     """
     r_m = self.r_m(temperature, rho, q_tot)
-    return [
-        e_tot_i + r_m_i * t_i
-        for e_tot_i, r_m_i, t_i in zip(e_tot, r_m, temperature)
-    ]
+    return tf.nest.map_structure(
+        lambda e_tot_i, r_m_i, t_i: e_tot_i + r_m_i * t_i,
+        e_tot,
+        r_m,
+        temperature,
+    )
 
   def saturation_internal_energy(
       self,
@@ -889,24 +927,53 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     cv_mix = self.cv_m(q_tot, q_liq, q_ice)
     q_vap_sat = self.saturation_q_vapor(temperature, rho, q_liq, q_c)
     liquid_frac = self.liquid_fraction(temperature, q_liq, q_c)
-    l = [
-        liquid_frac_i * self._lh_v0 + (1.0 - liquid_frac_i) * self._lh_s0
-        for liquid_frac_i in liquid_frac
-    ]
-    dq_vap_sat_dt = [
-        q_vap_sat_i * l_i / (self._r_v * t_i**2)
-        for q_vap_sat_i, l_i, t_i in zip(q_vap_sat, l, temperature)
-    ]
-    dcvm_dq_vap = [
-        self._cv_v - liquid_frac_i * self._cv_l -
-        (1.0 - liquid_frac_i) * self._cv_i for liquid_frac_i in liquid_frac
-    ]
-    var_list = zip(cv_mix, liquid_frac, temperature, dcvm_dq_vap, dq_vap_sat_dt)
-    return [
-        cv_m_i + (self._e_int_v0 + (1 - liquid_frac_i) * self._e_int_i0 +
-                  (t_i - self._t_0) * dcvm_dq_vap_i) * dq_vap_sat_dt_i for
-        cv_m_i, liquid_frac_i, t_i, dcvm_dq_vap_i, dq_vap_sat_dt_i in var_list
-    ]
+
+    def l_fn(liquid_frac_i):
+      """Computes the latent heat."""
+      return liquid_frac_i * self._lh_v0 + (1.0 - liquid_frac_i) * self._lh_s0
+
+    l = tf.nest.map_structure(l_fn, liquid_frac)
+
+    def dq_vap_sat_dt_fn(q_vap_sat_i, l_i, t_i):
+      """Computes the time rate of change of saturation vapor fraction."""
+      return q_vap_sat_i * l_i / (self._r_v * t_i**2)
+
+    dq_vap_sat_dt = tf.nest.map_structure(
+        dq_vap_sat_dt_fn, q_vap_sat, l, temperature
+    )
+
+    def dcvm_dq_vap_fn(liquid_frac_i):
+      """Computes the gradient of cvm wrt q_vap."""
+      return (
+          self._cv_v
+          - liquid_frac_i * self._cv_l
+          - (1.0 - liquid_frac_i) * self._cv_i
+      )
+
+    dcvm_dq_vap = tf.nest.map_structure(dcvm_dq_vap_fn, liquid_frac)
+
+    def de_int_dt_fn(
+        cv_m_i, liquid_frac_i, t_i, dcvm_dq_vap_i, dq_vap_sat_dt_i
+    ):
+      """Compute the time rate of change of the internal energy."""
+      return (
+          cv_m_i
+          + (
+              self._e_int_v0
+              + (1 - liquid_frac_i) * self._e_int_i0
+              + (t_i - self._t_0) * dcvm_dq_vap_i
+          )
+          * dq_vap_sat_dt_i
+      )
+
+    return tf.nest.map_structure(
+        de_int_dt_fn,
+        cv_mix,
+        liquid_frac,
+        temperature,
+        dcvm_dq_vap,
+        dq_vap_sat_dt,
+    )
 
   def saturation_temperature(
       self,
@@ -947,7 +1014,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
           f'"{PotentialTemperature.THETA_V.value}", '
           f'"{PotentialTemperature.THETA_LI.value}".')
 
-    t_sat = root_finder.newton_method(
+    return root_finder.newton_method(
         error_fn,
         t_guess,
         self._t_max_iter,
@@ -955,8 +1022,6 @@ class Water(thermodynamics_generic.ThermodynamicModel):
         value_tolerance=self._f_temperature_atol_and_rtol,
         analytical_jacobian_fn=jacobian_fn,
     )
-
-    return t_sat if isinstance(t_sat, List) else tf.unstack(t_sat)
 
   def saturation_adjustment(
       self,
@@ -979,8 +1044,8 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     Returns:
       The temperature at the given state.
     """
-    q_liq = [tf.zeros_like(q_tot_i, dtype=_TF_DTYPE) for q_tot_i in q_tot]
-    q_ice = [tf.zeros_like(q_tot_i, dtype=_TF_DTYPE) for q_tot_i in q_tot]
+    q_liq = tf.nest.map_structure(tf.zeros_like, q_tot)
+    q_ice = tf.nest.map_structure(tf.zeros_like, q_tot)
 
     if target_var_name == 'e_int':
       t_air = self.air_temperature(target_var, q_tot, q_liq, q_ice)
@@ -1190,9 +1255,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     Raises:
       ValueError: If `theta_name` is not in ('theta', 'theta_v', 'theta_li').
     """
-    zz = zz if zz is not None else [
-        tf.zeros_like(t_i, dtype=t_i.dtype) for t_i in theta
-    ]
+    zz = zz if zz is not None else tf.nest.map_structure(tf.zeros_like, theta)
 
     q_c = tf.nest.map_structure(tf.math.add, q_liq, q_ice)
     r_m = self.r_mix(q_tot, q_c)
@@ -1255,9 +1318,11 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     Raises:
       ValueError: If `theta_name` is not in ('theta', 'theta_v', 'theta_li').
     """
-    zz = zz if zz is not None else [
-        tf.zeros_like(t_i, dtype=t_i.dtype) for t_i in temperature
-    ]
+    zz = (
+        zz
+        if zz is not None
+        else tf.nest.map_structure(tf.zeros_like, temperature)
+    )
 
     q_c = tf.nest.map_structure(tf.math.add, q_liq, q_ice)
     r_m = self.r_mix(q_tot, q_c)

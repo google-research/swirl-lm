@@ -29,6 +29,7 @@ from swirl_lm.boundary_condition import immersed_boundary_method
 from swirl_lm.communication import halo_exchange
 from swirl_lm.equations import common
 from swirl_lm.equations import utils as eq_utils
+from swirl_lm.equations.source_function import scalar_generic
 from swirl_lm.numerics import calculus
 from swirl_lm.numerics import convection
 from swirl_lm.numerics import diffusion
@@ -161,6 +162,16 @@ class Scalars(object):
         lambda f: self._kernel_op.apply_kernel_op_z(f, 'kDz', 'kDzsh'),
     ]
 
+    # Get functions that compute terms in tranport equations for all scalars.
+    self._scalar_model = {}
+    for scalar_name in self._params.transport_scalars_names:
+      self._scalar_model[scalar_name] = scalar_generic.ScalarGeneric(
+          self._kernel_op,
+          self._params,
+          scalar_name,
+          self.thermodynamics,
+      )
+
   def _exchange_halos(self, f, bc_f, replica_id, replicas):
     """Performs halo exchange for the variable f."""
     return halo_exchange.inplace_halo_exchange(
@@ -283,21 +294,11 @@ class Scalars(object):
     Returns:
       scalar_function: A function that computes the `f(phi)`.
     """
-
-    h = (self._params.dx, self._params.dy, self._params.dz)
-    dt = self._params.dt
-    momentum = [states[_KEY_RHO_U], states[_KEY_RHO_V], states[_KEY_RHO_W]]
-
-    source = self._source[scalar_name] if self._source[scalar_name] else [
-        tf.zeros_like(rho_i) for rho_i in states[_KEY_RHO]
-    ]
-
-    # Helper variables required by the Monin-Obukhov similarity theory.
-    helper_variables_most = {
-        'u': states[_KEY_U],
-        'v': states[_KEY_V],
-        'w': states[_KEY_W],
-    }
+    source = (
+        self._source[scalar_name]
+        if self._source[scalar_name] is not None
+        else tf.nest.map_structure(tf.zeros_like, states[_KEY_RHO])
+    )
 
     def scalar_function(phi: FlowFieldVal):
       """Computes the functional RHS for the three momentum equations.
@@ -309,30 +310,19 @@ class Scalars(object):
         A `FlowFieldVal` representing the RHS of the scalar transport
         equation.
       """
-      conv = [
-          self._conservative_scalar_convection(replica_id, replicas, phi,  # pylint: disable=g-complex-comprehension
-                                               momentum[i], states[_KEY_P],
-                                               states[_KEY_RHO], h[i], dt, i,
-                                               scalar_name) for i in range(3)
-      ]
+      conv = self._scalar_model[scalar_name].convection_fn(
+          replica_id, replicas, phi, states, additional_states
+      )
 
-      # Because only the layer close to the ground will be used in the Monin
-      # Obukhov similarity closure model, the temperature and potential
-      # temperature are equal. Note that the helper variables are used only
-      # in the 'T' and 'theta' transport equations.
-      if scalar_name in ('T', 'theta'):
-        helper_variables_most.update({'theta': phi})
+      diff = self._scalar_model[scalar_name].diffusion_fn(
+          replica_id, replicas, phi, states, additional_states
+      )
 
-      diff = self.diffusion_fn(
-          self._kernel_op,
-          replica_id,
-          replicas,
-          phi,
-          states[_KEY_RHO],
-          additional_states['diffusivity'],
-          h,
-          scalar_name=scalar_name,
-          helper_variables=helper_variables_most)
+      source_additional = self._scalar_model[scalar_name].source_fn(
+          replica_id, replicas, phi, states, additional_states
+      )
+
+      source_all = tf.nest.map_structure(tf.math.add, source, source_additional)
 
       if dbg:
         return {
@@ -342,17 +332,25 @@ class Scalars(object):
             'diff_x': diff[0],
             'diff_y': diff[1],
             'diff_z': diff[2],
-            'source': source,
+            'source': source_all,
         }
 
-      equation_terms = zip(conv[0], conv[1], conv[2], diff[0], diff[1], diff[2],
-                           source)
+      def scalar_transport_equation(
+          conv_x, conv_y, conv_z, diff_x, diff_y, diff_z, src
+      ):
+        """Defines right-hand side function of a scalar transport equation."""
+        return -(conv_x + conv_y + conv_z) + (diff_x + diff_y + diff_z) + src
 
-      rhs = [
-          -(conv_x_i + conv_y_i + conv_z_i) + (diff_x_i + diff_y_i + diff_z_i) +
-          src_i for conv_x_i, conv_y_i, conv_z_i, diff_x_i, diff_y_i, diff_z_i,
-          src_i in equation_terms
-      ]
+      rhs = tf.nest.map_structure(
+          scalar_transport_equation,
+          conv[0],
+          conv[1],
+          conv[2],
+          diff[0],
+          diff[1],
+          diff[2],
+          source,
+      )
 
       if self._ib is not None:
         rho_sc_name = 'rho_{}'.format(scalar_name)

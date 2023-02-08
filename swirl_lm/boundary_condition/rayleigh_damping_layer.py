@@ -196,7 +196,6 @@ def target_value_mean_dims_by_var(
 def klemp_lilly_relaxation_coeff_fn(
     dt: float,
     orientation: Iterable[_Orientation],
-    a_coeff: Optional[float] = 20.0,
 ) -> _InitFn:
   """Generates a function that computes 'sponge_beta' (Klemp & Lilly, 1978).
 
@@ -211,8 +210,6 @@ def klemp_lilly_relaxation_coeff_fn(
       field that indicates the dimension of the sponge layer, and a `fraction`
       field that specifies the fraction that the sponge layer is taking at the
       higher end of `dim`.
-    a_coeff: The coefficient used to compute the maximum magitude of the sponge
-      force. Scales inversely with the force.
 
   Returns:
     The `sponge_beta` coefficient following Klemp & Lilly, 1978.
@@ -256,7 +253,7 @@ def klemp_lilly_relaxation_coeff_fn(
             'The fraction of sponge layer should be in (0, 1). {} is given in '
             'dim {}.'.format(sponge.fraction, dim))
 
-      a_max = np.power(a_coeff * dt, -1)
+      a_max = np.power(sponge.a_coeff * dt, -1)
 
       # Set the default face to the higher end for backward compatibility.
       face = sponge.face if sponge.HasField('face') else 1
@@ -287,10 +284,9 @@ def klemp_lilly_relaxation_coeff_fn(
 def klemp_lilly_relaxation_coeff_fns_for_sponges(
     dt: float,
     sponge_infos: _RayleighDampingLayerSeq,
-    a_coeff: Optional[float] = 20.0,
 ) -> Dict[str, _InitFn]:
   return {_get_beta_name_from_sponge_info(sponge_info):
-          klemp_lilly_relaxation_coeff_fn(dt, sponge_info.orientation, a_coeff)
+          klemp_lilly_relaxation_coeff_fn(dt, sponge_info.orientation)
           for sponge_info in sponge_infos}
 
 

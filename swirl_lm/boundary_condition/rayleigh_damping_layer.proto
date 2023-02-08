@@ -28,7 +28,7 @@ package research.simulation;
 // Next id: 5
 message RayleighDampingLayer {
   // Information of the orientation of the sponge layer/layers.
-  // Next id: 4
+  // Next id: 5
   message Orientation {
     // The dimension along which the sponge layer is applied. Allowed values are
     // 0, 1, and 2, which corresponds to the x, y, and z directions,
@@ -42,6 +42,9 @@ message RayleighDampingLayer {
     // NB: the sponge layer is always applied close to the face with a larger
     // index.
     optional float fraction = 2;
+    // The coefficient used to compute the maximum magnitude of the sponge
+    // force. Scales inversely with the force.
+    optional float a_coeff = 4 [default = 20.0];
   }
   repeated Orientation orientation = 1;
   // The information required to compute the forcing term in the sponge layers.

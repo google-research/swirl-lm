@@ -44,8 +44,6 @@ _R_D = constants.R_D
 _W_D = 0.029
 # Molecular weights for the water vapor, kg/m^3.
 _W_V = 0.018
-# The gravitational acceleration constant, in units of N/kg.
-_G = 9.81
 
 
 class PotentialTemperature(enum.Enum):
@@ -256,7 +254,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       delta_t_frac = self._ref_state.delta_t / self._ref_state.t_s
 
       # Compute the density scale height at the surface.
-      h_sfc = _R_D * self._ref_state.t_s / _G
+      h_sfc = _R_D * self._ref_state.t_s / constants.G
 
       return self._p_thermal * tf.math.exp(
           -(z + self._ref_state.height * delta_t_frac *
@@ -268,7 +266,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     def pressure_with_const_theta(z: tf.Tensor) -> tf.Tensor:
       """Computes the reference pressure for constant potential temperature."""
       return (self._p_thermal *
-              (1.0 - _G * z / self.cp_d / self._ref_state.theta)
+              (1.0 - constants.G * z / self.cp_d / self._ref_state.theta)
               **(self.cp_d / _R_D))
 
     def pressure_with_constant(z: tf.Tensor) -> tf.Tensor:
@@ -816,7 +814,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     ke = tf.nest.map_structure(
         lambda u_i, v_i, w_i: 0.5 * (u_i**2 + v_i**2 + w_i**2), u, v, w
     )
-    pe = tf.nest.map_structure(lambda zz_i: _G * zz_i, zz)
+    pe = tf.nest.map_structure(lambda zz_i: constants.G * zz_i, zz)
     return tf.nest.map_structure(
         lambda e_t_i, ke_i, pe_i: e_t_i - ke_i - pe_i, e_t, ke, pe
     )
@@ -848,7 +846,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     ke = tf.nest.map_structure(
         lambda u_i, v_i, w_i: 0.5 * (u_i**2 + v_i**2 + w_i**2), u, v, w
     )
-    pe = tf.nest.map_structure(lambda zz_i: _G * zz_i, zz)
+    pe = tf.nest.map_structure(lambda zz_i: constants.G * zz_i, zz)
 
     # Note, we are doing 1.0 * (e_i + ke_i) + pe_i here to work around a
     # non-deterministic issue. See b/221776082.

@@ -68,7 +68,6 @@ import tensorflow as tf
 FlowFieldVal = types.FlowFieldVal
 FlowFieldMap = types.FlowFieldMap
 
-_GRAVITY = 9.81
 # A small number that's used as the threshold for the gravity vector. If the
 # absolute value of a gravity component is less than this threshold, it is
 # considered as 0 when computing the free slip wall boundary condition.

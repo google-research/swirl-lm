@@ -24,6 +24,7 @@ import numpy as np
 from swirl_lm.base import parameters_pb2
 from swirl_lm.numerics import calculus
 from swirl_lm.numerics import filters
+from swirl_lm.physics import constants
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import types
@@ -36,8 +37,6 @@ FlowFieldMap = types.FlowFieldMap
 # The originally proposed value for the Smagorinsky constant (dimensionless)
 # with turbulence being isotropic and homogeneous.
 _CS_CLASSICAL = 0.18
-# The gravitational constant, in units of m/s².
-_G = 9.81
 
 
 def _test_filter(value: FlowFieldVal) -> FlowFieldVal:
@@ -611,7 +610,8 @@ class SgsModel(object):
       """Computes the Richardson number."""
       dt_dz = self._kernel_op.apply_kernel_op_z(temperature, 'kDz', 'kDzsh')
       buoyancy_freq_square = [
-          _G / t_i * dt_dz_i for t_i, dt_dz_i in zip(temperature, dt_dz)
+          constants.G / t_i * dt_dz_i for t_i, dt_dz_i in zip(
+              temperature, dt_dz)
       ]
       return [
           tf.math.divide_no_nan(n_square, s**2)

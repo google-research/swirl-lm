@@ -47,6 +47,7 @@ from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.base import physical_variable_keys_manager
 from swirl_lm.equations import common
 from swirl_lm.numerics import root_finder
+from swirl_lm.physics import constants
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
@@ -61,8 +62,6 @@ FlowFieldMap = types.FlowFieldMap
 _KAPPA = 0.4
 # The stability correction for momentum.
 _PHI_M = 0.0
-# The acceleration of gravity.
-_G = 9.81
 
 
 class MoninObukhovSimilarityTheory(object):
@@ -261,8 +260,8 @@ class MoninObukhovSimilarityTheory(object):
         v: tf.Tensor,
     ) -> tf.Tensor:
       """Computes the Richardson number."""
-      return _G * height * tf.math.divide_no_nan(t - self.t_s,
-                                                 (u**2 + v**2) * t)
+      return constants.G * height * tf.math.divide_no_nan(t - self.t_s,
+                                                          (u**2 + v**2) * t)
 
     return tf.nest.map_structure(richardson_number, theta, u1, u2)
 
@@ -456,7 +455,7 @@ class MoninObukhovSimilarityTheory(object):
       height: The height of the first grid point.
       varname: The name of the variable for which the exchange coefficient is
         computed. If not provided, assume this variable is a scalar instead of
-        an velocity/momentum component.
+        a velocity/momentum component.
 
     Returns:
       The exchange coefficient for the energy equation.
@@ -601,7 +600,7 @@ class MoninObukhovSimilarityTheory(object):
     def get_potential_temperature(variables):
       """Retrieves potential temperature from a dictionary of variables."""
       if 'T' in variables:
-        # Temperature is used interchangably with potential temperature because
+        # Temperature is used interchangeably with potential temperature because
         # they are almost identical on the ground.
         return variables['T']
       elif 'theta' in variables:
@@ -733,7 +732,8 @@ class MoninObukhovSimilarityTheory(object):
     Returns:
       The Obukhov length.
     """
-    param = tf.math.divide_no_nan(m**2 / _G * self.t_0, temperature - self.t_s)
+    param = tf.math.divide_no_nan(m**2 / constants.G * self.t_0,
+                                  temperature - self.t_s)
 
     a = self.beta_m**2 + tf.math.divide_no_nan(param * self.beta_h, z_m)
     b = 2.0 * self.beta_m * tf.math.log(z_m / self.z_0) + tf.math.divide_no_nan(
@@ -751,7 +751,8 @@ class MoninObukhovSimilarityTheory(object):
   def _compute_monin_obukhov_length_scale(self, u_star, temperature, heat_flux):
     """Computes the Monin-Obukhov length scale."""
     return [
-        tf.math.divide_no_nan(-u_star_i**3 * t_i, _KAPPA * _G * heat_flux)
+        tf.math.divide_no_nan(-u_star_i**3 * t_i,
+                              _KAPPA * constants.G * heat_flux)
         for u_star_i, t_i in zip(u_star, temperature)
     ]
 

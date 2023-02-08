@@ -149,9 +149,6 @@ from google.protobuf import text_format
 FlowFieldVal = types.FlowFieldVal
 FlowFieldMap = types.FlowFieldMap
 
-# The gravitational acceleration constant, in units of N/kg.
-_GRAVITY = 9.81
-
 _G_THRESHOLD = 1e-6
 
 # Poisson solver's dtype is the same as other parts by default (being `None` or

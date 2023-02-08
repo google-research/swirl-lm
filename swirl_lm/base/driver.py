@@ -337,6 +337,7 @@ def solver(
   params = params_input
   if params is None:
     params = parameters_lib.params_from_config_file_flag()
+  params.save_to_file(FLAGS.data_dump_prefix)
 
   # Initialize the TPU.
   computation_shape = np.array([params.cx, params.cy, params.cz])

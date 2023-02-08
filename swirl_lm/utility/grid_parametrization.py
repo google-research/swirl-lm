@@ -182,6 +182,7 @@ class GridParametrization(object):
       params = params_from_flags()
     if params.halo_width <= 0:
       raise ValueError('Halo width must be greater than 0.')
+    self.grid_params_proto = params
     self.cx = params.computation_shape.dim_0
     self.cy = params.computation_shape.dim_1
     self.cz = params.computation_shape.dim_2

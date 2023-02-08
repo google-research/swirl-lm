@@ -14,6 +14,7 @@
 
 """Library for input config for the incompressible Navier-Stokes solver."""
 
+import os.path
 from typing import Callable, List, Mapping, Optional, Sequence, Tuple
 
 from absl import flags
@@ -71,6 +72,8 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
           grid_parametrization_pb2.GridParametrization] = None,
   ):
     super(SwirlLMParameters, self).__init__(grid_params)
+
+    self.swirl_lm_parameters_proto = config
 
     self.kernel_op_type = config.kernel_op_type
 
@@ -507,6 +510,15 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
           break
 
     return self.time_integration_scheme
+
+  def save_to_file(self, prefix: str) -> None:
+    """Saves configuration protos as text to files with the given prefix."""
+    output_dir, _ = os.path.split(prefix)
+    tf.io.gfile.makedirs(output_dir)
+    with tf.io.gfile.GFile(f'{prefix}_swirl_lm.pbtxt', 'w') as f:
+      f.write(text_format.MessageToString(self.swirl_lm_parameters_proto))
+    with tf.io.gfile.GFile(f'{prefix}_grid.pbtxt', 'w') as f:
+      f.write(text_format.MessageToString(self.grid_params_proto))
 
 
 def params_from_config_file_flag() -> SwirlLMParameters:

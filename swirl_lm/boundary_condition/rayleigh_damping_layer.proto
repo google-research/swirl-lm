@@ -16,8 +16,16 @@ syntax = "proto2";
 
 package research.simulation;
 
-// Stores information required by the Rayleigh damping (sponge) layer.
-// Next id: 4
+// Stores information required by the Rayleigh damping (sponge) layers. The
+// RayleighDampingLayer proto defines a set of layers (zero or more per face)
+// and the variables that interact with this set. Multiple RayleighDampingLayer
+// messages are allowed in a single config but a variable can interact with at
+// most one set of layers. This still allows different variables to be damped by
+// different sets of sponge layers, e.g., velocity components might be damped on
+// the sides and top of a domain and the same time rain content might be damped
+// on all six faces.
+//
+// Next id: 5
 message RayleighDampingLayer {
   // Information of the orientation of the sponge layer/layers.
   // Next id: 4
@@ -61,7 +69,7 @@ message RayleighDampingLayer {
     // variable or a conservative one. If 'true', the force term is generated
     // for the primitive variable; otherwise the force term is for a
     // conservative variable and needs to be multiplied by `rho`. For example,
-    // if the premitive variable is `phi`, then the corresponding conservative
+    // if the primitive variable is `phi`, then the corresponding conservative
     // variable is `rho phi`. `phi` here can ben any velocity components or
     // transported scalars. Setting the default to 'true' to match the behavior
     // before adding this field.
@@ -72,4 +80,9 @@ message RayleighDampingLayer {
   // provided. This average value will be used as the target value for that
   // variable. Valid values are 0, 1, and 2.
   repeated int32 target_value_mean_dim = 3 [packed = true];
+
+  // Name of the variable that contains the damping coefficient beta in
+  // 'additional_states'. If not set, the default name of 'sponge_beta' will be
+  // used.
+  optional string beta_name = 4;
 }

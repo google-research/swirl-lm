@@ -183,11 +183,10 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     self.density_update_option = config.density_update_option
 
     # Get the information required for sponge layers if applied.
-    if (config.HasField('boundary_models') and
-        config.boundary_models.HasField('sponge')):
+    if config.HasField('boundary_models') and config.boundary_models.sponge:
       self.sponge = config.boundary_models.sponge
     elif config.HasField('sponge_layer'):
-      self.sponge = config.sponge_layer
+      self.sponge = [config.sponge_layer]
     else:
       self.sponge = None
 

@@ -31,7 +31,7 @@ message BoundaryModels {
   // Parameters required by the Monin-Obukhov Similarity Theory.
   optional MoninObukhovSimilarityTheory most = 2;
   // Parameters required by the Rayleigh damping layer (a.k.a sponge layer).
-  optional RayleighDampingLayer sponge = 3;
+  repeated RayleighDampingLayer sponge = 3;
   // Parameters required by the simulated turbulent inflow library.
   optional SimulatedTurbulentInflow simulated_inflow = 4;
 }

@@ -20,12 +20,12 @@ This boundary treatment is applied as a forcing term that takes the form [1]:
 where 𝛽 is the coefficient that determines where the sponge layer is applied,
 𝜙₀ is the desired value at the sponge layer.
 
-To use this library, a variable with name 'sponge_beta' is required in the
-`additional_states`. This variable should have the same shape as the mesh in
-each TPU replica.
+To use this library, one or more variables for 'beta' coefficients are required
+in the `additional_states`. These variables should have the same shape as the
+mesh in each TPU replica.
 
-One of the mostly known application of this boundary condition is useful to
-prevent the reflection of gravitational wave from the top of the domain.
+One of the mostly known application of this boundary condition is to prevent the
+reflection of gravitational wave from the top of the domain.
 
 Reference:
 1. Durran, Dale R., and Joseph B. Klemp. 1983. “A Compressible Model for the
@@ -54,6 +54,8 @@ _InitFn = initializer.ValueFunction
 _Orientation = rayleigh_damping_layer_pb2.RayleighDampingLayer.Orientation
 _SpongeInfo = rayleigh_damping_layer_pb2.RayleighDampingLayer.VariableInfo
 _PeriodicDimensionInfo = parameters_pb2.PeriodicDimensions
+_RayleighDampingLayerSeq = Sequence[
+    rayleigh_damping_layer_pb2.RayleighDampingLayer]
 
 
 def get_sponge_force_name(varname: Text) -> Text:
@@ -83,48 +85,51 @@ def get_sponge_target_name(varname: Text) -> Text:
 
 
 def target_value_lib_from_proto(
-    sponge: rayleigh_damping_layer_pb2.RayleighDampingLayer) -> TargetValueLib:
+    sponges: _RayleighDampingLayerSeq) -> TargetValueLib:
   """Generates a target value library from the proto.
 
   Args:
-    sponge: A materialized sponge layer proto.
+    sponges: A sequence of materialized sponge layer protos.
 
   Returns:
     A dictionary with keys being the variable names, and values being the target
     value in the sponge layer.
   """
   lib = {}
-  for info in sponge.variable_info:
-    if info.HasField('target_value'):
-      lib.update({info.name: info.target_value})
-    elif info.HasField('target_state_name'):
-      lib.update({info.name: info.target_state_name})
-    else:
-      lib.update({info.name: None})
+  for sponge in sponges:
+    for info in sponge.variable_info:
+      if info.HasField('target_value'):
+        lib.update({info.name: info.target_value})
+      elif info.HasField('target_state_name'):
+        lib.update({info.name: info.target_state_name})
+      else:
+        lib.update({info.name: None})
   return lib
 
 
-def variable_type_lib_from_proto(
-    sponge: rayleigh_damping_layer_pb2.RayleighDampingLayer) -> BoolMap:
+def variable_type_lib_from_proto(sponges: _RayleighDampingLayerSeq) -> BoolMap:
   """Generates a library for the type of the variable from the proto.
 
   Args:
-    sponge: A materialized sponge layer proto.
+    sponges: A sequence of materialized sponge layer protos.
 
   Returns:
     A dictionary with keys being the variable names, and values being the type
     of the variable (primitive or conservative) that the sponge is associated
     with.
   """
-  return {info.name: info.primitive for info in sponge.variable_info}
+  out = {}
+  for sponge in sponges:
+    for info in sponge.variable_info:
+      out[info.name] = info.primitive
+  return out
 
 
-def target_status_lib_from_proto(
-    sponge: rayleigh_damping_layer_pb2.RayleighDampingLayer) -> BoolMap:
+def target_status_lib_from_proto(sponges: _RayleighDampingLayerSeq) -> BoolMap:
   """Generates a sponge forcing status library from the proto.
 
   Args:
-    sponge: A materialized sponge layer proto.
+    sponges: A sequence of materialized sponge layer protos.
 
   Returns:
     A dictionary with keys being the name of the forcing term, and values being
@@ -132,10 +137,60 @@ def target_status_lib_from_proto(
     terms need to be combined with the sponge force, and `True` if the sponge
     force is the only forcing term for that variable.
   """
-  return {
-      get_sponge_force_name(info.name): info.override
-      for info in sponge.variable_info
-  }
+  out = {}
+  for sponge in sponges:
+    for info in sponge.variable_info:
+      out[get_sponge_force_name(info.name)] = info.override
+  return out
+
+
+def _get_beta_name_from_sponge_info(
+    sponge: rayleigh_damping_layer_pb2.RayleighDampingLayer) -> str:
+  # Use default name 'sponge_beta' if beta_name is not explicitly set.
+  return sponge.beta_name or 'sponge_beta'
+
+
+def beta_name_by_var(sponges: _RayleighDampingLayerSeq) -> Dict[str, str]:
+  """Returns the mapping from variable names to beta variable names."""
+  out = {}
+  seen_beta_names = set()
+  for sponge in sponges:
+    beta_name = _get_beta_name_from_sponge_info(sponge)
+    if beta_name in seen_beta_names:
+      raise ValueError(
+          f'Sponge beta variable `{beta_name}` is defined more than once.')
+    seen_beta_names.add(beta_name)
+    for info in sponge.variable_info:
+      if info.name in out:
+        raise ValueError(
+            f'Variable `{info.name}` participates in multiple sponge layers.')
+      out[info.name] = beta_name
+  return out
+
+
+def sponge_info_map(
+    sponges: _RayleighDampingLayerSeq) -> Dict[str, _SpongeInfo]:
+  out = {}
+  for sponge in sponges:
+    for info in sponge.variable_info:
+      out[info.name] = info
+  return out
+
+
+def target_value_mean_dims_by_var(
+    sponges: _RayleighDampingLayerSeq,
+    periodic_dims: Optional[Sequence[bool]]) -> Dict[str, Sequence[int]]:
+  """Returns the mapping from variable names to target value mean dimensions."""
+  out = {}
+  for sponge in sponges:
+    target_value_mean_dims = list(sponge.target_value_mean_dim)
+    if not target_value_mean_dims and periodic_dims is not None:
+      target_value_mean_dims = [
+          i for i, val in enumerate(periodic_dims) if val
+      ]
+    for info in sponge.variable_info:
+      out[info.name] = target_value_mean_dims
+  return out
 
 
 def klemp_lilly_relaxation_coeff_fn(
@@ -229,35 +284,41 @@ def klemp_lilly_relaxation_coeff_fn(
   return init_fn
 
 
+def klemp_lilly_relaxation_coeff_fns_for_sponges(
+    dt: float,
+    sponge_infos: _RayleighDampingLayerSeq,
+    a_coeff: Optional[float] = 20.0,
+) -> Dict[str, _InitFn]:
+  return {_get_beta_name_from_sponge_info(sponge_info):
+          klemp_lilly_relaxation_coeff_fn(dt, sponge_info.orientation, a_coeff)
+          for sponge_info in sponge_infos}
+
+
 class RayleighDampingLayer(object):
   """A library of the sponge layer."""
 
-  def __init__(self,
-               sponge_info: rayleigh_damping_layer_pb2.RayleighDampingLayer,
-               periodic_dims: Optional[Sequence[bool]] = None):
+  def __init__(
+      self,
+      sponge_infos: _RayleighDampingLayerSeq,
+      periodic_dims: Optional[Sequence[bool]] = None):
     """Initializes the sponge layer library.
 
     Args:
-      sponge_info: An instance of the materialized RayleighDampingLayer proto.
+      sponge_infos: Sequence of materialized RayleighDampingLayer protos.
       periodic_dims: An optional list of booleans indicating the periodic
         dimensions.
     """
-    self._target_values = target_value_lib_from_proto(sponge_info)
-    self._target_status = target_status_lib_from_proto(sponge_info)
-    self._is_primitive = variable_type_lib_from_proto(sponge_info)
-    self._orientation = [ori.dim for ori in sponge_info.orientation]
-    self._sponge_info_map = {
-        info.name: info for info in sponge_info.variable_info
-    }
+    self._target_values = target_value_lib_from_proto(sponge_infos)
+    self._target_status = target_status_lib_from_proto(sponge_infos)
+    self._is_primitive = variable_type_lib_from_proto(sponge_infos)
+    self._beta_name_by_var = beta_name_by_var(sponge_infos)
+    self._sponge_info_map = sponge_info_map(sponge_infos)
 
     # Get the dimensions over which to compute the mean as the target values
     # when they are not provided. If target value mean dimensions are not
     # defined in the config, it will use periodic dimensions by default.
-    self._target_value_mean_dims = list(sponge_info.target_value_mean_dim)
-    if not self._target_value_mean_dims and periodic_dims is not None:
-      self._target_value_mean_dims = [
-          i for i, val in enumerate(periodic_dims) if val
-      ]
+    self._target_value_mean_dims_by_var = target_value_mean_dims_by_var(
+        sponge_infos, periodic_dims)
 
     logging.info(
         'Sponge layer will be applied for the following variables with'
@@ -268,6 +329,7 @@ class RayleighDampingLayer(object):
       replicas: np.ndarray,
       field: FlowFieldVal,
       beta: FlowFieldVal,
+      target_value_mean_dims: Sequence[int],
       target_state: Optional[Union[float, FlowFieldVal]] = None,
   ) -> FlowFieldVal:
     """Computes the sponge forcing term.
@@ -277,6 +339,8 @@ class RayleighDampingLayer(object):
         coordinates to replica id numbers.
       field: The value of the variable to which the sponge forcing is applied.
       beta: The coefficients to be applied as the sponge.
+      target_value_mean_dims: Dimensions over which to compute the target value
+        mean.
       target_state: An optional reference state from which to compute the
         sponge target.
 
@@ -287,7 +351,7 @@ class RayleighDampingLayer(object):
       target_value = target_state
     else:
       target_value = common_ops.global_mean(
-          field, replicas, axis=self._target_value_mean_dims)
+          field, replicas, axis=target_value_mean_dims)
 
     if isinstance(target_value, float):
       return tf.nest.map_structure(lambda b, f: b * (target_value - f), beta,
@@ -300,7 +364,7 @@ class RayleighDampingLayer(object):
       self,
       config: grid_parametrization.GridParametrization,
       coordinates: initializer.ThreeIntTuple,
-      beta_fn: _InitFn,
+      beta_fn_by_var: Dict[str, _InitFn],
   ) -> Mapping[Text, tf.Tensor]:
     """Generates the required initial fields by the simulation.
 
@@ -308,7 +372,8 @@ class RayleighDampingLayer(object):
       config: An instance of `grid_parametrization.GridParametrization`.
       coordinates: A tuple that specifies the replica's grid coordinates in
         physical space.
-      beta_fn: A function that initializes the coefficients in the sponge layer.
+      beta_fn_by_var: A mapping from sponge beta variable names to functions
+        that initialize the beta coefficients.
 
     Returns:
       A dictionary of state variables that are required by the Rayleigh damping
@@ -330,7 +395,8 @@ class RayleighDampingLayer(object):
         xx, dtype=xx.dtype)
     # pylint: enable=g-long-lambda
 
-    output = {'sponge_beta': states_init(beta_fn)}
+    output = {beta_name: states_init(beta_fn)
+              for beta_name, beta_fn in beta_fn_by_var.items()}
     for variable in self._sponge_info_map:
       output.update({
           get_sponge_force_name(variable): states_init(init_fn_zeros)
@@ -376,8 +442,11 @@ class RayleighDampingLayer(object):
     """
     del kernel_op, replica_id, params
 
-    if 'sponge_beta' not in additional_states.keys():
-      raise ValueError('"sponge_beta" not found in `additional_states.`')
+    beta_names_not_in_additional_states = (
+        set(self._beta_name_by_var.values()) - set(additional_states.keys()))
+    if beta_names_not_in_additional_states:
+      raise ValueError(f'{self._beta_names_not_in_additional_states} not found '
+                       'in `additional_states.`')
 
     def add_to_additional_states(
         name: Text,
@@ -407,9 +476,11 @@ class RayleighDampingLayer(object):
         target_val = additional_states_updated[var_info.target_state_name]
       elif var_info.HasField('target_value'):
         target_val = var_info.target_value
-      sponge_force = self._get_sponge_force(replicas, states[varname],
-                                            additional_states['sponge_beta'],
-                                            target_val)
+      sponge_force = self._get_sponge_force(
+          replicas, states[varname],
+          additional_states[self._beta_name_by_var[varname]],
+          self._target_value_mean_dims_by_var[varname],
+          target_val)
       if not self._is_primitive[varname]:
         sponge_force = [rho * f for rho, f in zip(states['rho'], sponge_force)]
       if self._target_status[sponge_name]:

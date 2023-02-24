@@ -81,7 +81,7 @@ message IdealGasLaw {
 message ConstantDensity {}
 
 // A library for parameters required by the water thermodynamics.
-// Next id: 26
+// Next id: 27
 message Water {
   // The gas constant of water vapor, in unit of J/kg/K. The default value is
   // computed based on treating the molecular weight of water as 0.018 kg/mol.
@@ -194,9 +194,19 @@ message Water {
     optional float t_ref = 1;
   }
 
+  // An option of the reference state where the profiles for pressure and
+  // potential temperature is defined by the user. With this option, it is
+  // required that `p_ref` and `theta_init` are provided as additional_states.
+  // If `q_t_init` is also in additional_states, it will be used to compute
+  // the reference state; otherwise it is assumed that q_t = 0 in the reference
+  // state. The recommended practice for setting these states is to enforce the
+  // hydrostatic balance condition for all thermodynamics variables.
+  message UserDefinedReferenceState {}
+
   oneof reference_state {
     GeoStaticReferenceState geo_static_reference_state = 21;
     ConstThetaReferenceState const_theta_reference_state = 22;
     ConstReferenceState const_reference_state = 23;
+    UserDefinedReferenceState user_defined_reference_state = 26;
   }
 }

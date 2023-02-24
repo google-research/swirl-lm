@@ -251,7 +251,7 @@ def _gen_monitor_data(
     states: FlowFieldMap,
     input_monitor_params: Mapping[Text, Any],
     halo_width: int,
-) -> Mapping[Text, tf.Tensor]:
+) -> monitor.MonitorDataType:
   """Generates monitoring data.
 
   Args:
@@ -817,7 +817,8 @@ class Pressure(object):
             # layer by assigning values to the pressure in halos adjacent to the
             # fluid domain.
             rho_0 = self._thermodynamics.rho_ref(
-                additional_states.get('zz', None))
+                additional_states.get('zz', None), additional_states
+            )
             b = eq_utils.buoyancy_source(self._kernel_op, states['rho_thermal'],
                                          rho_0, self._params, i)
 

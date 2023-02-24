@@ -456,11 +456,11 @@ class Scalars(object):
       rho_thermal = states['rho_thermal']
 
       temperature = self.thermodynamics.model.saturation_adjustment(
-          'theta_li', theta_li, rho_thermal, q_t, zz)
+          'theta_li', theta_li, rho_thermal, q_t, zz, additional_states)
 
       # Compute the potential temperature.
       buf = self.thermodynamics.model.potential_temperatures(
-          temperature, q_t, rho_thermal, zz)
+          temperature, q_t, rho_thermal, zz, additional_states)
       theta = buf['theta']
       helper_variables_most.update({'theta': theta})
 
@@ -487,7 +487,7 @@ class Scalars(object):
       cp_m = self.thermodynamics.model.cp_m(q_t, q_l, q_i)
       cp_m_inv = tf.nest.map_structure(tf.math.reciprocal, cp_m)
       exner_inv = self.thermodynamics.model.exner_inverse(
-          rho_thermal, q_t, temperature, zz)
+          rho_thermal, q_t, temperature, zz, additional_states)
       cp_m_exner_inv = tf.nest.map_structure(tf.math.multiply, cp_m_inv,
                                              exner_inv)
       source = tf.nest.map_structure(tf.math.multiply, cp_m_exner_inv, source)
@@ -602,7 +602,7 @@ class Scalars(object):
     momentum = [states[_KEY_RHO_U], states[_KEY_RHO_V], states[_KEY_RHO_W]]
     zz = additional_states.get(
         'zz', tf.nest.map_structure(tf.zeros_like, states[_KEY_RHO_U]))
-    p = self.thermodynamics.model.p_ref(zz)
+    p = self.thermodynamics.model.p_ref(zz, additional_states)
     bc_p = [[(halo_exchange.BCType.NEUMANN, 0.0),] * 2] * 3
     p = self._exchange_halos(p, bc_p, replica_id, replicas)
 
@@ -683,14 +683,14 @@ class Scalars(object):
         e = self.thermodynamics.model.internal_energy_from_total_energy(
             e_t, states[_KEY_U], states[_KEY_V], states[_KEY_W], zz)
         temperature = self.thermodynamics.model.saturation_adjustment(
-            'e_int', e, rho_thermal, q_t)
+            'e_int', e, rho_thermal, q_t, additional_states=additional_states)
 
       # Compute the potential temperature.
       if 'theta' in additional_states:
         theta = additional_states['theta']
       else:
         buf = self.thermodynamics.model.potential_temperatures(
-            temperature, q_t, rho_thermal, zz)
+            temperature, q_t, rho_thermal, zz, additional_states)
         theta = buf['theta']
       helper_variables_most.update({'theta': theta})
 
@@ -942,12 +942,18 @@ class Scalars(object):
 
       if 'theta_li' in states:
         temperature = self.thermodynamics.model.saturation_adjustment(
-            'theta_li', states['theta_li'], rho_thermal, q_t, zz=zz)
+            'theta_li',
+            states['theta_li'],
+            rho_thermal,
+            q_t,
+            zz=zz,
+            additional_states=additional_states,
+        )
       elif 'e_t' in states:
         e = self.thermodynamics.model.internal_energy_from_total_energy(
             states['e_t'], states[_KEY_U], states[_KEY_V], states[_KEY_W], zz)
         temperature = self.thermodynamics.model.saturation_adjustment(
-            'e_int', e, rho_thermal, q_t)
+            'e_int', e, rho_thermal, q_t, additional_states=additional_states)
       elif 'T' in additional_states.keys():
         temperature = additional_states['T']
 
@@ -956,7 +962,7 @@ class Scalars(object):
         theta = additional_states['theta']
       else:
         buf = self.thermodynamics.model.potential_temperatures(
-            temperature, q_t, rho_thermal, zz)
+            temperature, q_t, rho_thermal, zz, additional_states)
         theta = buf['theta']
       helper_variables_most.update({'theta': theta})
 

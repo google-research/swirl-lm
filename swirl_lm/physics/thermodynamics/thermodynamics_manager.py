@@ -57,13 +57,21 @@ class ThermodynamicsManager(object):
     """Returns the mode of the thermodynamics model."""
     return self._model_params.solver_mode
 
-  def rho_ref(self, zz: Optional[FlowFieldVal] = None) -> FlowFieldVal:
+  def rho_ref(
+      self,
+      zz: Optional[FlowFieldVal] = None,
+      additional_states: Optional[FlowFieldMap] = None,
+  ) -> FlowFieldVal:
     """Generates the reference density."""
-    return self.model.rho_ref(zz)
+    return self.model.rho_ref(zz, additional_states)
 
-  def p_ref(self, zz: Optional[FlowFieldVal] = None) -> FlowFieldVal:
+  def p_ref(
+      self,
+      zz: Optional[FlowFieldVal] = None,
+      additional_states: Optional[FlowFieldMap] = None,
+  ) -> FlowFieldVal:
     """Generates the reference pressure."""
-    return self.model.p_ref(zz)
+    return self.model.p_ref(zz, additional_states)
 
   def update_density(
       self,
@@ -77,7 +85,7 @@ class ThermodynamicsManager(object):
     """Updates the density based on field values provided.
 
     Args:
-      kernel_op: An kernel operation library for finite difference operations.
+      kernel_op: A kernel operation library for finite difference operations.
       replica_id: The index of the current TPU replica.
       replicas: The topology of the TPU partition.
       states: Flow field variables. Must include 'rho'.
@@ -142,7 +150,7 @@ class ThermodynamicsManager(object):
         zz = [tf.zeros_like(rho_i) for rho_i in states['rho']]
       else:
         zz = additional_states['zz']
-      return self.model.rho_ref(zz), [
+      return self.model.rho_ref(zz, additional_states), [
           tf.zeros_like(rho_i) for rho_i in states['rho']
       ]
     else:

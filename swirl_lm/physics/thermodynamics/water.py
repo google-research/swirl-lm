@@ -100,6 +100,8 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       self._ref_state = model_params.water.const_theta_reference_state
     elif self._ref_state_type == 'const_reference_state':
       self._ref_state = model_params.water.const_reference_state
+    elif self._ref_state_type == 'user_defined_reference_state':
+      self._ref_state = model_params.water.user_defined_reference_state
     else:
       raise ValueError('Unsupported reference state: {}'.format(
           self._ref_state_type))
@@ -225,6 +227,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
   def p_ref(
       self,
       zz: FlowFieldVal,
+      additional_states: Optional[FlowFieldMap] = None,
   ) -> FlowFieldVal:
     """Computes the reference pressure considering the geopotential.
 
@@ -244,6 +247,8 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
     Args:
       zz: The geopotential height.
+      additional_states: Helper variables including those needed to compute the
+        reference pressure.
 
     Returns:
       The reference pressure as a function of height.
@@ -279,13 +284,24 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       pressure_fn = pressure_with_const_theta
     elif self._ref_state_type == 'const_reference_state':
       pressure_fn = pressure_with_constant
+    elif self._ref_state_type == 'user_defined_reference_state':
+      if additional_states is None or 'p_ref' not in additional_states:
+        raise ValueError(
+            '`p_ref` is required in additional_states for the user defined'
+            ' reference state.'
+        )
+      return additional_states['p_ref']
     else:
       raise ValueError('Unsupported reference state for pressure: {}'.format(
           self._ref_state_type))
 
     return tf.nest.map_structure(pressure_fn, zz)
 
-  def t_ref(self, zz: Optional[FlowFieldVal] = None) -> FlowFieldVal:
+  def t_ref(
+      self,
+      zz: Optional[FlowFieldVal] = None,
+      additional_states: Optional[FlowFieldMap] = None,
+  ) -> FlowFieldVal:
     """Generates the reference temperature considering the geopotential.
 
     The virtual temperature profile is assumed to take the form if the potential
@@ -295,6 +311,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
     Args:
       zz: The geopotential height.
+      additional_states: Helper variables for computing the reference density.
 
     Returns:
       The reference temperature as a function of height.
@@ -310,10 +327,20 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
     def temperature_with_const_theta() -> FlowFieldVal:
       """Computes reference temperature for constant potential temperature."""
-      theta = [self._ref_state.theta] * len(zz)
-      q_t = [self._ref_state.q_t] * len(zz)
-      q_l = [self._ref_state.q_l] * len(zz)
-      q_i = [self._ref_state.q_i] * len(zz)
+      theta = tf.nest.map_structure(
+          lambda z: self._ref_state.theta * tf.ones_like(z), zz
+      )
+      q_t = tf.nest.map_structure(
+          lambda z: self._ref_state.q_t * tf.ones_like(z), zz
+      )
+      q_l = tf.nest.map_structure(
+          lambda z: self._ref_state.q_l * tf.ones_like(z), zz
+      )
+      q_i = tf.nest.map_structure(
+          lambda z: self._ref_state.q_i * tf.ones_like(z), zz
+      )
+      # Additional states is not used here by intention because no helper
+      # variables are required for this type of reference state.
       return self.potential_temperature_to_temperature(
           PotentialTemperature.THETA.value, theta, q_t, q_l, q_i, zz)
 
@@ -329,6 +356,29 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       temperature = temperature_with_const_theta()
     elif self._ref_state_type == 'const_reference_state':
       temperature = temperature_with_constant()
+    elif self._ref_state_type == 'user_defined_reference_state':
+      if additional_states is None or 'theta_init' not in additional_states:
+        raise ValueError(
+            '`theta_init` is required in additional_states to compute the'
+            ' user defined reference state.'
+        )
+      zeros = tf.nest.map_structure(
+          tf.zeros_like, additional_states['theta_init']
+      )
+      q_t = (
+          zeros
+          if 'q_t_init' not in additional_states
+          else additional_states['q_t_init']
+      )
+      temperature = self.potential_temperature_to_temperature(
+          theta_name='theta',
+          theta=additional_states['theta_init'],
+          q_tot=q_t,
+          q_liq=zeros,
+          q_ice=zeros,
+          zz=zz,
+          additional_states=additional_states,
+      )
     else:
       raise ValueError('Unsupported reference state for temperature: {}'.format(
           self._ref_state_type))
@@ -338,43 +388,69 @@ class Water(thermodynamics_generic.ThermodynamicModel):
   def rho_ref(
       self,
       zz: Optional[FlowFieldVal] = None,
+      additional_states: Optional[FlowFieldMap] = None,
   ) -> FlowFieldVal:
     """Generates the reference density considering the geopotential.
 
     Args:
       zz: The geopotential height.
+      additional_states: Helper variables for computing the reference density.
 
     Returns:
       The reference density as a function of height.
     """
-    return tf.nest.map_structure(
-        lambda p_ref, t_ref: p_ref / _R_D / t_ref,
-        self.p_ref(zz),
-        self.t_ref(zz),
-    )
+    if additional_states is not None and 'q_t_init' in additional_states:
+      r_m = self.r_mix(
+          additional_states['q_t_init'],
+          tf.nest.map_structure(tf.zeros_like, additional_states['q_t_init']),
+      )
+      return tf.nest.map_structure(
+          lambda p_ref, r, t_ref: p_ref / r / t_ref,
+          self.p_ref(zz, additional_states),
+          r_m,
+          self.t_ref(zz, additional_states),
+      )
+    else:
+      return tf.nest.map_structure(
+          lambda p_ref, t_ref: p_ref / _R_D / t_ref,
+          self.p_ref(zz, additional_states),
+          self.t_ref(zz, additional_states),
+      )
 
-  def dry_exner(self, zz: FlowFieldVal) -> FlowFieldVal:
+  def dry_exner(
+      self,
+      zz: FlowFieldVal,
+      additional_states: Optional[FlowFieldMap] = None,
+  ) -> FlowFieldVal:
     """Computes the exner function using the dry air gas constant.
 
     Args:
       zz: The geopotential height.
+      additional_states: Helper variables for computing the reference density.
 
     Returns:
       The exner function as a function of height.
     """
     return tf.nest.map_structure(
-        lambda p: tf.pow(p / self._p_thermal, _R_D / self.cp_d), self.p_ref(zz))
+        lambda p: tf.pow(p / self._p_thermal, _R_D / self.cp_d),
+        self.p_ref(zz, additional_states),
+    )
 
-  def dry_exner_inverse(self, zz: FlowFieldVal) -> FlowFieldVal:
+  def dry_exner_inverse(
+      self,
+      zz: FlowFieldVal,
+      additional_states: Optional[FlowFieldMap] = None,
+  ) -> FlowFieldVal:
     """Computes the inverse exner function using the dry air gas constant.
 
     Args:
       zz: The geopotential height.
+      additional_states: Helper variables for computing the reference density.
 
     Returns:
       The inverse exner function as a function of height.
     """
-    p_ref = self.p_ref(zz)
+    p_ref = self.p_ref(zz, additional_states)
     return tf.nest.map_structure(
         lambda p: tf.pow(p / self._p_thermal, -_R_D / self.cp_d), p_ref)
 
@@ -384,6 +460,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       q_t: FlowFieldVal,
       t: FlowFieldVal,
       zz: FlowFieldVal,
+      additional_states: Optional[FlowFieldMap] = None,
   ) -> FlowFieldVal:
     """Computes the exner function from the moisture-adjusted constants.
 
@@ -392,11 +469,12 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       q_t: The total specific humidity.
       t: The temperature of the flow field.
       zz: The geopotential height.
+      additional_states: Helper variables for computing the reference density.
 
     Returns:
       The moisture-adjusted exner function as a function of height.
     """
-    p_ref = self.p_ref(zz)
+    p_ref = self.p_ref(zz, additional_states)
     q_l, q_i = self.equilibrium_phase_partition(t, rho, q_t)
 
     r_m = self.r_m(t, rho, q_t)
@@ -410,6 +488,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       q_t: FlowFieldVal,
       t: FlowFieldVal,
       zz: FlowFieldVal,
+      additional_states: Optional[FlowFieldMap] = None,
   ) -> FlowFieldVal:
     """Computes the inverse exner function from the moisture-adjusted constants.
 
@@ -418,11 +497,12 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       q_t: The total specific humidity.
       t: The temperature of the flow field.
       zz: The geopotential height.
+      additional_states: Helper variables for computing the reference density.
 
     Returns:
       The moisture-adjusted inverse exner function as a function of height.
     """
-    p_ref = self.p_ref(zz)
+    p_ref = self.p_ref(zz, additional_states)
     q_l, q_i = self.equilibrium_phase_partition(t, rho, q_t)
 
     r_m = self.r_m(t, rho, q_t)
@@ -603,6 +683,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       zz: FlowFieldVal,
       q_liq: Optional[FlowFieldVal] = None,
       q_c: Optional[FlowFieldVal] = None,
+      additional_states: Optional[FlowFieldMap] = None,
   ) -> FlowFieldVal:
     """Computes the saturation specific humidity from the pressure.
 
@@ -612,6 +693,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       zz: The cooridinates in the vertical direction, in units of m.
       q_liq: The specific humidity of the liquid phase.
       q_c: The specific humidity of the condensed phase.
+      additional_states: Optional[FlowFieldMap] = None,
 
     Returns:
       The saturation specific humidity.
@@ -619,7 +701,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     p_v_sat = self.saturation_vapor_pressure(temperature, q_liq, q_c)
     return tf.nest.map_structure(
         lambda q_t, p_v_s, p: (_R_D / self._r_v) * (1.0 - q_t) * p_v_s /  # pylint: disable=g-long-lambda
-        (p - p_v_s), q_tot, p_v_sat, self.p_ref(zz))
+        (p - p_v_s), q_tot, p_v_sat, self.p_ref(zz, additional_states))
 
   def saturation_excess(
       self,
@@ -981,6 +1063,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       rho: FlowFieldVal,
       q_tot: FlowFieldVal,
       zz: Optional[FlowFieldVal] = None,
+      additional_states: Optional[FlowFieldMap] = None,
   ) -> FlowFieldVal:
     """Computes the temperature assuming water is at saturation."""
 
@@ -992,8 +1075,9 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     def potential_temperature_error_fn(
         temperature: FlowFieldVal) -> FlowFieldVal:
       """Computes the error of potential temperature for Newton iterations."""
-      theta_sat = self.potential_temperatures(temperature, q_tot, rho,
-                                              zz)[target_var_name]
+      theta_sat = self.potential_temperatures(
+          temperature, q_tot, rho, zz, additional_states
+      )[target_var_name]
       return tf.nest.map_structure(tf.math.subtract, theta_sat, target_var)
 
     if target_var_name == 'e_int':
@@ -1028,6 +1112,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       rho: FlowFieldVal,
       q_tot: FlowFieldVal,
       zz: Optional[FlowFieldVal] = None,
+      additional_states: Optional[FlowFieldMap] = None,
   ) -> FlowFieldVal:
     """Computes the temperature that is consistent with the input state.
 
@@ -1038,6 +1123,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       rho: The density of moist air.
       q_tot: The total specific humidity.
       zz: The vertical coordinates.
+      additional_states: Optional[FlowFieldMap] = None,
 
     Returns:
       The temperature at the given state.
@@ -1051,11 +1137,17 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     elif target_var_name in (PotentialTemperature.THETA.value,
                              PotentialTemperature.THETA_V.value,
                              PotentialTemperature.THETA_LI.value):
-      t_air = self.potential_temperature_to_temperature(target_var_name,
-                                                        target_var, q_tot,
-                                                        q_liq, q_ice, zz)
+      t_air = self.potential_temperature_to_temperature(
+          target_var_name,
+          target_var,
+          q_tot,
+          q_liq,
+          q_ice,
+          zz,
+          additional_states,
+      )
       target_freeze_fn = lambda t: self.potential_temperatures(  # pylint: disable=g-long-lambda
-          t, q_tot, rho, zz)[target_var_name]
+          t, q_tot, rho, zz, additional_states)[target_var_name]
     else:
       raise ValueError(
           f'{target_var_name} is not a valid variable for saturation '
@@ -1075,7 +1167,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
     # Case 3: temperature at saturation condition.
     t_sat = self.saturation_temperature(target_var_name, t_1, target_var, rho,
-                                        q_tot, zz)
+                                        q_tot, zz, additional_states)
 
     # Get temperature under correct conditions.
     def unsaturation_cond(
@@ -1114,6 +1206,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       w: FlowFieldVal,
       rho_0: Optional[FlowFieldVal] = None,
       zz: Optional[FlowFieldVal] = None,
+      additional_states: Optional[FlowFieldMap] = None,
   ) -> FlowFieldVal:
     """Computes the density that is consistent with the input state.
 
@@ -1128,6 +1221,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       w: The velocity component in the z direction. the Secant solver.
       rho_0: A guess of the density, which is used as the initial condition for
       zz: The cooridinates in the vertical direction.
+      additional_states: Optional[FlowFieldMap] = None,
 
     Returns:
       The density at the given state.
@@ -1149,13 +1243,19 @@ class Water(thermodynamics_generic.ThermodynamicModel):
           f'"{PotentialTemperature.THETA_V.value}", '
           f'"{PotentialTemperature.THETA_LI.value}".')
 
-    p = self.p_ref(zz) if zz is not None else tf.nest.map_structure(
-        lambda f: self._p_thermal * tf.ones_like(f), prognostic_var)
+    p = (
+        self.p_ref(zz, additional_states)  # pylint: disable=g-long-ternary
+        if zz is not None
+        else tf.nest.map_structure(
+            lambda f: self._p_thermal * tf.ones_like(f), prognostic_var
+        )
+    )
 
     def density_update_fn(rho: FlowFieldVal) -> FlowFieldVal:
       """Updates the density for one iteration."""
-      temperature_sat = self.saturation_adjustment(target_var_name, target_var,
-                                                   rho, q_tot, zz)
+      temperature_sat = self.saturation_adjustment(
+          target_var_name, target_var, rho, q_tot, zz, additional_states
+      )
       r_mix = self.r_m(temperature_sat, rho, q_tot)
       return tf.nest.map_structure(
           lambda p_i, t_sat, r_m: p_i / t_sat / r_m, p, temperature_sat, r_mix
@@ -1178,6 +1278,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       q_t: FlowFieldVal,
       rho: FlowFieldVal,
       zz: Optional[FlowFieldVal] = None,
+      additional_states: Optional[FlowFieldMap] = None,
   ) -> FlowFieldMap:
     """Computes the potential temperatures.
 
@@ -1188,6 +1289,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       q_t: The total humidty.
       rho: The density of the moist air, in units of kg/m^3.
       zz: The vertical coordinates.
+      additional_states: Optional[FlowFieldMap] = None,
 
     Returns:
       A dictionary of the three potential temperatures, namely the potential
@@ -1201,7 +1303,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     r_m = self.r_m(t, rho, q_t)
     cp_m = self.cp_m(q_t, q_l, q_i)
 
-    p_ref = self.p_ref(zz)
+    p_ref = self.p_ref(zz, additional_states)
     exner_inv = tf.nest.map_structure(
         lambda p, r, cp: tf.pow(p / self._p_thermal, -r / cp), p_ref, r_m, cp_m)
 
@@ -1233,6 +1335,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       q_liq: FlowFieldVal,
       q_ice: FlowFieldVal,
       zz: Optional[FlowFieldVal] = None,
+      additional_states: Optional[FlowFieldMap] = None,
   ) -> FlowFieldVal:
     """Computes temperature from potential temperature.
 
@@ -1246,6 +1349,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       q_liq: The liquid humidity.
       q_ice: The ice humidity.
       zz: The vertical coordinates.
+      additional_states: Optional[FlowFieldMap] = None,
 
     Returns:
       The temperature in units of K.
@@ -1259,7 +1363,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     r_m = self.r_mix(q_tot, q_c)
     cp_m = self.cp_m(q_tot, q_liq, q_ice)
 
-    p_ref = self.p_ref(zz)
+    p_ref = self.p_ref(zz, additional_states)
     exner = tf.nest.map_structure(
         lambda p, r, cp: tf.pow(p / self._p_thermal, r / cp), p_ref, r_m, cp_m)
 
@@ -1296,6 +1400,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       q_liq: FlowFieldVal,
       q_ice: FlowFieldVal,
       zz: Optional[FlowFieldVal] = None,
+      additional_states: Optional[FlowFieldMap] = None,
   ) -> FlowFieldVal:
     """Computes potential temperature from temperature.
 
@@ -1309,6 +1414,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       q_liq: The liquid humidity.
       q_ice: The ice humidity.
       zz: The vertical coordinates.
+      additional_states: Optional[FlowFieldMap] = None,
 
     Returns:
       The potential temperature in units of K.
@@ -1326,7 +1432,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     r_m = self.r_mix(q_tot, q_c)
     cp_m = self.cp_m(q_tot, q_liq, q_ice)
 
-    p_ref = self.p_ref(zz)
+    p_ref = self.p_ref(zz, additional_states)
     exner = tf.nest.map_structure(
         lambda p, r, cp: tf.pow(p / self._p_thermal, r / cp), p_ref, r_m, cp_m)
 
@@ -1387,7 +1493,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     return self.saturation_density(prognostic_var_name,
                                    states[prognostic_var_name], states['q_t'],
                                    states['u'], states['v'], states['w'],
-                                   states['rho'], zz)
+                                   states['rho'], zz, additional_states)
 
   def update_temperatures(
       self,
@@ -1434,12 +1540,17 @@ class Water(thermodynamics_generic.ThermodynamicModel):
           f'liquid-ice potential temperature).')
 
     temperatures = {
-        'T':
-            self.saturation_adjustment(target_var_name, target_var,
-                                       states['rho'], states['q_t'], zz)
+        'T': self.saturation_adjustment(
+            target_var_name,
+            target_var,
+            states['rho'],
+            states['q_t'],
+            zz,
+            additional_states,
+        )
     }
     temperatures.update(
         self.potential_temperatures(temperatures['T'], states['q_t'],
-                                    states['rho'], zz))
+                                    states['rho'], zz, additional_states))
 
     return temperatures

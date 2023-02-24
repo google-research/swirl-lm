@@ -258,7 +258,7 @@ class Velocity(object):
     zz = additional_states['zz'] if 'zz' in additional_states.keys() else [
         tf.zeros_like(p_i, dtype=p_i.dtype) for p_i in p
     ]
-    rho_ref = self._thermodynamics.rho_ref(zz)
+    rho_ref = self._thermodynamics.rho_ref(zz, additional_states)
 
     def momentum_function(rho_u: FlowFieldVal, rho_v: FlowFieldVal,
                           rho_w: FlowFieldVal, u: FlowFieldVal, v: FlowFieldVal,
@@ -565,9 +565,11 @@ class Velocity(object):
         e = thermal_model.internal_energy_from_total_energy(
             states['e_t'], states[_KEY_U], states[_KEY_V], states[_KEY_W], zz)
         temperature = thermal_model.saturation_adjustment(
-            'e_int', e, states[_KEY_RHO], q_t)
-        theta = thermal_model.potential_temperatures(temperature, q_t,
-                                                     states[_KEY_RHO], zz)
+            'e_int', e, states[_KEY_RHO], q_t, zz, additional_states
+        )
+        theta = thermal_model.potential_temperatures(
+            temperature, q_t, states[_KEY_RHO], zz, additional_states
+        )
         helper_variables.update({'theta': theta['theta_v']})
       else:
         raise ValueError(

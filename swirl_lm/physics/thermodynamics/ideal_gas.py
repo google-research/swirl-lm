@@ -89,6 +89,7 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
       self,
       theta: FlowFieldVal,
       zz: Optional[FlowFieldVal] = None,
+      additional_states: Optional[FlowFieldMap] = None,
   ) -> FlowFieldVal:
     """Converts the potential temperature to temperature.
 
@@ -97,6 +98,8 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
     Args:
       theta: The potential temperature, in units of K.
       zz: The geopotential height, in units of m.
+      additional_states: Helper variables including those needed to compute
+        reference states.
 
     Returns:
       The temperature, in units of K.
@@ -108,13 +111,14 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
 
     return [
         theta_i * (p_i / self._p_thermal)**self.kappa
-        for theta_i, p_i in zip(theta, self.p_ref(zz))
+        for theta_i, p_i in zip(theta, self.p_ref(zz, additional_states))
     ]
 
   def temperature_to_potential_temperature(
       self,
       t: FlowFieldVal,
       zz: Optional[FlowFieldVal] = None,
+      additional_states: Optional[FlowFieldMap] = None,
   ) -> FlowFieldVal:
     """Converts the potential temperature to temperature.
 
@@ -123,6 +127,8 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
     Args:
       t: The temperature, in units of K.
       zz: The geopotential height, in units of m.
+      additional_states: Helper variables including those needed to compute
+        reference states.
 
     Returns:
       The potential temperature, in units of K.
@@ -134,10 +140,14 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
 
     return [
         t_i * (p_i / self._p_thermal)**(-self.kappa)
-        for t_i, p_i in zip(t, self.p_ref(zz))
+        for t_i, p_i in zip(t, self.p_ref(zz, additional_states))
     ]
 
-  def p_ref(self, zz: FlowFieldVal) -> FlowFieldVal:
+  def p_ref(
+      self,
+      zz: FlowFieldVal,
+      additional_states: Optional[FlowFieldMap] = None,
+  ) -> FlowFieldVal:
     """Computes the reference pressure considering the geopotential.
 
     Assuming the virtual temperature profile takes the form:
@@ -157,10 +167,15 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
 
     Args:
       zz: The geopotential height.
+      additional_states: Helper variables including those needed to compute the
+        reference pressure.
 
     Returns:
       The reference pressure as a function of height.
     """
+    del additional_states
+
+
     # Compute the fractional temperature drop.
     delta_t_frac = self._delta_t / self._t_s
 
@@ -220,11 +235,14 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
   def rho_ref(
       self,
       zz: Optional[FlowFieldVal] = None,
+      additional_states: Optional[FlowFieldMap] = None,
   ) -> FlowFieldVal:
     """Generates the reference density considering the geopotential.
 
     Args:
       zz: The geopotential height.
+      additional_states: Helper variables including those needed to compute the
+        reference density.
 
     Returns:
       The reference density as a function of height.
@@ -234,7 +252,9 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
 
     return [
         self.density_by_ideal_gas_law(p_ref, self.r_d, t_ref)  # pytype: disable=wrong-arg-types  # always-use-return-annotations
-        for p_ref, t_ref in zip(self.p_ref(zz), self.t_ref(zz))
+        for p_ref, t_ref in zip(
+            self.p_ref(zz, additional_states), self.t_ref(zz)
+        )
     ]
 
   def update_density(
@@ -283,5 +303,5 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
     return [
         self.density_by_ideal_gas_law(p_i, R_U / w_mix_i, t_i)
         for p_i, w_mix_i, t_i in zip(
-            self.p_ref(zz), mixture_molecular_weight, t)
+            self.p_ref(zz, additional_states), mixture_molecular_weight, t)
     ]

@@ -84,6 +84,7 @@ class Microphysics(abc.ABC):
       q_l: water.FlowFieldVal,
       q_c: water.FlowFieldVal,
       zz: Optional[water.FlowFieldVal] = None,
+      additional_states: Optional[water.FlowFieldMap] = None,
   ) -> water.FlowFieldVal:
     """Computes the condensation rate.
 
@@ -100,6 +101,8 @@ class Microphysics(abc.ABC):
       q_c: The specific humidity of the cloud humidity condensed phase,
         including ice and liquid (kg/kg).
       zz: The vertical coordinates (m).
+      additional_states: Helper variables including those needed to compute
+        reference states.
 
     Returns:
       The condensation rate.
@@ -107,18 +110,14 @@ class Microphysics(abc.ABC):
     q_t = tf.nest.map_structure(tf.math.add, q_v, q_c)
     q_i = tf.nest.map_structure(tf.math.subtract, q_c, q_l)
     q_vs = self._water_model.saturation_q_vapor(temperature, rho, q_l, q_c)
-    t_0 = self._water_model.t_ref(zz)
+    t_0 = self._water_model.t_ref(zz, additional_states)
     # Here we assume that the air is dry in the reference state.
-    # BEGIN GOOLE-INTERNAL
-    # TODO(wqing): we may need check if we need to use the initial condition for
-    # humidity here.
-    # END GOOLE-INTERNAL
     zeros = tf.nest.map_structure(tf.zeros_like, zz)
     theta_0 = self._water_model.temperature_to_potential_temperature(
-        'theta', t_0, zeros, zeros, zeros, zz
+        'theta', t_0, zeros, zeros, zeros, zz, additional_states
     )
     theta = self._water_model.temperature_to_potential_temperature(
-        'theta', temperature, q_t, q_l, q_i, zz
+        'theta', temperature, q_t, q_l, q_i, zz, additional_states
     )
     cp = self._water_model.cp_m(q_t, q_l, q_i)
 

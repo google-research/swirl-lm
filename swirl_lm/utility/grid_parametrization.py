@@ -63,7 +63,7 @@ flags.DEFINE_integer(
     allow_override=True)
 flags.DEFINE_integer(
     'num_boundary_points',
-    1,
+    0,
     'Number of points to be added to each end of the computational domain.',
     allow_override=True)
 

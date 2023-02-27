@@ -846,6 +846,7 @@ def global_mean(
     replicas: np.ndarray,
     halos: Sequence[int] = (0, 0, 0),
     axis: Optional[Union[Sequence[int], int]] = None,
+    partition_axis: Optional[Union[Sequence[int], int]] = None,
 ) -> FlowFieldVal:
   """Computes the mean of the tensor in a distributed setting.
 
@@ -870,6 +871,8 @@ def global_mean(
     axis: The dimension to reduce. If None, all dimensions are reduced and the
       result is a scalar. Note the indexing of dimension is [x, y, z] = [0, 1,
       2].
+    partition_axis: The dimensions of the partitions to reduce. If None, it is
+      assumed to be the same as `axis`.
 
   Returns:
     The reduced tensor. If `axis` is None, a scalar that is the global mean of
@@ -879,7 +882,10 @@ def global_mean(
     consistent with the input (either a list of 2D `tf.Tensor` or a single 3D
     `tf.Tensor`.
   """
-  group_assignment = group_replicas(replicas, axis)
+  if partition_axis is None:
+    partition_axis = axis
+
+  group_assignment = group_replicas(replicas, partition_axis)
   group_count = len(group_assignment[0])
   f = strip_halos(f, halos)
 

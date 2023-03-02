@@ -110,6 +110,10 @@ class Simulation:
     if params.use_sgs:
       self._updated_additional_states_keys += ['nu_t', 'drho']
     self._updated_additional_states_keys += self.monitor.data.keys()
+    # Helper variables that are updated from the main simulation step instead of
+    # additional_states_update_fn.
+    self._helper_var_names = ('rho_thermal', 'drho', 'dp')
+    self._updated_additional_states_keys += list(self._helper_var_names)
 
   def _exchange_halos(self, f, bc_f, replica_id, replicas):
     """Performs halo exchange for the variable f."""
@@ -346,13 +350,12 @@ class Simulation:
                                                     step_id)
     states_new.update(monitor_states)
 
-    for varname in ['u', 'v', 'w', 'thermal'
-                   ] + self._params.transport_scalars_names:
+    for varname in ['u', 'v', 'w'] + self._params.transport_scalars_names:
       states_new.pop('rho_{}'.format(varname))
 
-    if 'drho' not in additional_states:
-      states_new.pop('drho')
-    if 'dp' not in additional_states:
-      states_new.pop('dp')
+    # Removes helper variables that are not specified as additional_states.
+    for helper_var_name in self._helper_var_names:
+      if helper_var_name not in additional_states:
+        states_new.pop(helper_var_name)
 
     return states_new

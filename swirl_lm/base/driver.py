@@ -112,7 +112,7 @@ def get_checkpoint_manager(
     filename_prefix: The prefix used in the simulation output files.
 
   Returns:
-    A chekpoint manager that can be used to restore the previous state or to
+    A checkpoint manager that can be used to restore the previous state or to
     save the new state.
   """
   checkpoint = tf.train.Checkpoint(step_id=step_id)
@@ -150,6 +150,16 @@ def _get_state_keys(params):
       params.additional_state_keys if params.additional_state_keys else [])
   helper_var_keys = list(
       params.helper_var_keys if params.helper_var_keys else [])
+
+  # Check to make sure we don't have keys duplicating / overwriting each other.
+  if (len(set(essential_keys)) + len(set(additional_keys)) +
+      len(set(helper_var_keys)) !=
+      len(set(essential_keys + additional_keys + helper_var_keys))):
+    raise ValueError(
+        f'Duplicated keys detected between the three types of states: '
+        f'essential states: {essential_keys}, additional states: '
+        f'{additional_keys}, and helper vars: {helper_var_keys}')
+
   for state_analytics_info in params.monitor_spec.state_analytics:
     for analytics_spec in state_analytics_info.analytics:
       helper_var_keys.append(analytics_spec.key)

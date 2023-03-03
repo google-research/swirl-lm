@@ -29,6 +29,7 @@ from swirl_lm.boundary_condition import immersed_boundary_method
 from swirl_lm.communication import halo_exchange
 from swirl_lm.equations import common
 from swirl_lm.equations import utils as eq_utils
+from swirl_lm.equations.source_function import humidity
 from swirl_lm.equations.source_function import potential_temperature
 from swirl_lm.equations.source_function import scalar_generic
 from swirl_lm.numerics import calculus
@@ -162,6 +163,8 @@ class Scalars(object):
     for scalar_name in self._params.transport_scalars_names:
       if scalar_name == 'theta_li':
         scalar_model = potential_temperature.PotentialTemperature
+      elif scalar_name in humidity.HUMIDITY_VARNAME:
+        scalar_model = humidity.Humidity
       else:
         scalar_model = scalar_generic.ScalarGeneric
 
@@ -625,252 +628,6 @@ class Scalars(object):
 
     return scalar_function
 
-  def _humidity_update(
-      self,
-      replica_id: tf.Tensor,
-      replicas: np.ndarray,
-      states: FlowFieldMap,
-      additional_states: FlowFieldMap,
-      scalar_name: str = 'q_t',
-      dbg: bool = False,
-  ):
-    """Generate a functor that computes the RHS of the humidity equation.
-
-    This function returns a functor that computes the rhs `f(q)` of the
-    humidity update equation `d rho_q / dt = f(q)`, where `q` is either total
-    humidity `q_t` or liquid precipitation `q_r`.
-
-    Args:
-      replica_id: The index of the current TPU replica.
-      replicas: A numpy array that maps grid coordinates to replica id numbers.
-      states: A dictionary that holds field variables that are essential to
-        compute the right hand side function of the scalar transport equation.
-        Must include the following fields: 'rho_u', 'rho_v', 'rho_w', 'u', 'v',
-          'w', 'p', 'rho', and 'e_t'.
-      additional_states: Helper states that are required by the scalar transport
-        equation. Must contain 'diffusivity'. If 'zz' is not in
-        `additional_states`, assumes the flow field is independent of height.
-      scalar_name: Name of humidity field to update, If scalar_name is 'q_t',
-        update total humidity. If scalar_name is 'q_r' update the humidity field
-        corresponding to liquid precipitation.
-      dbg: A flag of whether to use the debug mode. If `True`, the returned RHS
-        function returns the convection terms, the diffusion terms, and the
-        external source term instead of the sum of all these terms (i.e. the
-        actual RHS term).
-
-    Returns:
-      scalar_function: A function that computes `f(q)`.
-
-    Raises:
-      ValueError: If the thermodynamics model is not `Water` or `e_t` is not
-         found in states.
-    """
-    if not isinstance(self.thermodynamics.model, water.Water):
-      raise ValueError('The thermodynamics model has to be `Water` for the '
-                       'total humidity equation. Current model is {}'.format(
-                           self.thermodynamics.model))
-    if 'e_t' not in states and 'theta_li' not in states:
-      raise ValueError('Expected e_t or theta_li in states used for total '
-                       'humidity equation, got: {}'.format(states.keys()))
-
-    valid_names = ['q_t', 'q_r']
-    if scalar_name not in valid_names:
-      raise ValueError('Expected scalar_name in {}, got: {}'.format(
-          valid_names, scalar_name))
-
-    h = (self._params.dx, self._params.dy, self._params.dz)
-    dt = self._params.dt
-
-    momentum = [states[_KEY_RHO_U], states[_KEY_RHO_V], states[_KEY_RHO_W]]
-
-    zz = additional_states.get(
-        'zz', tf.nest.map_structure(tf.zeros_like, states[_KEY_RHO_U]))
-
-    source_ext = self._source[scalar_name] if (  # pylint: disable=g-long-ternary
-        scalar_name in self._source.keys() and
-        self._source[scalar_name]) else tf.nest.map_structure(
-            tf.zeros_like, states[_KEY_RHO])
-
-    # Helper variables required by the Monin-Obukhov similarity theory.
-    helper_variables_most = {
-        'u': states[_KEY_U],
-        'v': states[_KEY_V],
-        'w': states[_KEY_W],
-    }
-    include_subsidence = (
-        self._scalars[scalar_name].HasField('humidity') and
-        self._scalars[scalar_name].humidity.include_subsidence and
-        self._g_dim is not None)
-    include_precipitation = (
-        self._scalars[scalar_name].HasField('humidity') and
-        self._scalars[scalar_name].humidity.include_precipitation)
-
-    def scalar_function(q: FlowFieldVal):
-      """Computes the RHS of humidity update equation.
-
-      This return rhs `f(q)` of the humidity update equation
-      `d rho_q / dt = f(q)`, where `q` is either total humidity
-      `q_t` or liquid precipitation `q_r`.
-
-      Args:
-        q: The humidity field to be updated (can be q_t or q_r, depending on
-          'scalar_name').
-
-      Returns:
-        A `FlowFieldVal` representing the RHS of the humidity equation.
-      """
-
-      valid_names = ['q_t', 'q_r']
-      if scalar_name not in valid_names:
-        raise ValueError('Expected scalar_name in {}, got: {}'.format(
-            valid_names, scalar_name))
-      if scalar_name == 'q_r' and not include_precipitation:
-        raise ValueError(
-            'Calculating q_r without setting include_precipitation to '
-            ' True is not well-defined.')
-
-      rho = states[_KEY_RHO]
-      rho_thermal = states['rho_thermal']
-
-      # Compute momentum term
-      corrected_momentum = momentum
-      if scalar_name == 'q_r':
-        # Subtract term for rain terminal velocity from the vertical momentum.
-        rain_water_terminal_velocity = (
-            self.precipitation.terminal_velocity(
-                rho_thermal, q))
-        rain_water_momentum = tf.nest.map_structure(
-            tf.math.multiply, rain_water_terminal_velocity, rho)
-        corrected_momentum[self._g_dim] = tf.nest.map_structure(
-            tf.math.subtract, momentum[self._g_dim], rain_water_momentum)
-
-      # pylint: disable=g-complex-comprehension
-      conv = [
-          self._conservative_scalar_convection(replica_id, replicas, q,
-                                               corrected_momentum[i],
-                                               states[_KEY_P], rho, h[i], dt, i,
-                                               scalar_name, zz)
-          for i in range(3)
-      ]
-
-      # Compute the sum of the various source terms including the external
-      # sources, e.g. sponge.
-      source = source_ext
-
-      # Compute the temperature.
-      q_t = q if scalar_name == 'q_t' else states['q_t']
-
-      if 'theta_li' in states:
-        temperature = self.thermodynamics.model.saturation_adjustment(
-            'theta_li',
-            states['theta_li'],
-            rho_thermal,
-            q_t,
-            zz=zz,
-            additional_states=additional_states,
-        )
-      elif 'e_t' in states:
-        e = self.thermodynamics.model.internal_energy_from_total_energy(
-            states['e_t'], states[_KEY_U], states[_KEY_V], states[_KEY_W], zz)
-        temperature = self.thermodynamics.model.saturation_adjustment(
-            'e_int', e, rho_thermal, q_t, additional_states=additional_states)
-      elif 'T' in additional_states.keys():
-        temperature = additional_states['T']
-
-      # Compute the potential temperature.
-      if 'theta' in additional_states:
-        theta = additional_states['theta']
-      else:
-        buf = self.thermodynamics.model.potential_temperatures(
-            temperature, q_t, rho_thermal, zz, additional_states)
-        theta = buf['theta']
-      helper_variables_most.update({'theta': theta})
-
-      if include_precipitation or include_subsidence:
-        # Compute condensate mass fraction.
-        q_c = self.thermodynamics.model.saturation_excess(
-            temperature, rho_thermal, q_t)
-
-      # Compute vapor to rain water conversion term if needed.
-      if include_precipitation:
-        q_r = q if scalar_name == 'q_r' else states['q_r']
-        q_l, _ = self.thermodynamics.model.equilibrium_phase_partition(
-            temperature, rho_thermal, q_t)
-        cloud_liquid_to_rain_water_rate = (
-            self.precipitation.autoconversion_and_accretion(
-                q_r, q_l))
-        # q_v = q_t - q_l - q_i. Not: We assume q_i == 0 here.
-        q_v = tf.nest.map_structure(tf.math.subtract, q_t, q_l)
-        rain_water_evaporation_rate = (
-            self.precipitation.evaporation(
-                rho_thermal, temperature, q_r, q_v, q_l, q_c))
-        # Net vapor to rain water rate is
-        #   (vapor to rain water rate) - (evaporation rate).
-        net_cloud_liquid_to_rain_water_rate = tf.nest.map_structure(
-            tf.math.subtract, cloud_liquid_to_rain_water_rate,
-            rain_water_evaporation_rate)
-        cloud_liquid_to_water_source = tf.nest.map_structure(
-            tf.math.multiply, net_cloud_liquid_to_rain_water_rate, rho)
-        # Add term for q_r, subtract for q_t.
-        op = tf.math.subtract if scalar_name == 'q_t' else tf.math.add
-        source = tf.nest.map_structure(op, source, cloud_liquid_to_water_source)
-
-      # Compute source terms
-      if scalar_name == 'q_t' and include_subsidence:
-        subsidence_source = eq_utils.source_by_subsidence_velocity(
-            self._kernel_op, rho, zz, h[self._g_dim], q_c, self._g_dim)
-
-        # Add external source, e.g. sponge forcing and subsidence.
-        source = tf.nest.map_structure(tf.math.add, source, subsidence_source)
-
-      diff = self.diffusion_fn(
-          self._kernel_op,
-          replica_id,
-          replicas,
-          q,
-          rho,
-          additional_states['diffusivity'],
-          h,
-          scalar_name=scalar_name,
-          helper_variables=helper_variables_most)
-
-      if dbg:
-        return {
-            'conv_x': conv[0],
-            'conv_y': conv[1],
-            'conv_z': conv[2],
-            'diff_x': diff[0],
-            'diff_y': diff[1],
-            'diff_z': diff[2],
-            'source': source,
-        }
-
-      equation_terms = zip(conv[0], conv[1], conv[2], diff[0], diff[1], diff[2],
-                           source)
-
-      rhs = [
-          -(conv_x_i + conv_y_i + conv_z_i) + (diff_x_i + diff_y_i + diff_z_i) +
-          src_i for conv_x_i, conv_y_i, conv_z_i, diff_x_i, diff_y_i, diff_z_i,
-          src_i in equation_terms
-      ]
-
-      if self._ib is not None:
-        rhs_name = self._ib.ib_rhs_name('rho_' + scalar_name)
-        helper_states = {
-            rhs_name: rhs,
-            'ib_interior_mask': additional_states['ib_interior_mask'],
-        }
-        rhs_ib_updated = self._ib.update_forcing(
-            self._kernel_op, replica_id, replicas, {
-                'rho_' + scalar_name:
-                    tf.nest.map_structure(tf.math.multiply, rho, q_t)
-            }, helper_states)
-        rhs = rhs_ib_updated[rhs_name]
-
-      return rhs
-
-    return scalar_function
-
   def _scalar_update(
       self,
       replica_id: tf.Tensor,
@@ -905,9 +662,6 @@ class Scalars(object):
     if scalar_name == 'e_t':
       return self._e_t_update(replica_id, replicas, states, additional_states,
                               dbg)
-    elif scalar_name in ['q_t', 'q_r']:
-      return self._humidity_update(replica_id, replicas, states,
-                                   additional_states, scalar_name, dbg)
     else:
       return self._generic_scalar_update(replica_id, replicas, scalar_name,
                                          states, additional_states, dbg)

@@ -29,6 +29,7 @@ from swirl_lm.boundary_condition import immersed_boundary_method
 from swirl_lm.communication import halo_exchange
 from swirl_lm.equations import common
 from swirl_lm.equations import utils as eq_utils
+from swirl_lm.equations.source_function import potential_temperature
 from swirl_lm.equations.source_function import scalar_generic
 from swirl_lm.numerics import calculus
 from swirl_lm.numerics import convection
@@ -156,20 +157,23 @@ class Scalars(object):
     for scalar in self._params.scalars:
       self._scalars.update({scalar.name: scalar})
 
-    self._grad_central = [
-        lambda f: self._kernel_op.apply_kernel_op_x(f, 'kDx'),
-        lambda f: self._kernel_op.apply_kernel_op_y(f, 'kDy'),
-        lambda f: self._kernel_op.apply_kernel_op_z(f, 'kDz', 'kDzsh'),
-    ]
-
-    # Get functions that compute terms in tranport equations for all scalars.
+    # Get functions that computes terms in tranport equations for all scalars.
     self._scalar_model = {}
     for scalar_name in self._params.transport_scalars_names:
-      self._scalar_model[scalar_name] = scalar_generic.ScalarGeneric(
-          self._kernel_op,
-          self._params,
-          scalar_name,
-          self.thermodynamics,
+      if scalar_name == 'theta_li':
+        scalar_model = potential_temperature.PotentialTemperature
+      else:
+        scalar_model = scalar_generic.ScalarGeneric
+
+      self._scalar_model.update(
+          {
+              scalar_name: scalar_model(
+                  self._kernel_op,
+                  self._params,
+                  scalar_name,
+                  self.thermodynamics,
+              )
+          }
       )
 
   def _exchange_halos(self, f, bc_f, replica_id, replicas):
@@ -349,7 +353,7 @@ class Scalars(object):
           diff[0],
           diff[1],
           diff[2],
-          source,
+          source_all,
       )
 
       if self._ib is not None:
@@ -364,190 +368,6 @@ class Scalars(object):
                 rho_sc_name:
                     tf.nest.map_structure(tf.math.multiply, states[_KEY_RHO],
                                           phi)
-            }, helper_states)
-        rhs = rhs_ib_updated[rhs_name]
-
-      return rhs
-
-    return scalar_function
-
-  def _theta_li_update(
-      self,
-      replica_id: tf.Tensor,
-      replicas: np.ndarray,
-      states: FlowFieldMap,
-      additional_states: FlowFieldMap,
-      dbg: bool = False,
-  ):
-    """Generates a functor that computes RHS of potential temperature equation.
-
-    This function returns a functor that computes the rhs `f(theta_li)` of the
-    liquid-ice potential temperature update equation
-    `d theta_li / dt = f(theta_li)`.
-
-    Args:
-      replica_id: The index of the current TPU replica.
-      replicas: A numpy array that maps grid coordinates to replica id numbers.
-      states: A dictionary that holds field variables that are essential to
-        compute the right hand side function of the scalar transport equation.
-        Must include the following fields: 'u', 'v', 'w', 'rho_u', 'rho_v',
-          'rho_w', 'p', 'rho', 'theta_li', 'q_t'.
-      additional_states: Helper states that are required by the scalar transport
-        equation. Must contain 'diffusivity'. If SGS model is used, must also
-        contain 'nu_t'. If 'zz' is not in `additional_states`, assumes the flow
-        field is independent of height.
-      dbg: A flag of whether to use the debug mode. If `True`, the returned RHS
-        function returns the convection terms, the diffusion terms, and the
-        external source term instead of the sum of all these terms (i.e. the
-        actual RHS term).
-
-    Returns:
-      scalar_function: A function that computes the `f(theta_li)`.
-
-    Raises:
-      ValueError: If the thermodynamics model is not `Water`.
-    """
-    if not isinstance(self.thermodynamics.model, water.Water):
-      raise ValueError('The thermodynamics model has to be `Water` for the '
-                       'liquid-ice potential temperature equation. Current '
-                       'model is {}'.format(
-                           self.thermodynamics.model))
-
-    h = (self._params.dx, self._params.dy, self._params.dz)
-    dt = self._params.dt
-    momentum = [states[_KEY_RHO_U], states[_KEY_RHO_V], states[_KEY_RHO_W]]
-    zz = additional_states.get(
-        'zz', tf.nest.map_structure(tf.zeros_like, states[_KEY_RHO_U]))
-
-    # Helper variables required by the Monin-Obukhov similarity theory.
-    helper_variables_most = {
-        'u': states[_KEY_U],
-        'v': states[_KEY_V],
-        'w': states[_KEY_W],
-    }
-
-    include_radiation = (
-        self._scalars['theta_li'].HasField('potential_temperature') and
-        self._scalars['theta_li'].potential_temperature.include_radiation and
-        self._g_dim is not None)
-
-    include_subsidence = (
-        self._scalars['theta_li'].HasField('potential_temperature') and
-        self._scalars['theta_li'].potential_temperature.include_subsidence and
-        self._g_dim is not None)
-
-    source_ext = (
-        self._source['theta_li'] if self._source['theta_li'] else
-        tf.nest.map_structure(tf.zeros_like, states[_KEY_RHO]))
-
-    def scalar_function(theta_li: FlowFieldVal):
-      """Computes functional RHS for liquid-ice potential temperature equation.
-
-      Args:
-        theta_li: The liquid-ice potential temperature field.
-
-      Returns:
-        A `FlowFieldVal` representing the RHS of the liquid-ice potential
-        temperature equation.
-      """
-      # Compute the temperature.
-      q_t = states['q_t']
-      rho = states[_KEY_RHO]
-      rho_thermal = states['rho_thermal']
-
-      temperature = self.thermodynamics.model.saturation_adjustment(
-          'theta_li', theta_li, rho_thermal, q_t, zz, additional_states)
-
-      # Compute the potential temperature.
-      buf = self.thermodynamics.model.potential_temperatures(
-          temperature, q_t, rho_thermal, zz, additional_states)
-      theta = buf['theta']
-      helper_variables_most.update({'theta': theta})
-
-      q_l, q_i = self.thermodynamics.model.equilibrium_phase_partition(
-          temperature, rho_thermal, q_t)
-
-      # Compute the source terms due to dilatation, wind shear, radiation,
-      # subsidence velocity, and precipitation.
-      source = tf.nest.map_structure(tf.zeros_like, zz)
-
-      if include_radiation:
-        halos = [self._params.halo_width] * 3
-        f_r = self.cloud.source_by_radiation(q_l, rho_thermal, zz,
-                                             h[self._g_dim], self._g_dim, halos,
-                                             replica_id, replicas)
-
-        def radiation_source_fn(rho_i, f_r_i):
-          return - rho_i * f_r_i
-
-        rad_src = tf.nest.map_structure(radiation_source_fn, rho, f_r)
-        source = tf.nest.map_structure(lambda f: f / (2.0 * h[self._g_dim]),
-                                       self._grad_central[self._g_dim](rad_src))
-
-      cp_m = self.thermodynamics.model.cp_m(q_t, q_l, q_i)
-      cp_m_inv = tf.nest.map_structure(tf.math.reciprocal, cp_m)
-      exner_inv = self.thermodynamics.model.exner_inverse(
-          rho_thermal, q_t, temperature, zz, additional_states)
-      cp_m_exner_inv = tf.nest.map_structure(tf.math.multiply, cp_m_inv,
-                                             exner_inv)
-      source = tf.nest.map_structure(tf.math.multiply, cp_m_exner_inv, source)
-
-      if include_subsidence:
-        src_subsidence = eq_utils.source_by_subsidence_velocity(
-            self._kernel_op, rho, zz, h[self._g_dim], theta_li, self._g_dim)
-        source = tf.nest.map_structure(tf.math.add, source, src_subsidence)
-
-      # Add external source, e.g. sponge forcing.
-      source = tf.nest.map_structure(tf.math.add, source, source_ext)
-
-      # Compute the convection and diffusion terms.
-      conv = [
-          self._conservative_scalar_convection(  # pylint: disable=g-complex-comprehension
-              replica_id, replicas, theta_li, momentum[i], states[_KEY_P], rho,
-              h[i], dt, i, 'theta_li', zz) for i in range(3)
-      ]
-
-      diff = self.diffusion_fn(
-          self._kernel_op,
-          replica_id,
-          replicas,
-          theta_li,
-          rho,
-          additional_states['diffusivity'],
-          h,
-          scalar_name='theta_li',
-          helper_variables=helper_variables_most)
-
-      if dbg:
-        return {
-            'conv_x': conv[0],
-            'conv_y': conv[1],
-            'conv_z': conv[2],
-            'diff_x': diff[0],
-            'diff_y': diff[1],
-            'diff_z': diff[2],
-            'source': source,
-        }
-
-      equation_terms = zip(conv[0], conv[1], conv[2], diff[0], diff[1], diff[2],
-                           source)
-
-      rhs = [
-          -(conv_x_i + conv_y_i + conv_z_i) + (diff_x_i + diff_y_i + diff_z_i) +
-          src_i for conv_x_i, conv_y_i, conv_z_i, diff_x_i, diff_y_i, diff_z_i,
-          src_i in equation_terms
-      ]
-
-      if self._ib is not None:
-        rhs_name = self._ib.ib_rhs_name('rho_theta_li')
-        helper_states = {
-            rhs_name: rhs,
-            'ib_interior_mask': additional_states['ib_interior_mask'],
-        }
-        rhs_ib_updated = self._ib.update_forcing(
-            self._kernel_op, replica_id, replicas, {
-                'rho_theta_li':
-                    tf.nest.map_structure(tf.math.multiply, rho, theta_li)
             }, helper_states)
         rhs = rhs_ib_updated[rhs_name]
 
@@ -1088,9 +908,6 @@ class Scalars(object):
     elif scalar_name in ['q_t', 'q_r']:
       return self._humidity_update(replica_id, replicas, states,
                                    additional_states, scalar_name, dbg)
-    elif scalar_name == 'theta_li':
-      return self._theta_li_update(replica_id, replicas, states,
-                                   additional_states, dbg)
     else:
       return self._generic_scalar_update(replica_id, replicas, scalar_name,
                                          states, additional_states, dbg)

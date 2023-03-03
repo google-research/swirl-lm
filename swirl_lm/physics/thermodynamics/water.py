@@ -1003,7 +1003,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       The partial derivative of the internal energy wrt temperature.
     """
     q_liq, q_ice = self.equilibrium_phase_partition(temperature, rho, q_tot)
-    q_c = [q_liq_i + q_ice_i for q_liq_i, q_ice_i in zip(q_liq, q_ice)]
+    q_c = tf.nest.map_structure(tf.math.add, q_liq, q_ice)
     cv_mix = self.cv_m(q_tot, q_liq, q_ice)
     q_vap_sat = self.saturation_q_vapor(temperature, rho, q_liq, q_c)
     liquid_frac = self.liquid_fraction(temperature, q_liq, q_c)

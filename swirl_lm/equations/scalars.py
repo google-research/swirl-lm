@@ -28,21 +28,14 @@ from swirl_lm.base import physical_variable_keys_manager
 from swirl_lm.boundary_condition import immersed_boundary_method
 from swirl_lm.communication import halo_exchange
 from swirl_lm.equations import common
-from swirl_lm.equations import utils as eq_utils
 from swirl_lm.equations.source_function import humidity
 from swirl_lm.equations.source_function import potential_temperature
 from swirl_lm.equations.source_function import scalar_generic
-from swirl_lm.numerics import calculus
-from swirl_lm.numerics import convection
+from swirl_lm.equations.source_function import total_energy
 from swirl_lm.numerics import diffusion
-from swirl_lm.numerics import filters
 from swirl_lm.numerics import numerics_pb2
-from swirl_lm.physics import constants
-from swirl_lm.physics.atmosphere import cloud
-from swirl_lm.physics.atmosphere import microphysics_kw1978
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import thermodynamics_pb2
-from swirl_lm.physics.thermodynamics import water
 from swirl_lm.physics.turbulence import sgs_model
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import components_debug
@@ -53,39 +46,13 @@ import tensorflow as tf
 FlowFieldVal = types.FlowFieldVal
 FlowFieldMap = types.FlowFieldMap
 
-# A small number that's used as the threshold for the gravity vector. If the
-# absolute value of a gravity component is less than this threshold, it is
-# considered as 0 when computing the free slip wall boundary condition.
-_G_THRESHOLD = 1e-6
-
-# Parameters required by the radiation model. Reference:
-# Stevens, Bjorn, Chin-Hoh Moeng, Andrew S. Ackerman, Christopher S.
-# Bretherton, Andreas Chlond, Stephan de Roode, James Edwards, et al. 2005.
-# “Evaluation of Large-Eddy Simulations via Observations of Nocturnal Marine
-# Stratocumulus.” Monthly Weather Review 133 (6): 1443–62.
-_F0 = 70.0
-_F1 = 22.0
-_KAPPA = 85.0
-_ALPHA_Z = 1.0
-# The subsidence velocity coefficient.
-_D = 3.75e-6
-# The initial height of the cloud, in units of m
-_ZI = 840.0
-
 # Density keys.
 _KEY_RHO = common.KEY_RHO
-# Pressure keys.
-_KEY_P = common.KEY_P
 
 # Velocity keys.
 _KEY_U = common.KEY_U
 _KEY_V = common.KEY_V
 _KEY_W = common.KEY_W
-
-# Momentum keys.
-_KEY_RHO_U = common.KEY_RHO_U
-_KEY_RHO_V = common.KEY_RHO_V
-_KEY_RHO_W = common.KEY_RHO_W
 
 
 class Scalars(object):
@@ -114,12 +81,6 @@ class Scalars(object):
     self.thermodynamics = thermodynamics_manager.thermodynamics_factory(
         self._params)
 
-    if isinstance(self.thermodynamics.model, water.Water):
-      self.precipitation = microphysics_kw1978.MicrophysicsKW1978(
-          self.thermodynamics.model)
-      self.cloud = cloud.Cloud(
-          self.thermodynamics.model)
-
     self._use_sgs = self._params.use_sgs
     filter_widths = (self._params.dx, self._params.dy, self._params.dz)
     if self._use_sgs:
@@ -136,27 +97,10 @@ class Scalars(object):
         sc.name: None for sc in self._params.scalars if sc.solve_scalar
     }
 
-    self._g_vec = (
-        self._params.gravity_direction if self._params.gravity_direction else [
-            0.0,
-        ] * 3)
-
-    # Find the direction of gravity. Only vector along a particular dimension is
-    # considered currently.
-    self._g_dim = None
-    for i in range(3):
-      if np.abs(np.abs(self._g_vec[i]) - 1.0) < _G_THRESHOLD:
-        self._g_dim = i
-        break
-
     self._ib = ib if ib is not None else (
         immersed_boundary_method.immersed_boundary_method_factory(self._params))
 
     self._dbg = dbg
-
-    self._scalars = {}
-    for scalar in self._params.scalars:
-      self._scalars.update({scalar.name: scalar})
 
     # Get functions that computes terms in tranport equations for all scalars.
     self._scalar_model = {}
@@ -165,6 +109,8 @@ class Scalars(object):
         scalar_model = potential_temperature.PotentialTemperature
       elif scalar_name in humidity.HUMIDITY_VARNAME:
         scalar_model = humidity.Humidity
+      elif scalar_name == 'e_t':
+        scalar_model = total_energy.TotalEnergy
       else:
         scalar_model = scalar_generic.ScalarGeneric
 
@@ -218,56 +164,7 @@ class Scalars(object):
     bc = self._bc
     return self._exchange_halos(f, bc[name], replica_id, replicas)
 
-  def _conservative_scalar_convection(
-      self,
-      replica_id: tf.Tensor,
-      replicas: np.ndarray,
-      phi: FlowFieldVal,
-      rho_u: FlowFieldVal,
-      p: FlowFieldVal,
-      rho: FlowFieldVal,
-      h: float,
-      dt: float,
-      dim: int,
-      sc_name: Text,
-      zz: Optional[FlowFieldVal] = None,
-      apply_correction: bool = False,
-  ) -> FlowFieldVal:
-    """Computes the convection term for the conservative scalar."""
-    # Computes the gravitational force for the face flux correction.
-    if np.abs(self._g_vec[dim]) < _G_THRESHOLD or not apply_correction:
-      gravity = None
-    else:
-      zz = zz if zz is not None else [tf.zeros_like(phi_i) for phi_i in phi]
-
-      drho = filters.filter_op(
-          self._kernel_op, [
-              rho_mix_i - rho_ref_i for rho_mix_i, rho_ref_i in zip(
-                  rho, self.thermodynamics.rho_ref(zz))
-          ],
-          order=2)
-      gravity = [drho_i * self._g_vec[dim] * constants.G for drho_i in drho]
-
-    momentum_component = common.KEYS_MOMENTUM[dim]
-
-    return convection.convection_term(
-        self._kernel_op,
-        replica_id,
-        replicas,
-        phi,
-        rho_u,
-        p,
-        h,
-        dt,
-        dim,
-        bc_types=tuple(self._params.bc_type[dim]),
-        varname=momentum_component,
-        halo_width=self._params.halo_width,
-        scheme=self._scalars[sc_name].scheme,
-        src=gravity,
-        apply_correction=apply_correction)
-
-  def _generic_scalar_update(
+  def _scalar_update(
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
@@ -296,7 +193,6 @@ class Scalars(object):
         function returns the convection terms, the diffusion terms, and the
         external source term instead of the sum of all these terms (i.e. the
         actual RHS term).
-
 
     Returns:
       scalar_function: A function that computes the `f(phi)`.
@@ -377,294 +273,6 @@ class Scalars(object):
       return rhs
 
     return scalar_function
-
-  def _e_t_update(
-      self,
-      replica_id: tf.Tensor,
-      replicas: np.ndarray,
-      states: FlowFieldMap,
-      additional_states: FlowFieldMap,
-      dbg: bool = False,
-  ):
-    """Generates a functor that computes the RHS of the total energy equation.
-
-    This function returns a functor that computes the rhs `f(e_t)` of the
-    total energy update equation `d rho_e_t / dt = f(e_t)`.
-
-    Args:
-      replica_id: The index of the current TPU replica.
-      replicas: A numpy array that maps grid coordinates to replica id numbers.
-      states: A dictionary that holds field variables that are essential to
-        compute the right hand side function of the scalar transport equation.
-        Must include the following fields: 'u', 'v', 'w', 'rho_u', 'rho_v',
-          'rho_w', 'p', 'rho', 'e_t', 'q_t', (and 'q_r' if including
-          precipitation).
-      additional_states: Helper states that are required by the scalar transport
-        equation. Must contain 'diffusivity'. If SGS model is used, must also
-        contain 'nu_t'. If 'zz' is not in `additional_states`, assumes the flow
-        field is independent of height.
-      dbg: A flag of whether to use the debug mode. If `True`, the returned RHS
-        function returns the convection terms, the diffusion terms, and the
-        external source term instead of the sum of all these terms (i.e. the
-        actual RHS term).
-
-    Returns:
-      scalar_function: A function that computes the `f(e_t)`.
-
-    Raises:
-      ValueError: If the thermodynamics model is not `Water`.
-    """
-    if not isinstance(self.thermodynamics.model, water.Water):
-      raise ValueError('The thermodynamics model has to be `Water` for the '
-                       'total energy equation. Current model is {}'.format(
-                           self.thermodynamics.model))
-
-    h = (self._params.dx, self._params.dy, self._params.dz)
-    dt = self._params.dt
-    velocity = [states[_KEY_U], states[_KEY_V], states[_KEY_W]]
-    momentum = [states[_KEY_RHO_U], states[_KEY_RHO_V], states[_KEY_RHO_W]]
-    zz = additional_states.get(
-        'zz', tf.nest.map_structure(tf.zeros_like, states[_KEY_RHO_U]))
-    p = self.thermodynamics.model.p_ref(zz, additional_states)
-    bc_p = [[(halo_exchange.BCType.NEUMANN, 0.0),] * 2] * 3
-    p = self._exchange_halos(p, bc_p, replica_id, replicas)
-
-    # Helper variables required by the Monin-Obukhov similarity theory.
-    helper_variables_most = {
-        'u': states[_KEY_U],
-        'v': states[_KEY_V],
-        'w': states[_KEY_W],
-    }
-
-    # Compute the shear stress tensor.
-    if self._params.use_sgs:
-      mu = [(self._params.nu + nu_t) * rho_i
-            for nu_t, rho_i in zip(additional_states['nu_t'], states[_KEY_RHO])]
-    else:
-      mu = [self._params.nu * rho_i for rho_i in states[_KEY_RHO]]
-
-    tau = eq_utils.shear_stress(self._kernel_op, mu, h[0], h[1], h[2],
-                                states[_KEY_U], states[_KEY_V], states[_KEY_W])
-
-    include_radiation = (
-        self._scalars['e_t'].HasField('total_energy') and
-        self._scalars['e_t'].total_energy.include_radiation and
-        self._g_dim is not None)
-    include_subsidence = (
-        self._scalars['e_t'].HasField('total_energy') and
-        self._scalars['e_t'].total_energy.include_subsidence and
-        self._g_dim is not None)
-    include_precipitation = (
-        self._scalars['e_t'].HasField('total_energy') and
-        self._scalars['e_t'].total_energy.include_precipitation and
-        self._g_dim is not None)
-
-    def compute_rho_u_tau(
-        tau_0j: FlowFieldVal,
-        tau_1j: FlowFieldVal,
-        tau_2j: FlowFieldVal,
-    ) -> FlowFieldVal:
-      """Computes 'rho u_i tau_ij'."""
-      return [
-          u * tau_0j_l + v * tau_1j_l + w * tau_2j_l
-          for u, v, w, tau_0j_l, tau_1j_l, tau_2j_l in zip(
-              velocity[0], velocity[1], velocity[2], tau_0j, tau_1j, tau_2j)
-      ]
-
-    rho_u_tau = [
-        compute_rho_u_tau(tau['xx'], tau['yx'], tau['zx']),
-        compute_rho_u_tau(tau['xy'], tau['yy'], tau['zy']),
-        compute_rho_u_tau(tau['xz'], tau['yz'], tau['zz'])
-    ]
-
-    # Compute the divergence of the combined source terms due to dilatation and
-    # wind shear.
-    div_terms = rho_u_tau
-
-    # Prepare source terms that are computed externally.
-    source_ext = self._source['e_t'] if self._source['e_t'] else [
-        tf.zeros_like(rho_i) for rho_i in states[_KEY_RHO]
-    ]
-
-    def scalar_function(e_t: FlowFieldVal):
-      """Computes the functional RHS for the total energy equation.
-
-      Args:
-        e_t: The total energy field.
-
-      Returns:
-        A `FlowFieldVal` representing the RHS of the total energy equation.
-      """
-      # Compute the temperature.
-      q_t = states['q_t']
-      rho = states[_KEY_RHO]
-      rho_thermal = states['rho_thermal']
-
-      if 'T' in additional_states.keys():
-        temperature = additional_states['T']
-      else:
-        e = self.thermodynamics.model.internal_energy_from_total_energy(
-            e_t, states[_KEY_U], states[_KEY_V], states[_KEY_W], zz)
-        temperature = self.thermodynamics.model.saturation_adjustment(
-            'e_int', e, rho_thermal, q_t, additional_states=additional_states)
-
-      # Compute the potential temperature.
-      if 'theta' in additional_states:
-        theta = additional_states['theta']
-      else:
-        buf = self.thermodynamics.model.potential_temperatures(
-            temperature, q_t, rho_thermal, zz, additional_states)
-        theta = buf['theta']
-      helper_variables_most.update({'theta': theta})
-
-      # Compute the total enthalpy.
-      h_t = self.thermodynamics.model.total_enthalpy(e_t, rho_thermal, q_t,
-                                                     temperature)
-      if include_radiation or include_precipitation:
-        q_l, _ = self.thermodynamics.model.equilibrium_phase_partition(
-            temperature, rho_thermal, q_t)
-
-      # Compute the source terms due to dilatation, wind shear, radiation,
-      # subsidence velocity, and precipitation.
-      if include_radiation:
-        halos = [self._params.halo_width] * 3
-        f_r = self.cloud.source_by_radiation(q_l, rho_thermal, zz,
-                                             h[self._g_dim], self._g_dim, halos,
-                                             replica_id, replicas)
-        div_terms[self._g_dim] = [
-            div_term_i - rho_i * f_r_i for div_term_i, rho_i, f_r_i in zip(
-                div_terms[self._g_dim], rho, f_r)
-        ]
-      source = calculus.divergence(self._kernel_op, div_terms, h)
-      if include_subsidence:
-        src_subsidence = eq_utils.source_by_subsidence_velocity(
-            self._kernel_op, rho, zz, h[self._g_dim], h_t, self._g_dim)
-        source = tf.nest.map_structure(tf.math.add, source, src_subsidence)
-
-      if include_precipitation:
-        e_v, e_l, _ = (
-            self.thermodynamics.model.internal_energy_components(temperature))
-        # Get conversion rates from cloud water to rain water (for liquid and
-        # vapor phase).
-        q_r = states['q_r']
-        cloud_liquid_to_rain_water_rate = (
-            self.precipitation.autoconversion_and_accretion(
-                q_r, q_l))
-        q_c = self.thermodynamics.model.saturation_excess(
-            temperature, rho_thermal, q_t)
-        # Find q_v from the invariant q_t = q_c + q_v = q_l + q_i + q_v.
-        q_v = tf.nest.map_structure(tf.math.subtract, q_t, q_c)
-        rain_water_evaporation_rate = (
-            self.precipitation.evaporation(
-                rho_thermal, temperature, q_r, q_v, q_l, q_c))
-        # Get potential energy.
-        phi = tf.nest.map_structure(lambda zz_i: constants.G * zz_i, zz)
-        # Calculate source terms for vapor and liquid conversions, respectively.
-        # Use that c_{q_v->q_l} = -c_{q_l->q_v}, i.e. minus the evaporation
-        # rate.
-        source_v = tf.nest.map_structure(
-            lambda e, phi, rho, c_lv: (e + phi) * rho * (-c_lv), e_v, phi, rho,
-            rain_water_evaporation_rate)
-        source_l = tf.nest.map_structure(
-            lambda e, phi, rho, c_lr: (e + phi) * rho * c_lr, e_l, phi, rho,
-            cloud_liquid_to_rain_water_rate)
-        source = tf.nest.map_structure(lambda s, sv, sl: s + sv + sl, source,
-                                       source_v, source_l)
-
-      # Add external source, e.g. sponge forcing.
-      source = tf.nest.map_structure(tf.math.add, source, source_ext)
-
-      # Compute the convection and diffusion terms.
-      conv = [
-          self._conservative_scalar_convection(  # pylint: disable=g-complex-comprehension
-              replica_id, replicas, h_t, momentum[i], states[_KEY_P], rho, h[i],
-              dt, i, 'e_t', zz) for i in range(3)
-      ]
-
-      diff = self.diffusion_fn(
-          self._kernel_op,
-          replica_id,
-          replicas,
-          h_t,
-          rho,
-          additional_states['diffusivity'],
-          h,
-          scalar_name='e_t',
-          helper_variables=helper_variables_most)
-
-      if dbg:
-        return {
-            'conv_x': conv[0],
-            'conv_y': conv[1],
-            'conv_z': conv[2],
-            'diff_x': diff[0],
-            'diff_y': diff[1],
-            'diff_z': diff[2],
-            'source': source,
-        }
-
-      equation_terms = zip(conv[0], conv[1], conv[2], diff[0], diff[1], diff[2],
-                           source)
-
-      rhs = [
-          -(conv_x_i + conv_y_i + conv_z_i) + (diff_x_i + diff_y_i + diff_z_i) +
-          src_i for conv_x_i, conv_y_i, conv_z_i, diff_x_i, diff_y_i, diff_z_i,
-          src_i in equation_terms
-      ]
-
-      if self._ib is not None:
-        rhs_name = self._ib.ib_rhs_name('rho_e_t')
-        helper_states = {
-            rhs_name: rhs,
-            'ib_interior_mask': additional_states['ib_interior_mask'],
-        }
-        rhs_ib_updated = self._ib.update_forcing(
-            self._kernel_op, replica_id, replicas,
-            {'rho_e_t': tf.nest.map_structure(tf.math.multiply, rho, e_t)},
-            helper_states)
-        rhs = rhs_ib_updated[rhs_name]
-
-      return rhs
-
-    return scalar_function
-
-  def _scalar_update(
-      self,
-      replica_id: tf.Tensor,
-      replicas: np.ndarray,
-      scalar_name: Text,
-      states: FlowFieldMap,
-      additional_states: FlowFieldMap,
-      dbg: bool = False,
-  ):
-    """Provides a function that computes the RHS of a scalar transport equation.
-
-    This function provides a wrapper for the function that computes the rhs
-    `f(phi)` of the scalar equation in functional form, i.e.
-    `drho_phi / dt = f(phi)`.
-
-    Args:
-      replica_id: The index of the current TPU replica.
-      replicas: A numpy array that maps grid coordinates to replica id numbers.
-      scalar_name: The name of the scalar.
-      states: A dictionary that holds field variables that are essential to
-        compute the right hand side function of the scalar transport equation.
-      additional_states: Helper states that are required by the scalar transport
-        equation.
-      dbg: A flag of whether to use the debug mode. If `True`, the returned RHS
-        function returns the convection terms, the diffusion terms, and the
-        external source term instead of the sum of all these terms (i.e. the
-        actual RHS term).
-
-    Returns:
-      scalar_function: A function that computes the `f(phi)`.
-    """
-    if scalar_name == 'e_t':
-      return self._e_t_update(replica_id, replicas, states, additional_states,
-                              dbg)
-    else:
-      return self._generic_scalar_update(replica_id, replicas, scalar_name,
-                                         states, additional_states, dbg)
 
   def prestep(
       self,

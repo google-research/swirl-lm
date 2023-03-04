@@ -28,6 +28,7 @@ from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.numerics import root_finder
 from swirl_lm.physics import constants
 from swirl_lm.physics.thermodynamics import thermodynamics_generic
+from swirl_lm.physics.thermodynamics import thermodynamics_pb2
 import tensorflow as tf
 
 FlowFieldVal = thermodynamics_generic.FlowFieldVal
@@ -62,6 +63,8 @@ class Water(thermodynamics_generic.ThermodynamicModel):
   def __init__(self, params: parameters_lib.SwirlLMParameters):
     """Initializes parameters for the water thermodynamics."""
     super(Water, self).__init__(params)
+
+    self._solver_mode = params.solver_mode
 
     model_params = params.thermodynamics
     self._r_v = model_params.water.r_v
@@ -1220,6 +1223,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       v: The velocity component in the y direction.
       w: The velocity component in the z direction. the Secant solver.
       rho_0: A guess of the density, which is used as the initial condition for
+        finding the density that is thermodynamically consistent with the state.
       zz: The cooridinates in the vertical direction.
       additional_states: Optional[FlowFieldMap] = None,
 
@@ -1539,11 +1543,15 @@ class Water(thermodynamics_generic.ThermodynamicModel):
           f'temperature), or "{PotentialTemperature.THETA_LI.value}" (the '
           f'liquid-ice potential temperature).')
 
+    rho_thermal = (
+        self.update_density(states, additional_states) if
+        self._solver_mode == thermodynamics_pb2.Thermodynamics.ANELASTIC else
+        states['rho'])
     temperatures = {
         'T': self.saturation_adjustment(
             target_var_name,
             target_var,
-            states['rho'],
+            rho_thermal,
             states['q_t'],
             zz,
             additional_states,
@@ -1551,6 +1559,6 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     }
     temperatures.update(
         self.potential_temperatures(temperatures['T'], states['q_t'],
-                                    states['rho'], zz, additional_states))
+                                    rho_thermal, zz, additional_states))
 
     return temperatures

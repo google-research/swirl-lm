@@ -360,13 +360,13 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     elif self._ref_state_type == 'const_reference_state':
       temperature = temperature_with_constant()
     elif self._ref_state_type == 'user_defined_reference_state':
-      if additional_states is None or 'theta_init' not in additional_states:
+      if additional_states is None or 'theta_ref' not in additional_states:
         raise ValueError(
-            '`theta_init` is required in additional_states to compute the'
+            '`theta_ref` is required in additional_states to compute the'
             ' user defined reference state.'
         )
       zeros = tf.nest.map_structure(
-          tf.zeros_like, additional_states['theta_init']
+          tf.zeros_like, additional_states['theta_ref']
       )
       q_t = (
           zeros
@@ -375,7 +375,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       )
       temperature = self.potential_temperature_to_temperature(
           theta_name='theta',
-          theta=additional_states['theta_init'],
+          theta=additional_states['theta_ref'],
           q_tot=q_t,
           q_liq=zeros,
           q_ice=zeros,

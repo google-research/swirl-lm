@@ -196,7 +196,7 @@ message Water {
 
   // An option of the reference state where the profiles for pressure and
   // potential temperature is defined by the user. With this option, it is
-  // required that `p_ref` and `theta_init` are provided as additional_states.
+  // required that `p_ref` and `theta_ref` are provided as additional_states.
   // If `q_t_init` is also in additional_states, it will be used to compute
   // the reference state; otherwise it is assumed that q_t = 0 in the reference
   // state. The recommended practice for setting these states is to enforce the

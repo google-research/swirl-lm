@@ -516,8 +516,12 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     tf.io.gfile.makedirs(output_dir)
     with tf.io.gfile.GFile(f'{prefix}_swirl_lm.pbtxt', 'w') as f:
       f.write(text_format.MessageToString(self.swirl_lm_parameters_proto))
-    with tf.io.gfile.GFile(f'{prefix}_grid.pbtxt', 'w') as f:
+    with tf.io.gfile.GFile(get_grid_pbtxt_path(prefix), 'w') as f:
       f.write(text_format.MessageToString(self.grid_params_proto))
+
+
+def get_grid_pbtxt_path(prefix: str) -> str:
+  return f'{prefix}_grid.pbtxt'
 
 
 def params_from_config_file_flag() -> SwirlLMParameters:

@@ -42,6 +42,15 @@ flags.DEFINE_bool(
     False,
     'Toggles if to run the simulation with the debug mode.',
     allow_override=True)
+# Note that these flags are ineffective if they are set in the config.
+_NUM_CYCLES = flags.DEFINE_integer(
+    'num_cycles',
+    1,
+    'number of cycles to run. Each cycle generates a set of output',
+)
+_NUM_STEPS = flags.DEFINE_integer(
+    'num_steps', 1, 'number of steps to run before generating an output.'
+)
 
 KernelOpType = parameters_pb2.SwirlLMParameters.KernelOpType
 SolverProcedure = parameters_pb2.SwirlLMParameters.SolverProcedureType
@@ -209,9 +218,85 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     # Toggle if to run with the debug mode.
     self.dbg = FLAGS.simulation_debug
 
+    # Get the number of cycles and steps the simulation needs to run. Member
+    # variables `_num_cycles` and `_num_steps` will be initialized.
+    self._set_simulation_time_info()
+
   def __str__(self) -> str:
     return super(SwirlLMParameters, self).__str__() + (
         ', rho: {}, nu: {}, nit: {}'.format(self.rho, self.nu, self.nit))
+
+  def _get_inflow_velocity(self, inflow_dim: int, inflow_face: int) -> float:
+    """Retrieves the inflow velocity from the simulation setup."""
+    assert (
+        self.bc_type[inflow_dim][inflow_face]
+        == boundary_condition_utils.BoundaryType.INFLOW
+    ), (
+        'Simulation setup with `from_flow_through_time` requires a boundary'
+        '  type of `INFLOW` in the dimension specified'
+        f' ({inflow_dim}), but is'
+        f' {self.bc_type[inflow_dim][inflow_face]}.'
+    )
+
+    inflow_velocity_name = ('u', 'v', 'w')[inflow_dim]
+
+    return np.abs(
+        self.bc[inflow_velocity_name][inflow_dim][inflow_face][1]
+    )
+
+  def _get_flow_through_time(self, inflow_dim: int, inflow_face: int) -> float:
+    """Computes the flow through time with an inflow boundary condition."""
+    inflow_domain_length = (self.lx, self.ly, self.lz)[inflow_dim]
+    inflow_val = self._get_inflow_velocity(inflow_dim, inflow_face)
+    return inflow_domain_length / inflow_val
+
+  def _set_simulation_time_info(self):
+    """Sets `_num_cycles` and `_num_steps` with a lazy approach.
+
+    Note that values for `num_steps` and `num_cycles` from the flags are not
+    used if the `simulation_time_method` is `from_config` or
+    `from_flow_through_time` even they are provided.
+    """
+    config = self.swirl_lm_parameters_proto
+    if (
+        not config.HasField('simulation_time_info')
+        or config.simulation_time_info.WhichOneof('simulation_time_method')
+        == 'from_flags'
+    ):
+      self._num_cycles = _NUM_CYCLES.value
+      self._num_steps = _NUM_STEPS.value
+    elif (
+        config.simulation_time_info.WhichOneof('simulation_time_method')
+        == 'from_config'
+    ):
+      self._num_cycles = config.simulation_time_info.from_config.num_cycles
+      self._num_steps = config.simulation_time_info.from_config.num_steps
+    elif (
+        config.simulation_time_info.WhichOneof('simulation_time_method')
+        == 'from_flow_through_time'
+    ):
+      inflow_dim = (
+          config.simulation_time_info.from_flow_through_time.mean_flow_dim
+      )
+      inflow_face = (
+          config.simulation_time_info.from_flow_through_time.inflow_face
+      )
+      self._num_cycles = (
+          config.simulation_time_info.from_flow_through_time.num_cycles
+      )
+      n_flow_through_time = (
+          config.simulation_time_info.from_flow_through_time.n_flow_through_time
+      )
+      t_per_cycle = (
+          n_flow_through_time
+          * self._get_flow_through_time(inflow_dim, inflow_face)
+      ) / float(self._num_cycles)
+      self._num_steps = int(np.ceil(t_per_cycle / self.dt))
+    else:
+      raise ValueError(
+          'Unknown simulation time info:'
+          f' {config.simulation_time_info.WhichOneof("simulation_time_method")}'
+      )
 
   def _parse_boundary_info(
       self,
@@ -281,6 +366,16 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
       text_proto = f.read()
 
     return SwirlLMParameters.config_from_text_proto(text_proto, grid_params)
+
+  @property
+  def num_cycles(self) -> int:
+    """Provides the number of cycles for the simulation to run."""
+    return self._num_cycles
+
+  @property
+  def num_steps(self) -> int:
+    """Provides the number of steps in each simulation cycle."""
+    return self._num_steps
 
   @property
   def max_halo_width(self) -> int:

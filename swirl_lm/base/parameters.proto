@@ -38,6 +38,49 @@ message PeriodicDimensions {
   optional bool dim_2 = 3 [default = false];
 }
 
+// Methods for how the simulation time, including the number of cycles
+// (`num_cycles`) and number of steps per cycles (`num_steps`), are determined.
+// Next id: 4
+message SimulationTimeInfo {
+  // Parameters are passed in from flags.
+  message FromFlags {}
+
+  // Parameters are passed in from the config file.
+  message FromConfig {
+    optional int32 num_cycles = 1;
+    optional int32 num_steps = 2;
+  }
+
+  // Parameters are derived from the flow through times that is computed as
+  // l / bc_u in the `mean_flow_dim`. Note that this option is only valid if
+  // the face with index `inflow_face` along the `mean_flow_dim` is associated
+  // with an inflow boundary type.
+  // Next id: 5
+  message FromFlowThroughTime {
+    // The number of cycles the simulation runs. This parameter determines the
+    // total number of restart files to be dumped.
+    optional int32 num_cycles = 1;
+
+    // The dimension along with the flow through time is computed. Must be one
+    // of 0, 1, and 2.
+    optional int32 mean_flow_dim = 2;
+
+    // The face from which the inflow is going into the domain. 0 for the lower
+    // index end, and 1 for the higher index end.
+    optional int32 inflow_face = 3;
+
+    // The total number of flow through times that the simulation needs to
+    // cover.
+    optional float n_flow_through_time = 4;
+  }
+
+  oneof simulation_time_method {
+    FromFlags from_flags = 1;
+    FromConfig from_config = 2;
+    FromFlowThroughTime from_flow_through_time = 3;
+  }
+}
+
 // Stores information about a sub-grid scale model.
 message SubGridScaleModel {
   // Parameters required by the constant Smagorinsky model.
@@ -103,7 +146,7 @@ message SubGridScaleModel {
 }
 
 // Stores the parameters required by an incompressible Navier-Stokes simulation.
-// Next id: 33
+// Next id: 34
 message SwirlLMParameters {
   // Defines the type of the simulation procedure to be used in the solver.
   enum SolverProcedureType {
@@ -167,6 +210,10 @@ message SwirlLMParameters {
   // In this case, the scalar specific one will overwrite the shared one here.
   optional TimeIntegrationScheme time_integration_scheme = 3
       [default = TIME_SCHEME_UNKNOWN];
+
+  // The option for how the number of cycles and steps are determined. If not
+  // set, `num_cycles` and `num_steps` will be set from flags.
+  optional SimulationTimeInfo simulation_time_info = 33;
 
   // An option for enabling the correction of primitive scalars after the
   // density update from the equation of state. If it is `true`, results of

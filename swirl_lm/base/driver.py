@@ -30,8 +30,6 @@ from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import tpu_util
 import tensorflow as tf
 
-flags.DEFINE_integer('num_steps', 1, 'number of steps to run before generating '
-                     'an output.')
 flags.DEFINE_integer('start_step', 0,
                      'The beginning step count for the current simulation.')
 flags.DEFINE_integer(
@@ -41,9 +39,6 @@ flags.DEFINE_integer(
 flags.DEFINE_integer(
     'min_steps_for_output', 1, 'Total number of steps before '
     'the output start to be generated.')
-flags.DEFINE_integer(
-    'num_cycles', 1, 'number of cycles to run. Each cycle '
-    'generates a set of output')
 flags.DEFINE_string(
     'data_dump_prefix', '/tmp/data', 'The output `ser` or `h5` '
     'files prefix. This will be suffixed with the field '
@@ -400,35 +395,35 @@ def solver(
     write_state(_local_state(strategy, state))
 
   # Run the solver for multiple cycles and save the state after each cycle.
-  if (step_id - FLAGS.start_step) % FLAGS.num_steps != 0:
+  if (step_id - FLAGS.start_step) % params.num_steps != 0:
     raise ValueError('Incompatible step_id detected. `step_id` is expected '
                      'to be `start_step` + N * `num_steps` but (step_id: {}, '
                      'start_step: {}, num_steps: {}) is detected. Maybe the '
                      'checkpoint step is inconsistent?'.format(
-                         step_id, FLAGS.start_step, FLAGS.num_steps))
+                         step_id, FLAGS.start_step, params.num_steps))
   logging.info(
       'Simulation iteration starts. Total %d steps, starting from %d, '
-      'with %d steps per cycle.', FLAGS.num_steps * FLAGS.num_cycles,
-      step_id.numpy(), FLAGS.num_steps)
-  while step_id < FLAGS.start_step + FLAGS.num_steps * FLAGS.num_cycles:
-    cycle = (step_id - FLAGS.start_step) // FLAGS.num_steps
+      'with %d steps per cycle.', params.num_steps * params.num_cycles,
+      step_id.numpy(), params.num_steps)
+  while step_id < FLAGS.start_step + params.num_steps * params.num_cycles:
+    cycle = (step_id - FLAGS.start_step) // params.num_steps
     logging.info('Step %d (cycle %d) is starting.', step_id.numpy(), cycle)
     t0 = time.time()
     state = _one_cycle(
         strategy=strategy,
         init_state=state,
         init_step_id=step_id,
-        num_steps=FLAGS.num_steps,
+        num_steps=params.num_steps,
         params=params)
     # Make sure we first increment `step_id`, write the state, and then save
     # a checkpoint. `write_state` should have automatic control dependencies
     # on `step_id` since it uses the `step_id` for the filename; but we need to
     # add the latter dependency explicitly.
-    step_id.assign_add(FLAGS.num_steps)
+    step_id.assign_add(params.num_steps)
     t1 = time.time()
     logging.info('Completed total %d steps (%d cycles) so far. Took %f secs '
                  'for the last cycle (%d steps).',
-                 step_id.numpy(), cycle + 1, t1 - t0, FLAGS.num_steps)
+                 step_id.numpy(), cycle + 1, t1 - t0, params.num_steps)
     with tf.control_dependencies([write_state(_local_state(strategy, state))]):
       ckpt_manager.save()
     t2 = time.time()

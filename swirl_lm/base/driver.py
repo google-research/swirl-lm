@@ -30,12 +30,6 @@ from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import tpu_util
 import tensorflow as tf
 
-flags.DEFINE_integer('start_step', 0,
-                     'The beginning step count for the current simulation.')
-flags.DEFINE_integer(
-    'loading_step', None,
-    'When this is set, it is the step count from which to '
-    'load the initial states.')
 flags.DEFINE_integer(
     'min_steps_for_output', 1, 'Total number of steps before '
     'the output start to be generated.')
@@ -355,7 +349,7 @@ def solver(
   # that we don't block TPU execution when writing the state to filenames
   # formatted dynamically with the step id.
   with strategy.scope():
-    step_id = tf.Variable(FLAGS.start_step, dtype=tf.int32)
+    step_id = tf.Variable(params.start_step, dtype=tf.int32)
 
   output_dir, filename_prefix = os.path.split(FLAGS.data_dump_prefix)
   ckpt_manager = get_checkpoint_manager(
@@ -395,18 +389,18 @@ def solver(
     write_state(_local_state(strategy, state))
 
   # Run the solver for multiple cycles and save the state after each cycle.
-  if (step_id - FLAGS.start_step) % params.num_steps != 0:
+  if (step_id - params.start_step) % params.num_steps != 0:
     raise ValueError('Incompatible step_id detected. `step_id` is expected '
                      'to be `start_step` + N * `num_steps` but (step_id: {}, '
                      'start_step: {}, num_steps: {}) is detected. Maybe the '
                      'checkpoint step is inconsistent?'.format(
-                         step_id, FLAGS.start_step, params.num_steps))
+                         step_id, params.start_step, params.num_steps))
   logging.info(
       'Simulation iteration starts. Total %d steps, starting from %d, '
       'with %d steps per cycle.', params.num_steps * params.num_cycles,
       step_id.numpy(), params.num_steps)
-  while step_id < FLAGS.start_step + params.num_steps * params.num_cycles:
-    cycle = (step_id - FLAGS.start_step) // params.num_steps
+  while step_id < params.start_step + params.num_steps * params.num_cycles:
+    cycle = (step_id - params.start_step) // params.num_steps
     logging.info('Step %d (cycle %d) is starting.', step_id.numpy(), cycle)
     t0 = time.time()
     state = _one_cycle(

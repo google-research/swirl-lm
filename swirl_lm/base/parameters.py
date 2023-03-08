@@ -51,6 +51,17 @@ _NUM_CYCLES = flags.DEFINE_integer(
 _NUM_STEPS = flags.DEFINE_integer(
     'num_steps', 1, 'number of steps to run before generating an output.'
 )
+_START_STEP = flags.DEFINE_integer(
+    'start_step', 0, 'The beginning step count for the current simulation.'
+)
+_LOADING_STEP = flags.DEFINE_integer(
+    'loading_step',
+    None,
+    (
+        'When this is set, it is the step count from which to '
+        'load the initial states.'
+    ),
+)
 
 KernelOpType = parameters_pb2.SwirlLMParameters.KernelOpType
 SolverProcedure = parameters_pb2.SwirlLMParameters.SolverProcedureType
@@ -83,6 +94,13 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     super(SwirlLMParameters, self).__init__(grid_params)
 
     self.swirl_lm_parameters_proto = config
+
+    self._start_step = _START_STEP.value
+    self._loading_step = (
+        _LOADING_STEP.value
+        if _LOADING_STEP.value is not None
+        else self._start_step
+    )
 
     self.kernel_op_type = config.kernel_op_type
 
@@ -376,6 +394,16 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
   def num_steps(self) -> int:
     """Provides the number of steps in each simulation cycle."""
     return self._num_steps
+
+  @property
+  def start_step(self) -> int:
+    """Provides the step id to start the simulation."""
+    return self._start_step
+
+  @property
+  def loading_step(self):
+    """Provides the data load id to start the simulation."""
+    return self._loading_step
 
   @property
   def max_halo_width(self) -> int:

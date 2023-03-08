@@ -46,28 +46,6 @@ flags.DEFINE_bool(
     'If True, only variables with names provided in field `variable_from_file` '
     'in the config file will be loaded from files (at step specified by flag '
     '`loading_step`.')
-flags.DEFINE_bool(
-    'apply_preprocess', False,
-    'If True and the `preprocessing_states_update_fn` is defined in `params`, '
-    'data from initial condition are processed before the simulation.')
-flags.DEFINE_integer(
-    'preprocess_step_id', 0,
-    'The `step_id` for the preprocessing function to be executed at, or if '
-    '`preprocess_periodic` is `True`, the period in steps to perform '
-    'preprocessing.')
-flags.DEFINE_bool('preprocess_periodic', False,
-                  'Whether to do preprocess periodically.')
-flags.DEFINE_bool(
-    'apply_postprocess', False,
-    'If True and the `postprocessing_states_update_fn` is defined in `params`, '
-    'a post processing will be executed after the update.')
-flags.DEFINE_integer(
-    'postprocess_step_id', 0,
-    'The `step_id` for the postprocessing function to be executed at, or if '
-    '`postprocess_periodic` is `True`, the period in steps to perform '
-    'postprocessing.')
-flags.DEFINE_bool('postprocess_periodic', False,
-                  'Whether to do postprocess periodically.')
 
 FLAGS = flags.FLAGS
 
@@ -254,15 +232,15 @@ def _one_cycle(
       essential_states = dict((key, state[key]) for key in essential_keys)
 
       # Perform a preprocessing step, if configured.
-      if FLAGS.apply_preprocess:
+      if params.apply_preprocess:
         essential_states, additional_states = _process_at_step_id(
             process_fn=functools.partial(params.preprocessing_states_update_fn,
                                          **common_kwargs),
             essential_states=essential_states,
             additional_states=additional_states,
             step_id=step_id,
-            process_step_id=FLAGS.preprocess_step_id,
-            is_periodic=FLAGS.preprocess_periodic)
+            process_step_id=params.preprocess_step_id,
+            is_periodic=params.preprocess_periodic)
 
       # Perform the additional states update, if present.
       if params.additional_states_update_fn is not None:
@@ -282,7 +260,7 @@ def _one_cycle(
           additional_states=additional_states)
 
       # Perform a postprocessing step, if configured.
-      if FLAGS.apply_postprocess:
+      if params.apply_postprocess:
         # Split the updated_state into essential states and additional states.
         additional_states = _stateless_update_if_present(
             additional_states, updated_state)
@@ -295,8 +273,8 @@ def _one_cycle(
             essential_states=essential_states,
             additional_states=additional_states,
             step_id=step_id,
-            process_step_id=FLAGS.postprocess_step_id,
-            is_periodic=FLAGS.postprocess_periodic)
+            process_step_id=params.postprocess_step_id,
+            is_periodic=params.postprocess_periodic)
 
         # Merge the essential states and additional states into updated_state.
         updated_state = _stateless_update_if_present(updated_state,

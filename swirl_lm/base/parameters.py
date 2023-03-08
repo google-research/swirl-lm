@@ -51,6 +51,47 @@ _NUM_CYCLES = flags.DEFINE_integer(
 _NUM_STEPS = flags.DEFINE_integer(
     'num_steps', 1, 'number of steps to run before generating an output.'
 )
+_APPLY_PREPROCESS = flags.DEFINE_bool(
+    'apply_preprocess',
+    False,
+    (
+        'If True and the `preprocessing_states_update_fn` is defined in'
+        ' `params`, data from initial condition are processed before the'
+        ' simulation.'
+    ),
+)
+_PREPROCESS_STEP_ID = flags.DEFINE_integer(
+    'preprocess_step_id',
+    0,
+    (
+        'The `step_id` for the preprocessing function to be executed at, or if '
+        '`preprocess_periodic` is `True`, the period in steps to perform '
+        'preprocessing.'
+    ),
+)
+_PREPROCESS_PERIODIC = flags.DEFINE_bool(
+    'preprocess_periodic', False, 'Whether to do preprocess periodically.'
+)
+_APPLY_POSTPROCESS = flags.DEFINE_bool(
+    'apply_postprocess',
+    False,
+    (
+        'If True and the `postprocessing_states_update_fn` is defined in'
+        ' `params`, a post processing will be executed after the update.'
+    ),
+)
+_POSTPROCESS_STEP_ID = flags.DEFINE_integer(
+    'postprocess_step_id',
+    0,
+    (
+        'The `step_id` for the postprocessing function to be executed at, or if'
+        ' `postprocess_periodic` is `True`, the period in steps to perform'
+        ' postprocessing.'
+    ),
+)
+_POSTPROCESS_PERIODIC = flags.DEFINE_bool(
+    'postprocess_periodic', False, 'Whether to do postprocess periodically.'
+)
 _START_STEP = flags.DEFINE_integer(
     'start_step', 0, 'The beginning step count for the current simulation.'
 )
@@ -240,6 +281,9 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     # variables `_num_cycles` and `_num_steps` will be initialized.
     self._set_simulation_time_info()
 
+    # Determine the pre- and post-process options.
+    self._set_pre_post_process_info()
+
   def __str__(self) -> str:
     return super(SwirlLMParameters, self).__str__() + (
         ', rho: {}, nu: {}, nit: {}'.format(self.rho, self.nu, self.nit))
@@ -316,9 +360,73 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
           f' {config.simulation_time_info.WhichOneof("simulation_time_method")}'
       )
 
+  def _set_pre_post_process_info(self):
+    """Determines the pre- and post-process options.
+
+    Note that values for `apply_[pre,post]process`, `[pre,post]process_step_id`,
+    and `[pre,post]process_periodic` from the flags are not used if the
+    `pre_post_process_option` is `from_config` or `from_flow_through_time` even
+    they are provided.
+    """
+    config = self.swirl_lm_parameters_proto
+    if (
+        not config.HasField('pre_post_process_info')
+        or config.pre_post_process_info.WhichOneof('pre_post_process_option')
+        == 'from_flags'
+    ):
+      self._apply_preprocess = _APPLY_PREPROCESS.value
+      self._preprocess_step_id = _PREPROCESS_STEP_ID.value
+      self._preprocess_periodic = _PREPROCESS_PERIODIC.value
+      self._apply_postprocess = _APPLY_POSTPROCESS.value
+      self._postprocess_step_id = _POSTPROCESS_STEP_ID.value
+      self._postprocess_periodic = _POSTPROCESS_PERIODIC.value
+    elif (
+        config.pre_post_process_info.WhichOneof('pre_post_process_option')
+        == 'from_config'
+    ):
+      opt = config.pre_post_process_info.from_config
+      self._apply_preprocess = opt.apply_preprocess
+      self._preprocess_step_id = opt.preprocess_step_id
+      self._preprocess_periodic = opt.preprocess_periodic
+      self._apply_postprocess = opt.apply_postprocess
+      self._postprocess_step_id = opt.postprocess_step_id
+      self._postprocess_periodic = opt.postprocess_periodic
+    elif (
+        config.pre_post_process_info.WhichOneof('pre_post_process_option')
+        == 'from_flow_through_time'
+    ):
+      opt = config.pre_post_process_info.from_flow_through_time
+      self._apply_preprocess = opt.apply_preprocess
+      self._preprocess_periodic = opt.preprocess_periodic
+      self._apply_postprocess = opt.apply_postprocess
+      self._postprocess_periodic = opt.postprocess_periodic
+
+      flow_through_time = self._get_flow_through_time(
+          opt.mean_flow_dim, opt.inflow_face
+      )
+
+      def get_step_id(t: float) -> int:
+        """Computes the closest integer multiple of `num_step` to `t`."""
+        return (
+            self.start_step
+            + round(t / (float(self.num_steps) * self.dt)) * self.num_steps
+        )
+
+      self._preprocess_step_id = get_step_id(
+          opt.preprocess_flow_through_time * flow_through_time
+      )
+      self._postprocess_step_id = get_step_id(
+          opt.postprocess_flow_through_time * flow_through_time
+      )
+    else:
+      pre_post_opt = config.pre_post_process_info.WhichOneof(
+          'pre_post_process_option'
+      )
+      raise ValueError(f'Unknown pre-post process info: {pre_post_opt}')
+
   def _parse_boundary_info(
-      self,
-      boundary_info: _BCInfo) -> Optional[Tuple[halo_exchange.BCType, float]]:
+      self, boundary_info: _BCInfo
+  ) -> Optional[Tuple[halo_exchange.BCType, float]]:
     """Retrieves the boundary condition from proto to fit the framework."""
     if boundary_info.type == _BCType.BC_TYPE_DIRICHLET:
       return (halo_exchange.BCType.DIRICHLET, boundary_info.value)
@@ -404,6 +512,36 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
   def loading_step(self):
     """Provides the data load id to start the simulation."""
     return self._loading_step
+
+  @property
+  def apply_preprocess(self) -> bool:
+    """Provides the option for whether pre-process is applied."""
+    return self._apply_preprocess
+
+  @property
+  def apply_postprocess(self) -> bool:
+    """Provides the option for whether post-process is applied."""
+    return self._apply_postprocess
+
+  @property
+  def preprocess_step_id(self) -> int:
+    """The step id at which preprocess is applied."""
+    return self._preprocess_step_id
+
+  @property
+  def postprocess_step_id(self) -> int:
+    """The step id at which postprocess is applied."""
+    return self._postprocess_step_id
+
+  @property
+  def preprocess_periodic(self) -> bool:
+    """The option of whether preprocess function is applied periodically."""
+    return self._preprocess_periodic
+
+  @property
+  def postprocess_periodic(self) -> bool:
+    """The option of whether postprocess function is applied periodically."""
+    return self._postprocess_periodic
 
   @property
   def max_halo_width(self) -> int:

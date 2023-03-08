@@ -81,6 +81,57 @@ message SimulationTimeInfo {
   }
 }
 
+// Options for performing pre- and post-process in the simulation.
+// Next id: 4
+message PrePostProcessInfo {
+  // Initializes pre- and post-process options from command line flags.
+  message FromFlags {}
+
+  // Initializes pre- and post-process options from the config file.
+  // Next id: 7
+  message FromConfig {
+    optional bool apply_preprocess = 1;
+    optional int32 preprocess_step_id = 2;
+    optional bool preprocess_periodic = 3;
+    optional bool apply_postprocess = 4;
+    optional int32 postprocess_step_id = 5;
+    optional bool postprocess_periodic = 6;
+  }
+
+  // Initializes pre- and post-process options from flow through time. Note that
+  // this option is only valid if the face with index `inflow_face along the
+  // `mean_flow_dim` is associated with an inflow boundary type. The pre- and
+  // post-process step id will be rounded to the closest integer multiple of
+  // `num_steps`.
+  // Next id: 9
+  message FromFlowThroughTime {
+    optional bool apply_preprocess = 1;
+    optional bool preprocess_periodic = 2;
+    optional bool apply_postprocess = 3;
+    optional bool postprocess_periodic = 4;
+
+    // The dimension along with the flow through time is computed. Must be one
+    // of 0, 1, and 2.
+    optional int32 mean_flow_dim = 5;
+
+    // The face from which the inflow is going into the domain. 0 for the lower
+    // index end, and 1 for the higher index end.
+    optional int32 inflow_face = 6;
+
+    // The flow through time at which pre-process is applied.
+    optional float preprocess_flow_through_time = 7;
+
+    // The flow through time at which post-process is applied.
+    optional float postprocess_flow_through_time = 8;
+  }
+
+  oneof pre_post_process_option {
+    FromFlags from_flags = 1;
+    FromConfig from_config = 2;
+    FromFlowThroughTime from_flow_through_time = 3;
+  }
+}
+
 // Stores information about a sub-grid scale model.
 message SubGridScaleModel {
   // Parameters required by the constant Smagorinsky model.
@@ -146,7 +197,7 @@ message SubGridScaleModel {
 }
 
 // Stores the parameters required by an incompressible Navier-Stokes simulation.
-// Next id: 34
+// Next id: 35
 message SwirlLMParameters {
   // Defines the type of the simulation procedure to be used in the solver.
   enum SolverProcedureType {
@@ -214,6 +265,10 @@ message SwirlLMParameters {
   // The option for how the number of cycles and steps are determined. If not
   // set, `num_cycles` and `num_steps` will be set from flags.
   optional SimulationTimeInfo simulation_time_info = 33;
+
+  // The option for how the pre- and post-process options are specified. If not
+  // set, these options will be determined from flags.
+  optional PrePostProcessInfo pre_post_process_info = 34;
 
   // An option for enabling the correction of primitive scalars after the
   // density update from the equation of state. If it is `true`, results of

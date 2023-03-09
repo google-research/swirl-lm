@@ -240,17 +240,32 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
           '`water` thermodynamics model is required to consider cloud '
           ' subsidence in the potential temperature equation.'
       )
-      assert self._scalar_name == 'theta_li', (
-          '`theta_li` is required as the prognostic variable for energy to'
-          ' consider the cloud subsidence in the potential temperature'
-          ' equation.'
-      )
+      if self._scalar_name == 'theta':
+        theta_li = (
+            self._thermodynamics.model.temperature_to_potential_temperature(
+                'theta_li',
+                thermo_states['T'],
+                states['q_t'],
+                thermo_states['q_l'],
+                thermo_states['q_i'],
+                thermo_states['zz'],
+                additional_states,
+            )
+        )
+      elif self._scalar_name == 'theta_li':
+        theta_li = phi
+      else:
+        raise NotImplementedError(
+            'Cloud subsidence in the potential temperature equation is'
+            ' implemented for `theta` and `theta_li` only, but'
+            f' {self._scalar_name} is provided.'
+        )
       src_subsidence = eq_utils.source_by_subsidence_velocity(
           self._kernel_op,
           states[common.KEY_RHO],
           thermo_states['zz'],
           self._h[self._g_dim],
-          phi,
+          theta_li,
           self._g_dim,
       )
       source = tf.nest.map_structure(tf.math.add, source, src_subsidence)

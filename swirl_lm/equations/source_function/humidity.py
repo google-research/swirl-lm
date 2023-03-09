@@ -102,9 +102,15 @@ class Humidity(scalar_generic.ScalarGeneric):
           f' {self._thermodynamics.model} is used.'
       )
 
-    if 'e_t' not in states and 'theta_li' not in states:
-      raise ValueError('Expected e_t or theta_li in states used for total '
-                       'humidity equation, got: {}'.format(states.keys()))
+    if (
+        'e_t' not in states
+        and 'theta_li' not in states
+        and 'theta' not in states
+    ):
+      raise ValueError(
+          'Expected one of e_t, theta_li, and theta in states used'
+          'for the total humidity equation, got: {}'.format(states.keys())
+      )
 
     thermo_states = {self._scalar_name: phi}
 
@@ -116,7 +122,22 @@ class Humidity(scalar_generic.ScalarGeneric):
     # Compute the temperature.
     if 'theta_li' in states:
       temperature = self._thermodynamics.model.saturation_adjustment(
-          'theta_li', states['theta_li'], rho_thermal, q_t, zz=zz)
+          'theta_li',
+          states['theta_li'],
+          rho_thermal,
+          q_t,
+          zz=zz,
+          additional_states=additional_states,
+      )
+    elif 'theta' in states:
+      temperature = self._thermodynamics.model.saturation_adjustment(
+          'theta',
+          states['theta'],
+          rho_thermal,
+          q_t,
+          zz=zz,
+          additional_states=additional_states,
+      )
     elif 'e_t' in states:
       e = self._thermodynamics.model.internal_energy_from_total_energy(
           states['e_t'],

@@ -59,13 +59,21 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
 
     self._include_radiation = (
         self._scalar_params.HasField('potential_temperature') and
-        self._scalar_params.potential_temperature.include_radiation and
-        self._g_dim is not None)
+        self._scalar_params.potential_temperature.include_radiation)
+    if self._include_radiation:
+      assert self._g_dim is not None, (
+          'The direction for gravity needs to be defined to include cloud'
+          ' radiation in the potential temperature equation.'
+      )
 
     self._include_subsidence = (
         self._scalar_params.HasField('potential_temperature') and
-        self._scalar_params.potential_temperature.include_subsidence and
-        self._g_dim is not None)
+        self._scalar_params.potential_temperature.include_subsidence)
+    if self._include_radiation:
+      assert self._g_dim is not None, (
+          'The direction for gravity needs to be defined to include cloud'
+          ' subsidence in the potential temperature equation.'
+      )
 
     self._include_condensation = (
         self._scalar_params.HasField('potential_temperature')
@@ -185,9 +193,11 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
 
     source = tf.nest.map_structure(tf.zeros_like, phi)
 
-    if self._include_radiation and isinstance(
-        self._thermodynamics.model, water.Water
-    ):
+    if self._include_radiation:
+      assert isinstance(self._thermodynamics.model, water.Water), (
+          '`water` thermodynamics model is required to consider cloud radiation'
+          ' in the potential temperature equation.'
+      )
       halos = [self._params.halo_width] * 3
       f_r = self._cloud.source_by_radiation(
           thermo_states['q_l'],
@@ -225,11 +235,16 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
       )
       source = tf.nest.map_structure(tf.math.multiply, cp_m_exner_inv, source)
 
-    if (
-        self._include_subsidence
-        and isinstance(self._thermodynamics.model, water.Water)
-        and self._scalar_name == 'theta_li'
-    ):
+    if self._include_subsidence:
+      assert isinstance(self._thermodynamics.model, water.Water), (
+          '`water` thermodynamics model is required to consider cloud '
+          ' subsidence in the potential temperature equation.'
+      )
+      assert self._scalar_name == 'theta_li', (
+          '`theta_li` is required as the prognostic variable for energy to'
+          ' consider the cloud subsidence in the potential temperature'
+          ' equation.'
+      )
       src_subsidence = eq_utils.source_by_subsidence_velocity(
           self._kernel_op,
           states[common.KEY_RHO],

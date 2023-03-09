@@ -100,7 +100,7 @@ message Humidity {
 }
 
 // Defines configurations for the liquid-ice potential temperature.
-// Next id: 3
+// Next id: 5
 message PotentialTemperature {
   // An option of whether radiation is included in the liquid-ice potential
   // temperature equation.
@@ -108,4 +108,10 @@ message PotentialTemperature {
   // An option of whether the effect of subsidence velocity is included in the
   // liquid-ice potential temperature equation.
   optional bool include_subsidence = 2;
+  // An option of whether condensation is included in the potential temperature
+  // equation.
+  optional bool include_condensation = 3;
+  // An option of whether evaporation is included in the potential temperature
+  // equation.
+  optional bool include_evaporation = 4;
 }

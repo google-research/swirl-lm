@@ -67,6 +67,16 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
         self._scalar_params.potential_temperature.include_subsidence and
         self._g_dim is not None)
 
+    self._include_condensation = (
+        self._scalar_params.HasField('potential_temperature')
+        and self._scalar_params.potential_temperature.include_condensation
+    )
+
+    self._include_evaporation = (
+        self._scalar_params.HasField('potential_temperature')
+        and self._scalar_params.potential_temperature.include_evaporation
+    )
+
     self._grad_central = [
         lambda f: self._kernel_op.apply_kernel_op_x(f, 'kDx'),
         lambda f: self._kernel_op.apply_kernel_op_y(f, 'kDy'),
@@ -117,6 +127,11 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
     q_l, q_i = self._thermodynamics.model.equilibrium_phase_partition(
         temperature, rho_thermal, q_t)
     thermo_states.update({'q_l': q_l, 'q_i': q_i})
+
+    thermo_states['q_c'] = tf.nest.map_structure(tf.math.add, q_l, q_i)
+    thermo_states['q_v'] = tf.nest.map_structure(
+        tf.math.subtract, q_t, thermo_states['q_c']
+    )
 
     return thermo_states
 
@@ -224,5 +239,88 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
           self._g_dim,
       )
       source = tf.nest.map_structure(tf.math.add, source, src_subsidence)
+
+    def cond_or_evap_source_fn(
+        cond_or_evap: types.FlowFieldVal,
+    ) -> types.FlowFieldVal:
+      """Computes the source term due to condensation or evaporation."""
+      assert isinstance(self._thermodynamics.model, water.Water), (
+          '`water` thermodynamics model is required for condensation and'
+          ' evaporation. Current thermodynamics model:'
+          f' {self._thermodynamics.model}'
+      )
+      t_0 = self._thermodynamics.model.t_ref(
+          thermo_states['zz'], additional_states
+      )
+      zeros = tf.nest.map_structure(tf.zeros_like, t_0)
+      theta_0 = self._thermodynamics.model.temperature_to_potential_temperature(
+          'theta',
+          t_0,
+          zeros,
+          zeros,
+          zeros,
+          thermo_states['zz'],
+          additional_states,
+      )
+      cp = self._thermodynamics.model.cp_m(
+          states['q_t'], thermo_states['q_l'], thermo_states['q_i']
+      )
+
+      def get_cond_or_evap(
+          cp: tf.Tensor,
+          t_0: tf.Tensor,
+          theta_0: tf.Tensor,
+          s: tf.Tensor,
+      ) -> tf.Tensor:
+        """Computes the condensation or evaporation source term."""
+        return (self._thermodynamics.model.lh_v0 / cp) * (theta_0 / t_0) * s
+
+      return tf.nest.map_structure(
+          get_cond_or_evap, cp, t_0, theta_0, cond_or_evap
+      )
+
+    if self._include_condensation:
+      assert isinstance(self._thermodynamics.model, water.Water), (
+          '`water` thermodynamics model is required to consider condensation in'
+          ' the potential temperature equation.'
+      )
+      assert self._microphysics is not None, (
+          'A microphysics model is required to consider condensation in the'
+          ' potential temperature equation.'
+      )
+      cond = self._microphysics.condensation(
+          states['rho_thermal'],
+          thermo_states['T'],
+          thermo_states['q_v'],
+          thermo_states['q_l'],
+          thermo_states['q_c'],
+          thermo_states['zz'],
+          additional_states,
+      )
+      source = tf.nest.map_structure(
+          tf.math.subtract, source, cond_or_evap_source_fn(cond)
+      )
+
+    if self._include_evaporation:
+      assert isinstance(self._thermodynamics.model, water.Water), (
+          '`water` thermodynamics model is required to consider evaporation in'
+          ' the potential temperature equation.'
+      )
+      assert self._microphysics is not None, (
+          'A microphysics model is required to consider evaporation in the'
+          ' potential temperature equation.'
+      )
+      assert 'q_r' in states, '`q_r` is required for evaporation.'
+      evap = self._microphysics.evaporation(
+          states['rho_thermal'],
+          thermo_states['T'],
+          states['q_r'],
+          thermo_states['q_v'],
+          thermo_states['q_l'],
+          thermo_states['q_c'],
+      )
+      source = tf.nest.map_structure(
+          tf.math.subtract, source, cond_or_evap_source_fn(evap)
+      )
 
     return source

@@ -282,8 +282,11 @@ class SgsModel(object):
             self._params.smagorinsky.c_s / coeff *
             tf.ones_like(var, dtype=var.dtype) for var in field_vars[0]
         ]
-      return (self.smagorinsky(velocity, self._delta, c_s)
-              if use_pr_t else self.smagorinsky(field_vars, self._delta, c_s))
+      diff_t = (
+          self.smagorinsky(velocity, self._delta, c_s)
+          if use_pr_t
+          else self.smagorinsky(field_vars, self._delta, c_s)
+      )
     elif self._params.WhichOneof('sgs_model_type') == 'dynamic_smagorinsky':
       if not velocity:
         raise ValueError('Velocity field is required for the dynamic '
@@ -296,8 +299,9 @@ class SgsModel(object):
           self._params.dynamic_smagorinsky.periodic_y,
           self._params.dynamic_smagorinsky.periodic_z,
       ]
-      return self.dynamic_smagorinsky(self._delta, periodic_dims, replicas,
-                                      velocity, field_vars[0])
+      diff_t = self.dynamic_smagorinsky(
+          self._delta, periodic_dims, replicas, velocity, field_vars[0]
+      )
     elif self._params.WhichOneof('sgs_model_type') == 'smagorinsky_lilly':
       if additional_states is None or 'theta_v' not in additional_states.keys():
         raise ValueError(
@@ -310,17 +314,26 @@ class SgsModel(object):
 
       scalar = velocity if use_pr_t else field_vars
 
-      return self.smagorinsky_lilly(scalar, velocity,
-                                    additional_states['theta_v'], self._delta,
-                                    c_s, self._params.smagorinsky_lilly.pr_t)
+      diff_t = self.smagorinsky_lilly(
+          scalar,
+          velocity,
+          additional_states['theta_v'],
+          self._delta,
+          c_s,
+          self._params.smagorinsky_lilly.pr_t,
+      )
     elif self._params.WhichOneof('sgs_model_type') == 'vreman':
-      return [
+      diff_t = [
           nu_t / self._params.vreman.pr_t for nu_t in self.vreman(
               velocity, self._delta, self._params.vreman.c_s)
       ]
     else:
       raise ValueError('Unsupported sub-grid scale model {}'.format(
           self._params.WhichOneof('sgs_model_type')))
+
+    return tf.nest.map_structure(
+        lambda d: tf.math.maximum(d, self._params.diff_t_min), diff_t
+    )
 
   def turbulent_viscosity(
       self,
@@ -356,7 +369,7 @@ class SgsModel(object):
             self._params.smagorinsky.c_s * tf.ones_like(var, dtype=var.dtype)
             for var in field_vars[0]
         ]
-      return self.smagorinsky(field_vars, self._delta, c_s)
+      nu_t = self.smagorinsky(field_vars, self._delta, c_s)
     elif self._params.WhichOneof('sgs_model_type') == 'dynamic_smagorinsky':
       if replicas is None:
         raise ValueError('TPU topology replicas needs to be specified for the '
@@ -366,22 +379,26 @@ class SgsModel(object):
           self._params.dynamic_smagorinsky.periodic_y,
           self._params.dynamic_smagorinsky.periodic_z,
       ]
-      return self.dynamic_smagorinsky(self._delta, periodic_dims, replicas,
+      nu_t = self.dynamic_smagorinsky(self._delta, periodic_dims, replicas,
                                       field_vars)
     elif self._params.WhichOneof('sgs_model_type') == 'smagorinsky_lilly':
       if additional_states is None or 'theta_v' not in additional_states.keys():
         raise ValueError(
             '`theta_v` is required in the `additional_states` for the '
             'Smagorinsky-Lilly model.')
-      return self.smagorinsky_lilly(field_vars, field_vars,
+      nu_t = self.smagorinsky_lilly(field_vars, field_vars,
                                     additional_states['theta_v'], self._delta,
                                     self._params.smagorinsky_lilly.c_s,
                                     self._params.smagorinsky_lilly.pr_t)
     elif self._params.WhichOneof('sgs_model_type') == 'vreman':
-      return self.vreman(field_vars, self._delta, self._params.vreman.c_s)
+      nu_t = self.vreman(field_vars, self._delta, self._params.vreman.c_s)
     else:
       raise ValueError('Unsupported sub-grid scale model {}'.format(
           self._params.WhichOneof('sgs_model_type')))
+
+    return tf.nest.map_structure(
+        lambda n: tf.math.maximum(n, self._params.nu_t_min), nu_t
+    )
 
   def smagorinsky(
       self,

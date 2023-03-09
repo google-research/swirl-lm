@@ -133,6 +133,7 @@ message PrePostProcessInfo {
 }
 
 // Stores information about a sub-grid scale model.
+// Next id: 8
 message SubGridScaleModel {
   // Parameters required by the constant Smagorinsky model.
   message SmagorinskyModel {
@@ -194,6 +195,12 @@ message SubGridScaleModel {
 
   // An upper bound of the turbulent diffusivity.
   optional float diff_t_max = 5 [default = 1.0];
+
+  // A lower bound of the turbulent viscosity.
+  optional float nu_t_min = 6 [default = 0.0];
+
+  // A lower bound of the turbulent diffusivity.
+  optional float diff_t_min = 7 [default = 0.0];
 }
 
 // Stores the parameters required by an incompressible Navier-Stokes simulation.

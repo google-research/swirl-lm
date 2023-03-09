@@ -84,7 +84,8 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
       self._cloud = cloud.Cloud(
           self._thermodynamics.model)
       self._microphysics = microphysics_kw1978.MicrophysicsKW1978(
-          self._thermodynamics.model)
+          params, self._thermodynamics.model
+      )
     else:
       raise ValueError(
           '`water` thermodynamics is required for the total energy equation, '

@@ -50,7 +50,8 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
 
     if isinstance(self._thermodynamics.model, water.Water):
       self._microphysics = microphysics_kw1978.MicrophysicsKW1978(
-          self._thermodynamics.model)
+          params, self._thermodynamics.model
+      )
       self._cloud = cloud.Cloud(self._thermodynamics.model)
     else:
       self._microphysics = None

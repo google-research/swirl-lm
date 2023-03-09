@@ -27,6 +27,7 @@
 # limitations under the License.
 """A library of the microphysics from Klemp & Wilhelmson, 1978."""
 
+from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.physics.atmosphere import microphysics_generic
 from swirl_lm.physics.thermodynamics import water
 import tensorflow as tf
@@ -35,8 +36,14 @@ import tensorflow as tf
 class MicrophysicsKW1978(microphysics_generic.Microphysics):
   """An object for handling precipitation modeling."""
 
-  def __init__(self, water_model: water.Water) -> None:
+  def __init__(
+      self,
+      params: parameters_lib.SwirlLMParameters,
+      water_model: water.Water,
+  ) -> None:
     """Initialize with a water thermodynamics model."""
+    super().__init__(params)
+
     self._water_model = water_model
 
   @property

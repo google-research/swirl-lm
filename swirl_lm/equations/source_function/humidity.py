@@ -72,7 +72,8 @@ class Humidity(scalar_generic.ScalarGeneric):
     self._microphysics = None
     if isinstance(self._thermodynamics.model, water.Water):
       self._microphysics = microphysics_kw1978.MicrophysicsKW1978(
-          self._thermodynamics.model)
+          params, self._thermodynamics.model
+      )
     else:
       raise ValueError(
           '`water` thermodynamics is required for the humidity equation, but'

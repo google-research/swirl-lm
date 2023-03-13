@@ -58,8 +58,9 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
       self._cloud = None
 
     self._include_radiation = (
-        self._scalar_params.HasField('potential_temperature') and
-        self._scalar_params.potential_temperature.include_radiation)
+        self._scalar_params.HasField('potential_temperature')
+        and self._scalar_params.potential_temperature.include_radiation
+    )
     if self._include_radiation:
       assert self._g_dim is not None, (
           'The direction for gravity needs to be defined to include cloud'
@@ -67,8 +68,9 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
       )
 
     self._include_subsidence = (
-        self._scalar_params.HasField('potential_temperature') and
-        self._scalar_params.potential_temperature.include_subsidence)
+        self._scalar_params.HasField('potential_temperature')
+        and self._scalar_params.potential_temperature.include_subsidence
+    )
     if self._include_radiation:
       assert self._g_dim is not None, (
           'The direction for gravity needs to be defined to include cloud'
@@ -121,19 +123,22 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
 
     # Compute the temperature.
     temperature = self._thermodynamics.model.saturation_adjustment(
-        self._scalar_name, phi, rho_thermal, q_t, zz)
+        self._scalar_name, phi, rho_thermal, q_t, zz
+    )
     thermo_states.update({'T': temperature})
 
     # Compute the potential temperature.
     if self._scalar_name == 'theta_li':
       buf = self._thermodynamics.model.potential_temperatures(
-          temperature, q_t, rho_thermal, zz)
+          temperature, q_t, rho_thermal, zz
+      )
       theta = buf['theta']
       thermo_states.update({'theta': theta})
 
     # Compute the liquid and ice humidity.
     q_l, q_i = self._thermodynamics.model.equilibrium_phase_partition(
-        temperature, rho_thermal, q_t)
+        temperature, rho_thermal, q_t
+    )
     thermo_states.update({'q_l': q_l, 'q_i': q_i})
 
     thermo_states['q_c'] = tf.nest.map_structure(tf.math.add, q_l, q_i)
@@ -159,9 +164,7 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
     Returns:
       A dictionary of variables required by wall diffusive flux closure models.
     """
-    helper_variables = {
-        key: states[key] for key in common.KEYS_VELOCITY
-    }
+    helper_variables = {key: states[key] for key in common.KEYS_VELOCITY}
     helper_variables.update(
         self._get_thermodynamic_variables(phi, states, additional_states)
     )
@@ -297,16 +300,24 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
       )
 
       def get_cond_or_evap(
+          rho: tf.Tensor,
           cp: tf.Tensor,
           t_0: tf.Tensor,
           theta_0: tf.Tensor,
           s: tf.Tensor,
       ) -> tf.Tensor:
         """Computes the condensation or evaporation source term."""
-        return (self._thermodynamics.model.lh_v0 / cp) * (theta_0 / t_0) * s
+        return (
+            rho * (self._thermodynamics.model.lh_v0 / cp) * (theta_0 / t_0) * s
+        )
 
       return tf.nest.map_structure(
-          get_cond_or_evap, cp, t_0, theta_0, cond_or_evap
+          get_cond_or_evap,
+          states[common.KEY_RHO],
+          cp,
+          t_0,
+          theta_0,
+          cond_or_evap,
       )
 
     if self._include_condensation:

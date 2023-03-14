@@ -12,24 +12,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A base data class for the lookup tables of atmospheric optical properties."""
+# Copyright 2023 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+"""A base data class for loading and accessing the RRTMGP lookup tables."""
 
 import abc
 import dataclasses
-import os
-import tempfile
-from typing import Any, Dict, Text, Tuple
-import zipfile
+from typing import Any, Dict
 
 import netCDF4 as nc
-import numpy as np
+from swirl_lm.physics.radiation.optics import data_loader_base as loader
 from swirl_lm.utility import types
 import tensorflow as tf
 
 
 @dataclasses.dataclass(frozen=True)
-class LookupGasOpticsBase(metaclass=abc.ABCMeta):
-  """Lookup table of gases' optical properties in the longwave bands."""
+class LookupGasOpticsBase(loader.DataLoaderBase, metaclass=abc.ABCMeta):
+  """Abstract class for loading and accessing tables of optical properties."""
+  # Volume mixing ratio (vmr) array index for H2O.
+  idx_h2o: int
   # Number of gases used in the lookup table.
   n_gases: int
   # Number of frequency bands.
@@ -45,77 +57,101 @@ class LookupGasOpticsBase(metaclass=abc.ABCMeta):
   # Number of reference binary mixing fractions, for absorption coefficient
   # lookup table.
   n_mixing_fraction: int
-  # Number of major absorbing gases
+  # Number of major absorbing gases.
   n_maj_absrb: int
-  # Number of minor absorbing gases
+  # Number of minor absorbing gases.
   n_minor_absrb: int
-  # Number of minor absorbers in lower atmosphere
+  # Number of minor absorbers in lower atmosphere.
   n_minor_absrb_lower: int
-  # Number of minor absorbers in upper atmosphere
+  # Number of minor absorbers in upper atmosphere.
   n_minor_absrb_upper: int
-  # Number of minor contributors in the lower atmosphere
+  # Number of minor contributors in the lower atmosphere.
   n_contrib_lower: int
-  # Number of minor contributors in the upper atmosphere
+  # Number of minor contributors in the upper atmosphere.
   n_contrib_upper: int
-  # Reference pressure separating upper and lower atmosphere
+  # Reference pressure separating upper and lower atmosphere.
   p_ref_tropo: tf.Tensor
-  # Reference temperature
+  # Reference temperature.
   t_ref_absrb: tf.Tensor
-  # Reference pressure
+  # Reference pressure.
   p_ref_absrb: tf.Tensor
-  # minimum pressure supported by RRTMGP lookup tables
+  # Minimum pressure supported by RRTMGP lookup tables.
   p_ref_min: tf.Tensor
-  # Δt for reference temperature values (Δt is constant)
+  # Δt for reference temperature values (Δt is constant).
   dtemp: tf.Tensor
-  # Δ for log of reference pressure values (Δp is constant)
+  # Δ for log of reference pressure values (Δlog(p) is constant).
   dln_p: tf.Tensor
-  # major absorbing species in each band `(2, n_atmos_layers, n_bnd)`
+  # Major absorbing species in each band `(n_bnd, n_atmos_layers, 2)`.
   key_species: tf.Tensor
-  # major absorption coefficient `(n_gpt, n_η, n_p_ref, n_t_ref)`
+  # Major absorption coefficient `(n_t_ref, n_p_ref, n_η, n_gpt)`.
   kmajor: tf.Tensor
-  # minor absorption coefficient in lower atmosphere `(n_contrib_lower, n_η,
-  # n_t_ref)`
+  # Minor absorption coefficient in lower atmosphere `(n_t_ref, n_η,
+  # n_contrib_lower)`.
   kminor_lower: tf.Tensor
-  # minor absorption coefficient in upper atmosphere `(n_contrib_upper, n_η,
-  # n_t_ref)`
+  # Minor absorption coefficient in upper atmosphere `(n_t_ref, n_η,
+  # n_contrib_upper)`.
   kminor_upper: tf.Tensor
-  # starting and ending `g-point` for each band `(2, n_bnd)`
+  # Starting and ending `g-point` for each band `(n_bnd, 2)`.
   bnd_lims_gpt: tf.Tensor
-  # starting and ending wavenumber for each band `(2, n_bnd)`
+  # Starting and ending wavenumber for each band `(n_bnd, 2)`.
   bnd_lims_wn: tf.Tensor
-  # `g-point` limits for minor contributors in lower atmosphere `(2,
-  # n_contrib_lower)`
+  # `g-point` limits for minor contributors in lower atmosphere `(
+  # n_contrib_lower, 2)`.
   minor_lower_gpt_lims: tf.Tensor
-  # `g-point` limits for minor contributors in upper atmosphere `(2,
-  # n_contrib_upper)`
+  # `g-point` limits for minor contributors in upper atmosphere `(
+  # n_contrib_upper, 2)`.
   minor_upper_gpt_lims: tf.Tensor
-  # minor gas (lower atmosphere) scales with density? `(n_minor_absrb_lower)`
+  # Minor gas (lower atmosphere) scales with density? `(n_minor_absrb_lower)`.
   minor_lower_scales_with_density: tf.Tensor
-  # minor gas (upper atmosphere) scales with density? `(n_minor_absrb_upper)`
+  # Minor gas (upper atmosphere) scales with density? `(n_minor_absrb_upper)`.
   minor_upper_scales_with_density: tf.Tensor
-  # minor gas (lower atmosphere) scales by compliment `(n_minor_absrb_lower)`
+  # Minor gas (lower atmosphere) scales by compliment `(n_minor_absrb_lower)`.
   lower_scale_by_complement: tf.Tensor
-  # minor gas (upper atmosphere) scales by compliment `(n_minor_absrb_upper)`
+  # Minor gas (upper atmosphere) scales by compliment `(n_minor_absrb_upper)`.
   upper_scale_by_complement: tf.Tensor
-  # reference pressures used by the lookup table `(n_p_ref)`
+  # Reference pressures used by the lookup table `(n_p_ref)`.
   p_ref: tf.Tensor
-  # reference temperatures used by the lookup table `(n_t_ref)`
+  # Reference temperatures used by the lookup table `(n_t_ref)`.
   t_ref: tf.Tensor
-  # reference volume mixing ratios used by the lookup table `(2, n_gases,
-  # n_t_ref)`
+  # Reference volume mixing ratios used by the lookup table `(n_t_ref, n_gases,
+  # 2)`.
   vmr_ref: tf.Tensor
+  # Mapping from gas name to index.
+  idx_gases: Dict[str, int]
 
   @classmethod
   def _load_data(
-      cls, tables: types.TensorMap,
+      cls,
+      ds: nc.Dataset,
+      tables: types.VariableMap,
       dims: types.DimensionMap,
-  ) -> Dict[Text, Any]:
+  ) -> Dict[str, Any]:
+    """Preprocesses the RRTMGP gas optics data.
+
+    Args:
+      ds: The original netCDF Dataset containing the RRTMGP optics data.
+      tables: The extracted data as a dictionary of `tf.Variable`s.
+      dims: A dictionary containing dimension information for the tables.
+
+    Returns:
+      A dictionary containing dimension information and the preprocessed RRTMGP
+      data as `tf.Variable`s.
+    """
     p_ref = tables['press_ref']
     t_ref = tables['temp_ref']
     p_ref_min = tf.math.reduce_min(p_ref)
     dtemp = t_ref[1] - t_ref[0]
     dln_p = tf.math.log(p_ref[0]) - tf.math.log(p_ref[1])
+    idx_gases = cls._create_index(ds['gas_names'][:].data)
+    # Map all h2o related species to the same index.
+    idx_h2o = idx_gases['h2o']
+    # water vapor - foreign
+    idx_gases['h2o_frgn'] = idx_h2o
+    # water vapor - self-continua
+    idx_gases['h2o_self'] = idx_h2o
     return dict(
+        idx_h2o=idx_h2o,
+        idx_gases=idx_gases,
         n_gases=dims['absorber'],
         n_bnd=dims['bnd'],
         n_gpt=dims['gpt'],
@@ -155,53 +191,3 @@ class LookupGasOpticsBase(metaclass=abc.ABCMeta):
         dln_p=dln_p,
         vmr_ref=tables['vmr_ref'],
     )
-
-  @classmethod
-  def _reload_tensors_as_single_graph_nodes(
-      cls,
-      tf_dict_in: types.TensorMap,
-  ) -> types.TensorMap:
-    """Uses tf.io API to load lookup tensors as single nodes in the TF graph."""
-    tf_dict_out = {}
-    with tempfile.TemporaryDirectory() as tmp_dir:
-      for k, v in tf_dict_in.items():
-        fname = os.path.join(tmp_dir, k)
-        serialized = tf.io.serialize_tensor(v)
-        tf.io.write_file(fname, serialized)
-        new_tensor = tf.io.parse_tensor(
-            tf.io.read_file(fname), out_type=v.dtype
-        )
-        tf_dict_out.update({k: new_tensor})
-    return tf_dict_out
-
-  @classmethod
-  def _parse_nc_file(
-      cls,
-      path: Text
-  ) -> Tuple[types.TensorMap, types.DimensionMap]:
-    """Utility function for unpacking the lookup files and loading tensors."""
-    filename = os.path.basename(path)
-    with tempfile.TemporaryDirectory() as tmp_dir:
-      with zipfile.ZipFile(path, 'r') as zip_file:
-        zip_file.extractall(tmp_dir)
-        filename = os.path.splitext(filename)[0]
-        extracted_path = os.path.join(tmp_dir, filename + '.nc')
-      ds = nc.Dataset(extracted_path, 'r')
-
-    tensor_dict = {}
-    dim_map = {k: v.size for k, v in ds.dimensions.items()}
-
-    for key in ds.variables:
-      val = ds[key][:].data
-      if val.dtype == np.float64:
-        val = val.astype(np.float32)
-      tensor_dict.update({key: tf.convert_to_tensor(val)})
-    tensor_dict = cls._reload_tensors_as_single_graph_nodes(tensor_dict)
-    return (tensor_dict, dim_map)
-
-  @classmethod
-  @abc.abstractmethod
-  def from_nc_file(
-      cls, path: Text
-  ) -> 'LookupGasOpticsBase':
-    """Loads lookup tables from NetCDF files and populates the attributes."""

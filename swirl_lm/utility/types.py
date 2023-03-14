@@ -48,6 +48,7 @@ ReplicaCoordinates = Tuple[int, int, int]
 InitFn = Callable[[Union[int, tf.Tensor], ReplicaCoordinates], FlowFieldMap]
 
 TensorMap = Mapping[Text, tf.Tensor]
+VariableMap = Mapping[Text, tf.Variable]
 DimensionMap = Mapping[Text, int]
 
 BoolMap = Mapping[Text, bool]

@@ -27,7 +27,7 @@ from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import types
 import tensorflow as tf
 
-_POTENTIAL_TEMPERATURE_VARNAME = ('theta', 'theta_li')
+POTENTIAL_TEMPERATURE_VARNAME = ('theta', 'theta_li')
 
 
 class PotentialTemperature(scalar_generic.ScalarGeneric):
@@ -43,9 +43,9 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
     """Retrieves context information for the potential temperature source."""
     super().__init__(kernel_op, params, scalar_name, thermodynamics)
 
-    assert scalar_name in _POTENTIAL_TEMPERATURE_VARNAME, (
+    assert scalar_name in POTENTIAL_TEMPERATURE_VARNAME, (
         f'Source term function for {scalar_name} is not implemented. Supported'
-        f' potential temperature types are: {_POTENTIAL_TEMPERATURE_VARNAME}.'
+        f' potential temperature types are: {POTENTIAL_TEMPERATURE_VARNAME}.'
     )
 
     if isinstance(self._thermodynamics.model, water.Water):
@@ -123,8 +123,7 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
 
     # Compute the temperature.
     temperature = self._thermodynamics.model.saturation_adjustment(
-        self._scalar_name, phi, rho_thermal, q_t, zz
-    )
+        self._scalar_name, phi, rho_thermal, q_t, zz, additional_states)
     thermo_states.update({'T': temperature})
 
     # Compute the potential temperature.
@@ -232,6 +231,7 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
           states['q_t'],
           thermo_states['T'],
           thermo_states['zz'],
+          additional_states,
       )
       cp_m_exner_inv = tf.nest.map_structure(
           tf.math.multiply, cp_m_inv, exner_inv

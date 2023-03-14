@@ -121,9 +121,9 @@ class Microphysics(abc.ABC):
     )
     cp = self._water_model.cp_m(q_t, q_l, q_i)
 
-    def condensation_fn(q_v, q_vs, t_0, theta_0, theta, cp):
+    def condensation_fn(q_v, q_vs, t_0, theta_0, theta, cp, q_c):
       """Computes the condensation rate."""
-      return (q_v - q_vs) / (
+      d_q_v = (q_v - q_vs) / (
           1.0
           + q_vs
           * (self._water_model.lh_v0 / cp / t_0)
@@ -133,8 +133,9 @@ class Microphysics(abc.ABC):
               * (theta_0 / theta)
               - 1.0
           )
-      ) / self._params.dt
+      )
+      return tf.maximum(d_q_v, -q_c) / self._params.dt
 
     return tf.nest.map_structure(
-        condensation_fn, q_v, q_vs, t_0, theta_0, theta, cp
+        condensation_fn, q_v, q_vs, t_0, theta_0, theta, cp, q_c
     )

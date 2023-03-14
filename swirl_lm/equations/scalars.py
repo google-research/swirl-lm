@@ -105,7 +105,7 @@ class Scalars(object):
     # Get functions that computes terms in tranport equations for all scalars.
     self._scalar_model = {}
     for scalar_name in self._params.transport_scalars_names:
-      if scalar_name == 'theta_li':
+      if scalar_name in potential_temperature.POTENTIAL_TEMPERATURE_VARNAME:
         scalar_model = potential_temperature.PotentialTemperature
       elif scalar_name in humidity.HUMIDITY_VARNAME:
         scalar_model = humidity.Humidity

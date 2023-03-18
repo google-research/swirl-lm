@@ -321,7 +321,6 @@ class Velocity(object):
 
         gravity = eq_utils.buoyancy_source(self._kernel_op, rho_mix, rho_ref,
                                            self._params, dim)
-
         # Computes the convection term.
         g_corr = None if np.abs(
             self._gravity_vec[dim]) < _G_THRESHOLD else gravity
@@ -618,6 +617,22 @@ class Velocity(object):
         self._src_manager.update_helper_variable_from_additional_states(
             additional_states))
 
+  def _maybe_update_diagnostics(
+      self, additional_states, states_0, template_state):
+    """Updaets diagnostics states if specified in the config."""
+    diagnostics = {}
+    for i, buoyancy_key in enumerate(common.KEYS_DIAGNOSTICS_BUOYANCY):
+      if buoyancy_key in additional_states.keys():
+        zz = additional_states.get(
+            'zz', tf.nest.map_structure(tf.zeros_like, template_state))
+        rho_ref = self._thermodynamics.rho_ref(zz, additional_states)
+        diagnostics.update({
+            buoyancy_key:
+            eq_utils.buoyancy_source(
+                self._kernel_op, states_0['rho_thermal'], rho_ref,
+                self._params, i)})
+    return diagnostics
+
   def prediction_step(
       self,
       replica_id: tf.Tensor,
@@ -666,9 +681,9 @@ class Velocity(object):
 
     forces = [self._source[_KEY_U], self._source[_KEY_V], self._source[_KEY_W]]
 
-    momentum_rhs = self._momentum_update(replica_id, replicas, helper_variables,
-                                         mu, states[_KEY_P],
-                                         states_0['rho_thermal'], forces)
+    momentum_rhs = self._momentum_update(
+        replica_id, replicas, helper_variables, mu, states[_KEY_P],
+        states_0['rho_thermal'], forces)
 
     rho_u, rho_v, rho_w = time_integration.time_advancement_explicit(
         functools.partial(momentum_rhs, u=u_mid, v=v_mid, w=w_mid),
@@ -723,6 +738,9 @@ class Velocity(object):
 
     if 'nu_t' in additional_states.keys() and self._use_sgs:
       updated_velocity.update({'nu_t': nu_t})
+
+    updated_velocity.update(
+        self._maybe_update_diagnostics(additional_states, states_0, u))
 
     return updated_velocity  # pytype: disable=bad-return-type
 

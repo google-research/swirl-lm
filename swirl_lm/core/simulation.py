@@ -22,6 +22,7 @@ from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.base import physical_variable_keys_manager
 from swirl_lm.boundary_condition import immersed_boundary_method
 from swirl_lm.communication import halo_exchange
+from swirl_lm.equations import common
 from swirl_lm.equations import pressure as pressure_model
 from swirl_lm.equations import scalars as scalars_model
 from swirl_lm.equations import velocity as velocity_model
@@ -110,10 +111,16 @@ class Simulation:
     if params.use_sgs:
       self._updated_additional_states_keys += ['nu_t', 'drho']
     self._updated_additional_states_keys += self.monitor.data.keys()
-    # Helper variables that are updated from the main simulation step instead of
-    # additional_states_update_fn.
-    self._helper_var_names = ('rho_thermal', 'drho', 'dp')
-    self._updated_additional_states_keys += list(self._helper_var_names)
+    # Diagnostic variables for output.
+    self._diagnostic_var_names = common.KEYS_DIAGNOSTICS_BUOYANCY
+    self._updated_additional_states_keys += list(
+        self._diagnostic_var_names)
+    # These are states used in inner simulation step and they are "transient" in
+    # the sense unless explicitly specified in the additional states
+    # configuration, they are not available outside the inner simulation steps.
+    self._transient_var_names = ('rho_thermal', 'drho', 'dp')
+    self._updated_additional_states_keys += list(
+        self._transient_var_names)
 
   def _exchange_halos(self, f, bc_f, replica_id, replicas):
     """Performs halo exchange for the variable f."""
@@ -163,6 +170,9 @@ class Simulation:
             self.thermodynamics.update_thermal_density(states_0,
                                                        additional_states),
         'drho': [tf.zeros_like(rho_i) for rho_i in rho_0],
+        'buoyancy_u': [tf.zeros_like(rho_i) for rho_i in rho_0],
+        'buoyancy_v': [tf.zeros_like(rho_i) for rho_i in rho_0],
+        'buoyancy_w': [tf.zeros_like(rho_i) for rho_i in rho_0],
     })
     states_0.update(
         self.velocity.update_velocity_halos(replica_id, replicas, states_0,
@@ -339,6 +349,9 @@ class Simulation:
         loop_vars=(i0, states_init),
         back_prop=False)
 
+    # For those additional states values that are not meant to be changed by the
+    # inner solver (indicated by the `updated_additional_state_keys`), revert
+    # their values back to the original values.
     if self._update_additional_states:
       states_new.update({
           key: val
@@ -353,9 +366,11 @@ class Simulation:
     for varname in ['u', 'v', 'w'] + self._params.transport_scalars_names:
       states_new.pop('rho_{}'.format(varname))
 
-    # Removes helper variables that are not specified as additional_states.
-    for helper_var_name in self._helper_var_names:
-      if helper_var_name not in additional_states:
-        states_new.pop(helper_var_name)
+    # Removes diagnostic variables and transient variables that are not
+    # specified as additional_states.
+    for var_name in (
+        list(self._diagnostic_var_names) + list(self._transient_var_names)):
+      if var_name not in additional_states:
+        states_new.pop(var_name)
 
     return states_new

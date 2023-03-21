@@ -59,6 +59,7 @@ class MicrophysicsKW1978(microphysics_generic.Microphysics):
       q_v: water.FlowFieldVal,
       q_l: water.FlowFieldVal,
       q_c: water.FlowFieldVal,
+      additional_states: water.FlowFieldMap,
   ) -> water.FlowFieldVal:
     r"""The rain evaporation rate.
 
@@ -93,6 +94,8 @@ class MicrophysicsKW1978(microphysics_generic.Microphysics):
       q_l: The specific humidity of the cloud liquid phase (kg/kg).
       q_c: The specific humidity of the cloud humidity condensed phase,
         including ice and liquid (kg/kg).
+      additional_states: Helper variables in the simulation. It is used to
+        compute the reference density and pressure in this function.
 
     Returns:
       The evaporation rate of the rain drops in the unit of 1/sec.
@@ -100,28 +103,26 @@ class MicrophysicsKW1978(microphysics_generic.Microphysics):
     Raises:
       ValueError: If the thermodynamics model is not `Water`.
     """
+    zz = additional_states.get('zz', tf.nest.map_structure(tf.zeros_like, q_r))
+    rho_bar = self._water_model.rho_ref(zz, additional_states)
+    p_bar = self._water_model.p_ref(zz, additional_states)
     q_vs = self.water_model.saturation_q_vapor(temperature, rho, q_l, q_c)
-
-    def saturation_vapor_from_mixture_fraction(q_vs, rho, t):
-      return self.water_model.r_v * q_vs * rho * t
-
-    p_vs = tf.nest.map_structure(saturation_vapor_from_mixture_fraction, q_vs,
-                                 rho, temperature)
+    p_vs = tf.nest.map_structure(tf.math.multiply, q_vs, p_bar)
 
     precipitation_bulk_density = tf.nest.map_structure(
         lambda q_r_i, rho_i: rho_i * tf.clip_by_value(  # pylint: disable=g-long-lambda
-            q_r_i, clip_value_min=0.0, clip_value_max=1.0), q_r, rho)
+            q_r_i, clip_value_min=0.0, clip_value_max=1.0), q_r, rho_bar)
 
-    def c_coefficient(rho_qr):
+    def ventilation_factor(rho_qr):
       return 1.6 + 30.3922 * tf.math.pow(rho_qr, 0.2046)
 
-    c = tf.nest.map_structure(c_coefficient, precipitation_bulk_density)
+    c = tf.nest.map_structure(ventilation_factor, precipitation_bulk_density)
 
     def evaporation_rate(rho, q_v, q_vs, c, rho_qr, p_vs):
       return ((1.0 / rho) * (1.0 - q_v / q_vs) * c * tf.math.pow(
           rho_qr, 0.525) / (2.03e4 + 9.584e6 / p_vs))
 
-    e_r = tf.nest.map_structure(evaporation_rate, rho, q_v, q_vs, c,
+    e_r = tf.nest.map_structure(evaporation_rate, rho_bar, q_v, q_vs, c,
                                 precipitation_bulk_density, p_vs)
     return e_r
 
@@ -178,6 +179,7 @@ class MicrophysicsKW1978(microphysics_generic.Microphysics):
       self,
       rho: water.FlowFieldVal,
       q_r: water.FlowFieldVal,
+      additional_states: water.FlowFieldMap,
       rho_ref: float = 1.15,
   ) -> water.FlowFieldVal:
     r"""Terminal velocity used for rain water convection term.
@@ -193,11 +195,19 @@ class MicrophysicsKW1978(microphysics_generic.Microphysics):
     Args:
        rho: density [kg/m^3]
        q_r: rain water mixture fraction [kg/kg]
+       additional_states: Helper variables in the simulation. It is used to
+         compute the reference density in this function.
        rho_ref: Reference density at ground level. Default is 1.15 [kg/m^3]
 
     Returns:
       The terminal velocity of rain water in units of m/s.
     """
+    # Temporarity disabling `rho` instead of removing it from the argument list.
+    # It will be cleaned up after the formulation is finalized.
+    del rho
+
+    zz = additional_states.get('zz', tf.nest.map_structure(tf.zeros_like, q_r))
+    rho_bar = self._water_model.rho_ref(zz, additional_states)
 
     k1 = 14.34
     k2 = 0.1346
@@ -208,12 +218,12 @@ class MicrophysicsKW1978(microphysics_generic.Microphysics):
           rho * tf.clip_by_value(q_r, clip_value_min=0.0, clip_value_max=1.0),
           k2)
 
-    f1 = tf.nest.map_structure(factor1, rho, q_r)
+    f1 = tf.nest.map_structure(factor1, rho_bar, q_r)
 
     def factor2(rho):
       # Take advantage of fast reciprocal square root op.
       return sqrt_rho_ref * tf.math.rsqrt(rho)
 
-    f2 = tf.nest.map_structure(factor2, rho)
+    f2 = tf.nest.map_structure(factor2, rho_bar)
 
     return tf.nest.map_structure(tf.math.multiply, f1, f2)

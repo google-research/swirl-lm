@@ -359,6 +359,7 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
           thermo_states['q_v'],
           thermo_states['q_l'],
           thermo_states['q_c'],
+          additional_states,
       )
       source = tf.nest.map_structure(
           tf.math.subtract, source, cond_or_evap_source_fn(evap)

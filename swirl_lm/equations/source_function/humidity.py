@@ -197,14 +197,12 @@ class Humidity(scalar_generic.ScalarGeneric):
       additional_states: types.FlowFieldMap,
   ) -> Tuple[types.FlowFieldVal, types.FlowFieldVal, types.FlowFieldVal]:
     """Determines the momentum to be used to compute the convection term."""
-    del additional_states
-
     momentum = [states[key] for key in common.KEYS_MOMENTUM]
 
     if self._scalar_name == 'q_r':
       # Subtract term for rain terminal velocity from the vertical momentum.
       rain_water_terminal_velocity = self._microphysics.terminal_velocity(
-          states['rho_thermal'], phi
+          states['rho_thermal'], phi, additional_states
       )
       rain_water_momentum = tf.nest.map_structure(
           tf.math.multiply, rain_water_terminal_velocity, states['rho']
@@ -266,7 +264,13 @@ class Humidity(scalar_generic.ScalarGeneric):
       # q_v = q_t - q_l - q_i. Not: We assume q_i == 0 here.
       q_v = tf.nest.map_structure(tf.math.subtract, thermo_states['q_t'], q_l)
       rain_water_evaporation_rate = self._microphysics.evaporation(
-          states['rho_thermal'], thermo_states['T'], q_r, q_v, q_l, q_c
+          states['rho_thermal'],
+          thermo_states['T'],
+          q_r,
+          q_v,
+          q_l,
+          q_c,
+          additional_states,
       )
       # Net vapor to rain water rate is
       #   (vapor to rain water rate) - (evaporation rate).

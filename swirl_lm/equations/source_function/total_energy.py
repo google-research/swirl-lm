@@ -357,9 +357,9 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
       )
       # Find q_v from the invariant q_t = q_c + q_v = q_l + q_i + q_v.
       q_v = tf.nest.map_structure(tf.math.subtract, thermo_states['q_t'], q_c)
-      rain_water_evaporation_rate = (
-          self._microphysics.evaporation(
-              rho_thermal, thermo_states['T'], q_r, q_v, q_l, q_c))
+      rain_water_evaporation_rate = self._microphysics.evaporation(
+          rho_thermal, thermo_states['T'], q_r, q_v, q_l, q_c, additional_states
+      )
       # Get potential energy.
       pe = tf.nest.map_structure(
           lambda zz_i: constants.G * zz_i, thermo_states['zz']

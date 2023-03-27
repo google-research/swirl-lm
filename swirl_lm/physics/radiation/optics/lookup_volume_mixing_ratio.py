@@ -1,4 +1,4 @@
-# Copyright 2022 The swirl_lm Authors.
+# Copyright 2023 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -31,6 +31,7 @@ import dataclasses
 from typing import Any, Dict
 
 import netCDF4 as nc
+from swirl_lm.physics.radiation.optics import constants
 from swirl_lm.physics.radiation.optics import data_loader_base as loader
 from swirl_lm.utility import types
 import tensorflow as tf
@@ -98,6 +99,9 @@ class LookupVolumeMixingRatio(loader.DataLoaderBase):
       vmr_gm[chem_formula] = tables[varname][exp_label] * float(
           ds[varname].units
       )
+    # Dry air is a special case that always has a volume mixing ratio of 1
+    # since, by definition, vmr is normalized by the number of moles of dry air.
+    vmr_gm[constants.DRY_AIR_KEY] = constants.DRY_AIR_VMR
 
     return dict(
         vmr_h2o=tables['water_vapor'][exp_label, site_coord, :],

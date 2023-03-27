@@ -1,4 +1,4 @@
-# Copyright 2022 The swirl_lm Authors.
+# Copyright 2023 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -32,9 +32,13 @@ import dataclasses
 from typing import Any, Dict
 
 import netCDF4 as nc
+from swirl_lm.physics.radiation.optics import constants
 from swirl_lm.physics.radiation.optics import data_loader_base as loader
 from swirl_lm.utility import types
 import tensorflow as tf
+
+
+DRY_AIR_KEY = 'dry_air'
 
 
 @dataclasses.dataclass(frozen=True)
@@ -42,6 +46,8 @@ class LookupGasOpticsBase(loader.DataLoaderBase, metaclass=abc.ABCMeta):
   """Abstract class for loading and accessing tables of optical properties."""
   # Volume mixing ratio (vmr) array index for H2O.
   idx_h2o: int
+  # Volume mixing ratio (vmr) array index for O3.
+  idx_o3: int
   # Number of gases used in the lookup table.
   n_gases: int
   # Number of frequency bands.
@@ -142,7 +148,17 @@ class LookupGasOpticsBase(loader.DataLoaderBase, metaclass=abc.ABCMeta):
     p_ref_min = tf.math.reduce_min(p_ref)
     dtemp = t_ref[1] - t_ref[0]
     dln_p = tf.math.log(p_ref[0]) - tf.math.log(p_ref[1])
-    idx_gases = cls._create_index(ds['gas_names'][:].data)
+    gas_names_ds = ds['gas_names'][:].data
+    gas_names = []
+    for gas_name in gas_names_ds:
+      gas_names.append(
+          ''.join([g_i.decode('utf-8') for g_i in gas_name]).strip()
+      )
+    # Prepend a dry air key to the list of names so that the 0 index is reserved
+    # for dry air and all the other names follow a 1-based index system,
+    # consistent with the RRTMGP species indices.
+    gas_names.insert(0, constants.DRY_AIR_KEY)
+    idx_gases = cls._create_index(gas_names)
     # Map all h2o related species to the same index.
     idx_h2o = idx_gases['h2o']
     # water vapor - foreign
@@ -151,6 +167,7 @@ class LookupGasOpticsBase(loader.DataLoaderBase, metaclass=abc.ABCMeta):
     idx_gases['h2o_self'] = idx_h2o
     return dict(
         idx_h2o=idx_h2o,
+        idx_o3=idx_gases['o3'],
         idx_gases=idx_gases,
         n_gases=dims['absorber'],
         n_bnd=dims['bnd'],

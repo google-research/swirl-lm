@@ -1,4 +1,4 @@
-# Copyright 2022 The swirl_lm Authors.
+# Copyright 2023 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@ import abc
 import dataclasses
 import os
 import tempfile
-from typing import Sequence, Tuple
+from typing import Dict, Sequence, Tuple
 import zipfile
 
 import netCDF4 as nc
@@ -45,14 +45,9 @@ class DataLoaderBase(metaclass=abc.ABCMeta):
   """Generic data loader that reads a .nc file and constructs TF tensors."""
 
   @classmethod
-  def _create_index(cls, name_arr: np.ndarray):
+  def _create_index(cls, name_arr: Sequence[str]) -> Dict[str, int]:
     """Utility function for generating an index from a sequence of names."""
-    size = name_arr.shape[0]
-    idx = {}
-    for i in range(size):
-      name = ''.join([g_i.decode('utf-8') for g_i in name_arr[i]]).strip()
-      idx[name] = i
-    return idx
+    return {name: idx for idx, name in enumerate(name_arr)}
 
   @classmethod
   def _parse_nc_file(

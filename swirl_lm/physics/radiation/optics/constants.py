@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""swirl_lm API."""
+"""Central place for all the constants and common keys in the optics library."""
 
-# A new PyPI release will be pushed everytime `__version__` is increased
-# When changing this, also update the CHANGELOG.md
-__version__ = '0.0.0'
+DRY_AIR_INDEX = 0
+DRY_AIR_KEY = 'dry_air'
+# Volume mixing ratio (VMR) of dry air is always 1 by definition, as VMR is
+# normalized by the number of moles of dry air.
+DRY_AIR_VMR = 1.0

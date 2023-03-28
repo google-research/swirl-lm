@@ -440,7 +440,7 @@ def poisson_residual_norm(
   return np.linalg.norm(res_no_border)
 
 
-def prolong_matrix(n2: int, n1: Optional[int] = None,
+def prolong_matrix(n2: int, n1: Optional[int] = None,  # pytype: disable=annotation-type-mismatch  # numpy-scalars
                    dtype: np.dtype = _NP_DTYPE) -> np.ndarray:
   """Returns a prolongation matrix (2D numpy array).
 
@@ -495,7 +495,7 @@ def _restrict_matrix_from_prolong(p: np.ndarray) -> np.ndarray:
   return p.T * (n1 - 1) / (n2 - 1)
 
 
-def restrict_matrix(n2: int, n1: Optional[int] = None,
+def restrict_matrix(n2: int, n1: Optional[int] = None,  # pytype: disable=annotation-type-mismatch  # numpy-scalars
                     dtype: np.dtype = _NP_DTYPE) -> np.ndarray:
   """Returns a restriction matrix from `n2` to `n1`. See `prolong_matrix`."""
   return _restrict_matrix_from_prolong(prolong_matrix(n2, n1, dtype))
@@ -521,7 +521,7 @@ def _grid_sizes(n2: int, n1: int) -> List[Tuple[int, int]]:
   return sizes
 
 
-def _prolong_matrices(n2: int, n1: int,
+def _prolong_matrices(n2: int, n1: int,  # pytype: disable=annotation-type-mismatch  # numpy-scalars
                       dtype: np.dtype = _NP_DTYPE) -> List[np.ndarray]:
   """Returns a sequence of prolongation matrices from `n2` to `n1`."""
   return [prolong_matrix(m2, m1, dtype) for m2, m1 in _grid_sizes(n2, n1)]
@@ -661,7 +661,7 @@ def full_1d_grid_size_pairs(
   return sizes
 
 
-def prolong_restrict_matrices_from_params(
+def prolong_restrict_matrices_from_params(  # pytype: disable=annotation-type-mismatch  # numpy-scalars
     params: grid_parametrization.GridParametrization,
     coarsest_subgrid_shape: Optional[Sequence[int]] = None,
     dtype: np.dtype = _NP_DTYPE
@@ -708,7 +708,7 @@ def prolong_restrict_matrices_from_params(
                                                dtype)
 
 
-def prolong_restrict_matrices_from_shapes(
+def prolong_restrict_matrices_from_shapes(  # pytype: disable=annotation-type-mismatch  # numpy-scalars
     full_grid_shape: Sequence[int],
     coarsest_subgrid_shape: Sequence[int],
     computation_shape: Sequence[int],
@@ -786,7 +786,7 @@ def convert_ps_rs_dict_to_tuple(
   return (ps, rs)
 
 
-def get_ps_rs_init_fn(params: grid_parametrization.GridParametrization,
+def get_ps_rs_init_fn(params: grid_parametrization.GridParametrization,  # pytype: disable=annotation-type-mismatch  # numpy-scalars
                       coarsest_subgrid_shape: Optional[Sequence[int]] = None,
                       dtype: np.dtype = _NP_DTYPE):
   """Returns an init function for prolongation and restriction matrices.
@@ -990,7 +990,7 @@ def kronecker_products(ms: Sequence[Optional[TensorOrArray]],
   return x
 
 
-def laplacian_matrix(
+def laplacian_matrix(  # pytype: disable=annotation-type-mismatch  # numpy-scalars
     shape: Sequence[int],
     grid_lengths: Optional[Sequence[float]] = None,
     boundary_conditions: Optional[BoundaryConditionsSpec] = None,
@@ -1090,7 +1090,7 @@ def laplacian_matrix(
   return a
 
 
-def inverse_laplacian_matrix(
+def inverse_laplacian_matrix(  # pytype: disable=annotation-type-mismatch  # numpy-scalars
     shape: Sequence[int],
     grid_lengths: Optional[Sequence[float]] = None,
     boundary_conditions: Optional[BoundaryConditionsSpec] = None,

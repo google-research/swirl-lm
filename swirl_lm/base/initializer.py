@@ -155,7 +155,7 @@ def partial_mesh_for_core(
 
   # tf.meshgrid is memory inefficient, so we use our own implementation.
   xx, yy, zz = common_ops.meshgrid(xs, ys, zs)
-  val = value_fn(xx, yy, zz, _NP_DTYPE(lx), _NP_DTYPE(ly), _NP_DTYPE(lz),
+  val = value_fn(xx, yy, zz, _NP_DTYPE(lx), _NP_DTYPE(ly), _NP_DTYPE(lz),  # pytype: disable=wrong-arg-types  # numpy-scalars
                  coordinate)
   if pad_mode:
     val = tf.pad(

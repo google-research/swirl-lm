@@ -15,7 +15,7 @@
 """A library of the immersed boundary method."""
 
 import itertools
-from typing import Callable, Dict, Optional, Text
+from typing import Callable, Dict, Optional, Sequence, Text
 
 from absl import logging
 import numpy as np
@@ -67,6 +67,36 @@ def _apply_3d_kernel(
       for result_xi, result_yi, result_zi in zip(result_x, result_y, result_z)
   ]
   return summed_result
+
+
+def ib_info_map(
+    ib_info: immersed_boundary_method_pb2.ImmersedBoundaryMethod,
+) -> Dict[str, immersed_boundary_method_pb2.IBVariableInfo]:
+  """Flattens the variable information in the IB config."""
+
+  def flatten_ib_info(
+      ib_vars: Sequence[immersed_boundary_method_pb2.IBVariableInfo],
+  ) -> Dict[str, immersed_boundary_method_pb2.IBVariableInfo]:
+    """Flattens a sequence of IB info."""
+    out = {}
+    for info in ib_vars:
+      out[info.name] = info
+    return out
+
+  ib_type = ib_info.WhichOneof('type')
+  if ib_type == 'cartesian_grid':
+    return flatten_ib_info(ib_info.cartesian_grid.variables)
+  elif ib_type == 'mac':
+    return flatten_ib_info(ib_info.mac.variables)
+  elif ib_type == 'sponge':
+    return flatten_ib_info(ib_info.sponge.variables)
+  elif ib_type == 'direct_forcing':
+    return flatten_ib_info(ib_info.direct_forcing.variables)
+  else:
+    raise NotImplementedError(
+        f'{ib_type} is not a valid IB type. Available options are:'
+        ' "cartesian_grid", "mac", "sponge", "direct_forcing".'
+    )
 
 
 def update_cartesian_grid_method_boundary_coefficients(

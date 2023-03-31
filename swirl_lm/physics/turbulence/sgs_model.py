@@ -558,7 +558,7 @@ class SgsModel(object):
       # best approach will be rewrite the class to incorporate all needed
       # information of the grid config.
       halo_width = 2
-      m_inner = common_ops.strip_halos(m, (halo_width, halo_width, halo_width))
+      m_inner = common_ops.strip_halos(m, (halo_width, halo_width, halo_width))  # pytype: disable=wrong-arg-types  # always-use-return-annotations
       m_avg_inner = _germano_averaging(m_inner, periodic_dims, replicas)
       z_pad = [
           # These are in the halos and can be set to any values. Although they

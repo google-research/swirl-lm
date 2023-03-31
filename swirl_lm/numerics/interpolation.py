@@ -15,7 +15,7 @@
 """A library for the interpolation schemes."""
 
 import functools
-from typing import Tuple, Dict, Sequence, Union
+from typing import Tuple, Dict, Sequence, Union, Any
 
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import types
@@ -282,3 +282,55 @@ def weno(
                                                 dim, k)
 
   return v_neg, v_pos
+
+
+def _mlp_nn_forward_prop(
+    x: tf.Tensor, mlp_network: Dict[str, Any]
+) -> tf.Tensor:
+  """Forward propagation of mlp_nn to estimate WENO-weights from Delta values.
+
+  Reference [1]: Bezgin, D. A., Schmidt, S. J., & Adams, N. A. (2022). WENO3-NN:
+  A maximum-order three-point data-driven weighted essentially non-oscillatory
+  scheme. Journal of Computational Physics, 452, 110920.
+  mlp_nn denotes Multi-Layer Perceptron Neural Network.
+  Delta layer includes normalized amplitudes of first and second-order
+  derivatives of the local input field (equations 14 and 15 of [1]).
+
+  Args:
+    x: A 2D tensor of shape (mlp_network['n_features'], nx) where, nx is the
+      number of samples. This includes the Delta and a bias layer.
+    mlp_network: Dictionary containing the weights and hyper-parameters of the
+      multilayer perceptron neural network. It has following key-value pairs:
+      'n_features': Number of features of network including bias layer. It takes
+        a value of 5 for WENO-3 (4 values of Delta and a bias layer)
+      'n_outputs': Number of outputs of network. It takes a value of 1 for
+        WENO-3. Second weight of WENO-3 is obtained by subtracting first weight
+        from unity.
+      'n_hidden_units': A 1D tensor listing number of neurons for each hidden
+        layer. Size is number of hidden layers.
+      'weights': A list of 2D tensors consisting of weights of each hidden
+        layer. Weights include the bias term. Size of this list is one higher
+        than number of hidden layers.
+
+  Returns:
+    Output of the neural network is a 2D tensor. It represents the
+      WENO-weights. For WENO-3, it should have a single column. Second weight
+      of WENO-3 is obtained by subtracting first weight from unity.
+  """
+
+  n_hid = len(mlp_network['n_hidden_units'])
+  hidden_out = tf.Variable(x)
+  for i in range(n_hid):
+    hidden_act = tf.matmul(
+        mlp_network['weights'][i], hidden_out, transpose_a=True
+    )
+    hidden_out = tf.nn.swish(hidden_act)
+    hidden_out = tf.concat(
+        [hidden_out, tf.ones([1, hidden_out.shape[1]], dtype=types.TF_DTYPE)],
+        axis=0,
+    )
+
+  output_act = tf.matmul(
+      mlp_network['weights'][n_hid], hidden_out, transpose_a=True
+  )
+  return tf.nn.sigmoid(output_act)

@@ -59,7 +59,7 @@ References:
 """
 
 import functools
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 from swirl_lm.base import parameters as parameters_lib
@@ -351,16 +351,18 @@ class Wood(object):
     self.reaction_rate = functools.partial(
         _reaction_rate, s_b=self.s_b, s_x=self.s_x, c_f=self.c_f)
 
-    if self.model_params.WhichOneof('combustion_model_option') == 'dry_wood':
-      self.combustion_model_option = self.model_params.dry_wood
+    self.combustion_model_option = self.model_params.WhichOneof(
+        'combustion_model_option'
+    )
+    if self.combustion_model_option == 'dry_wood':
       self.update_fn = self.dry_wood_update_fn
-    elif self.model_params.WhichOneof(
-        'combustion_model_option') == 'moist_wood':
-      self.combustion_model_option = self.model_params.moist_wood
+    elif self.combustion_model_option == 'moist_wood':
       self.update_fn = self.moist_wood_update_fn
     else:
-      self.combustion_model_option = None
-      self.update_fn = None
+      raise NotImplementedError(
+          f'{self.combustion_model_option} is not a valid combustion model.'
+          ' Available options are: `dry_wood`, `moist_wood`.'
+      )
 
   def _src_t_g(
       self,
@@ -434,8 +436,8 @@ class Wood(object):
         self.model_params.WhichOneof('combustion_model_option')
         == 'moist_wood'):
       rhs -= f_w * (
-          self.combustion_model_option.h_w +
-          _CP_W * self.combustion_model_option.t_vap)
+          self.model_params.moist_wood.h_w +
+          _CP_W * self.model_params.moist_wood.t_vap)
 
       cp = _CP_F * _bound_scalar(rho_f, minval=0.0)
 
@@ -485,6 +487,18 @@ class Wood(object):
     else:
       raise ValueError('Temperature (`theta` or `T`) needs to be included for '
                        'fire simulations.')
+
+  def required_additional_states_keys(
+      self, states: types.FlowFieldMap
+  ) -> Sequence[str]:
+    """Provides keys of required additional states for the combustion model."""
+    required_keys = ['rho_f', 'T_s', 'src_rho', 'src_Y_O', 'tke']
+    required_keys.append(self._get_temperature_source_key(states))
+
+    if self.combustion_model_option == 'moist_wood':
+      required_keys += ['rho_m', 'phi_w']
+
+    return required_keys
 
   def dry_wood_update_fn(
       self,
@@ -674,7 +688,7 @@ class Wood(object):
       """Updates wood combustion associated states."""
 
       evaporation = functools.partial(
-          _evaporation, dt=params.dt, c_w=self.combustion_model_option.c_w)
+          _evaporation, dt=params.dt, c_w=self.model_params.moist_wood.c_w)
 
       def rhs_solid_phase(rho_f, rho_m, t_s, t_g, y_o, phi_w):
         """Computes the right hand side of the equations in the docstring."""

@@ -37,7 +37,7 @@ import tensorflow as tf
 
 
 @dataclasses.dataclass(frozen=True)
-class LookupGasOpticsLongwave(gas_base.LookupGasOpticsBase):
+class LookupGasOpticsLongwave(gas_base.AbstractLookupGasOptics):
   """Lookup tables of gases' optical properties in the longwave bands."""
 
   # Planck fraction `(n_t_ref, n_p_ref, n_η, n_gpt)`.

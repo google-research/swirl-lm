@@ -1,6 +1,8 @@
 # proto-file: swirl_lm/base/parameters.proto
 # proto-message: SwirlLMParameters
-
+solver_procedure: VARIABLE_DENSITY
+convection_scheme: CONVECTION_SCHEME_QUICK
+time_integration_scheme: TIME_SCHEME_CN_EXPLICIT_ITERATION
 p_thermal: 1.01325e5
 density: 1.2061764708
 thermodynamics {
@@ -17,6 +19,11 @@ combustion {
     t_pyr:  500.0
     n_step:  10
     dry_wood {}
+    tke {
+      constant {
+        tke_constant: 1.82
+      }
+    }
   }
 }
 scalars {

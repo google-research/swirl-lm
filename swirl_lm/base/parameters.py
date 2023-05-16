@@ -196,6 +196,37 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
 
     self.scalar_lib = {scalar.name: scalar for scalar in self.scalars}
 
+    # Check if the microphysics model (if used) is the same for all scalars.
+    microphysics = None
+    for scalar in self.scalars:
+      scalar_config = scalar.WhichOneof('scalar_config')
+      microphysics_current = None
+      if scalar_config == 'total_energy':
+        if scalar.total_energy.HasField('microphysics'):
+          microphysics_current = scalar.total_energy.WhichOneof('microphysics')
+      elif scalar_config == 'humidity':
+        if scalar.humidity.HasField('microphysics'):
+          microphysics_current = scalar.humidity.WhichOneof('microphysics')
+      elif scalar_config == 'potential_temperature':
+        if scalar.potential_temperature.HasField('microphysics'):
+          microphysics_current = scalar.potential_temperature.WhichOneof(
+              'microphysics'
+          )
+      else:
+        continue
+
+      # No microphsyics model is defined for the present scalar, so skip.
+      if microphysics_current is None:
+        continue
+
+      if microphysics is None:
+        microphysics = microphysics_current
+      else:
+        assert microphysics == microphysics_current, (
+            f'{scalar_config} is using a different microphysics model'
+            f' ({microphysics_current}) from others ({microphysics}).'
+        )
+
     # Boundary conditions.
     self.periodic_dims = [
         config.periodic.dim_0, config.periodic.dim_1, config.periodic.dim_2

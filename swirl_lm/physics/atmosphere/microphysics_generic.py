@@ -52,6 +52,11 @@ class Microphysics(abc.ABC):
 
     self._water_model = water.Water(self._params)
 
+  @property
+  def water_model(self) -> water.Water:
+    """The underlying water thermodynamics model."""
+    return self._water_model
+
   @abc.abstractmethod
   def evaporation(self, *args, **kwargs) -> water.FlowFieldVal:
     """Computes the evaporation rate."""
@@ -138,4 +143,55 @@ class Microphysics(abc.ABC):
 
     return tf.nest.map_structure(
         condensation_fn, q_v, q_vs, t_0, theta_0, theta, cp, q_c
+    )
+
+  def condensation_bf2002(
+      self,
+      rho: water.FlowFieldVal,
+      temperature: water.FlowFieldVal,
+      q_v: water.FlowFieldVal,
+      q_l: water.FlowFieldVal,
+      q_c: water.FlowFieldVal,
+      zz: Optional[water.FlowFieldVal] = None,
+      additional_states: Optional[water.FlowFieldMap] = None,
+  ) -> water.FlowFieldVal:
+    """Computes the condensation rate.
+
+    Reference:
+    Bryan, G.H., & Fritsch, J. M., (2002). A Benchmark Simulation for Moist
+    Nonhydrostatic Numerical Models. Monthly Weather Review, 130, 2917-2928.
+    Specifically, eq. 27.
+
+    Args:
+      rho: The moist air density, in kg/m^3.
+      temperature: The temperature.
+      q_v: The cloud vapor fraction (kg/kg).
+      q_l: The specific humidity of the cloud liquid phase (kg/kg).
+      q_c: The specific humidity of the cloud humidity condensed phase,
+        including ice and liquid (kg/kg).
+      zz: The vertical coordinates (m). Not used.
+      additional_states: Helper variables including those needed to compute
+        reference states. Not used.
+
+    Returns:
+      The condensation rate.
+    """
+    del zz, additional_states
+    q_t = tf.nest.map_structure(tf.math.add, q_v, q_c)
+    q_i = tf.nest.map_structure(tf.math.subtract, q_c, q_l)
+    q_vs = self._water_model.saturation_q_vapor(temperature, rho, q_l, q_c)
+    cp = self._water_model.cp_m(q_t, q_l, q_i)
+
+    def condensation_fn(q_v, q_vs, temperature, cp, q_c):
+      """Computes the condensation rate."""
+      d_q_v = (q_v - q_vs) / (
+          1.0
+          + (q_vs
+             * ((self._water_model.lh_v0 / temperature) ** 2)
+             / self._water_model.r_v / cp)
+      )
+      return tf.maximum(d_q_v, -q_c) / self._params.dt
+
+    return tf.nest.map_structure(
+        condensation_fn, q_v, q_vs, temperature, cp, q_c
     )

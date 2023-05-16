@@ -29,9 +29,10 @@
 
 import abc
 import dataclasses
-from typing import Any, Dict
+from typing import Any, Dict, Sequence, Tuple
 
 import netCDF4 as nc
+import numpy as np
 from swirl_lm.physics.radiation.optics import constants
 from swirl_lm.physics.radiation.optics import data_loader_base as loader
 from swirl_lm.utility import types
@@ -42,7 +43,7 @@ DRY_AIR_KEY = 'dry_air'
 
 
 @dataclasses.dataclass(frozen=True)
-class LookupGasOpticsBase(loader.DataLoaderBase, metaclass=abc.ABCMeta):
+class AbstractLookupGasOptics(loader.DataLoaderBase, metaclass=abc.ABCMeta):
   """Abstract class for loading and accessing tables of optical properties."""
   # Volume mixing ratio (vmr) array index for H2O.
   idx_h2o: int
@@ -107,6 +108,32 @@ class LookupGasOpticsBase(loader.DataLoaderBase, metaclass=abc.ABCMeta):
   # `g-point` limits for minor contributors in upper atmosphere `(
   # n_contrib_upper, 2)`.
   minor_upper_gpt_lims: tf.Tensor
+  # Map from `g-point` to band.
+  g_point_to_bnd: Sequence[int]
+  # Band number for minor contributor in the lower atmosphere
+  # `(n_contrib_lower)`.
+  minor_lower_bnd: Sequence[int]
+  # Band number for minor contributor in the upper atmosphere
+  # `(n_contrib_upper)`.
+  minor_upper_bnd: Sequence[int]
+  # Starting index to `idx_gases_minor_lower` for each band `(n_bnd)`.
+  minor_lower_bnd_start: Dict[int, int]
+  # Starting index to `idx_gases_minor_upper` for each band `(n_bnd)`.
+  minor_upper_bnd_start: Dict[int, int]
+  # Shift in `kminor_lower` for each band `(n_min_absrb_lower)`.
+  minor_lower_gpt_shift: Sequence[int]
+  # Shift in `kminor_upper` for each band `(n_min_absrb_upper)`.
+  minor_upper_gpt_shift: Sequence[int]
+  # Indices for minor gases contributing to absorption in the lower atmosphere
+  # `(n_min_absrb_lower)`.
+  idx_minor_gases_lower: Dict[int, int]
+  # Indices for minor gases contributing to absorption in the upper atmosphere
+  # `(n_min_absrb_upper)`.
+  idx_minor_gases_upper: Dict[int, int]
+  # Indices for scaling gases in the lower atmosphere `(n_min_absrb_lower)`.
+  idx_scaling_gases_lower: Dict[int, int]
+  # Indices for scaling gases in the upper atmosphere `(n_min_absrb_upper)`.
+  idx_scaling_gases_upper: Dict[int, int]
   # Minor gas (lower atmosphere) scales with density? `(n_minor_absrb_lower)`.
   minor_lower_scales_with_density: tf.Tensor
   # Minor gas (upper atmosphere) scales with density? `(n_minor_absrb_upper)`.
@@ -124,6 +151,90 @@ class LookupGasOpticsBase(loader.DataLoaderBase, metaclass=abc.ABCMeta):
   vmr_ref: tf.Tensor
   # Mapping from gas name to index.
   idx_gases: Dict[str, int]
+
+  @classmethod
+  def _bytes_to_str(cls, split_str):
+    return str(split_str, 'utf-8').strip()
+
+  @classmethod
+  def _create_rrtm_consistent_minor_gas_index(
+      cls,
+      idx_gases: Dict[str, int],
+      gases_minor_arr: Sequence[Any],
+      scaling_gases_arr: Sequence[Any],
+  ) -> Tuple[Dict[int, int], Dict[int, int]]:
+    """Creates a mapping from the minor and scaling absorber to the RRTM index.
+
+    Args:
+      idx_gases: A dictionary mapping gas name to its RRTM index.
+      gases_minor_arr: An array of minor gas names.
+      scaling_gases_arr: An array of scaling gas names. Some entries will be
+        empty, which implies that the corresponding minor absorber does not have
+        a scaling gas.
+
+    Returns:
+      A 2-tuple containing 1) a mapping from minor absorber index to RRTM gas
+      index and 2) a mapping from minor absorber index to the corresponding
+      scaling gas RRTM index.
+    """
+    n_minor_absrb = len(gases_minor_arr)
+    assert len(scaling_gases_arr) == n_minor_absrb, (
+        'The scaling gases array should have length equal to the number of'
+        ' minor absorbers.'
+    )
+    gases_minor_arr = [cls._bytes_to_str(b) for b in gases_minor_arr]
+    scaling_gases_arr = [cls._bytes_to_str(b) for b in scaling_gases_arr]
+    idx_minor = {i: idx_gases[g] for i, g in enumerate(gases_minor_arr) if g}
+    idx_scale = {i: idx_gases[g] for i, g in enumerate(scaling_gases_arr) if g}
+    return idx_minor, idx_scale
+
+  @classmethod
+  def _minor_gas_mappings(
+      cls,
+      g_point_to_bnd: np.ndarray,
+      minor_gpt_limits: np.ndarray,
+      n_bnd: int,
+  ) -> Tuple[Sequence[int], Dict[int, int], Sequence[int]]:
+    """Computes useful mappings and offsets for the minor gases.
+
+    Args:
+      g_point_to_bnd: A 1D array mapping the g-point index to the unique
+        frequency band it belongs to.
+      minor_gpt_limits: A 2D array mapping a minor absorber index to the two
+        endpoints of the g-point interval it contributes to.
+      n_bnd: The total number of frequency bands.
+
+    Returns:
+      A 3-tuple containing 1) a mapping from minor absorber index to the
+      frequency band it contributes to, 2) a mapping from the frequency band
+      to the index of the first minor absorber that contributes to it (note that
+      minor absorbers are grouped by band), and 3) a mapping from the minor
+      absorber index to its first index in the absorption coefficient table.
+    """
+    n_minor_absrb = minor_gpt_limits.shape[0]
+    # Map from the minor absorber index to the band it contributes to.
+    minor_bnd = [
+        g_point_to_bnd[minor_gpt_limits[i, 0]] for i in range(n_minor_absrb)
+    ]
+    minor_bnd_start = {
+        bnd: minor_bnd.index(bnd) for bnd in set(minor_bnd)
+    }
+
+    # Note that the `kminor` absorption coefficient table is indexed by all
+    # combinations of minor absorbers and valid g-point, which is why the
+    # following offset is useful. It allows easy access to the beginning of the
+    # range of contributors associated with a given minor absorber. The g-point
+    # will provide an additional offset to identify the specific `contributor`
+    # in this range.
+    minor_gpt_shift = [0] * n_minor_absrb
+    for i in range(1, n_minor_absrb):
+      minor_gpt_shift[i] = (
+          minor_gpt_shift[i - 1]
+          + minor_gpt_limits[i - 1, 1]
+          - minor_gpt_limits[i - 1, 0]
+          + 1
+      )
+    return (minor_bnd, minor_bnd_start, minor_gpt_shift)
 
   @classmethod
   def _load_data(
@@ -165,6 +276,39 @@ class LookupGasOpticsBase(loader.DataLoaderBase, metaclass=abc.ABCMeta):
     idx_gases['h2o_frgn'] = idx_h2o
     # water vapor - self-continua
     idx_gases['h2o_self'] = idx_h2o
+    # What follows are data structures required for handling minor gas optics.
+    idx_minor_gases_lower, idx_scaling_gases_lower = (
+        cls._create_rrtm_consistent_minor_gas_index(
+            idx_gases,
+            ds['minor_gases_lower'][:].data,
+            ds['scaling_gas_lower'][:].data,
+        )
+    )
+    idx_minor_gases_upper, idx_scaling_gases_upper = (
+        cls._create_rrtm_consistent_minor_gas_index(
+            idx_gases,
+            ds['minor_gases_upper'][:].data,
+            ds['scaling_gas_upper'][:].data,
+        )
+    )
+    # Decrement indices since RRTMGP was originally developed in a 1-based index
+    # system.
+    bnd_limits_gpt = ds['bnd_limits_gpt'][:].data - 1
+    g_point_to_bnd = np.asarray([None] * dims['gpt'])
+    for i in range(dims['bnd']):
+      g_point_to_bnd[bnd_limits_gpt[i, 0] : bnd_limits_gpt[i, 1] + 1] = i
+    minor_lower_gpt_lims = ds['minor_limits_gpt_lower'][:].data - 1
+    minor_lower_bnd, minor_lower_bnd_start, minor_lower_gpt_shift = (
+        cls._minor_gas_mappings(
+            g_point_to_bnd, minor_lower_gpt_lims, dims['bnd']
+        )
+    )
+    minor_upper_gpt_lims = ds['minor_limits_gpt_upper'][:].data - 1
+    minor_upper_bnd, minor_upper_bnd_start, minor_upper_gpt_shift = (
+        cls._minor_gas_mappings(
+            g_point_to_bnd, minor_upper_gpt_lims, dims['bnd']
+        )
+    )
     return dict(
         idx_h2o=idx_h2o,
         idx_o3=idx_gases['o3'],
@@ -191,8 +335,19 @@ class LookupGasOpticsBase(loader.DataLoaderBase, metaclass=abc.ABCMeta):
         kminor_upper=tables['kminor_upper'],
         bnd_lims_gpt=tables['bnd_limits_gpt'],
         bnd_lims_wn=tables['bnd_limits_wavenumber'],
-        minor_lower_gpt_lims=tables['minor_limits_gpt_lower'],
-        minor_upper_gpt_lims=tables['minor_limits_gpt_upper'],
+        g_point_to_bnd=g_point_to_bnd,
+        minor_lower_bnd=minor_lower_bnd,
+        minor_lower_bnd_start=minor_lower_bnd_start,
+        minor_lower_gpt_shift=minor_lower_gpt_shift,
+        minor_upper_bnd=minor_upper_bnd,
+        minor_upper_bnd_start=minor_upper_bnd_start,
+        minor_upper_gpt_shift=minor_upper_gpt_shift,
+        idx_minor_gases_lower=idx_minor_gases_lower,
+        idx_scaling_gases_lower=idx_scaling_gases_lower,
+        idx_minor_gases_upper=idx_minor_gases_upper,
+        idx_scaling_gases_upper=idx_scaling_gases_upper,
+        minor_lower_gpt_lims=minor_lower_gpt_lims,
+        minor_upper_gpt_lims=minor_upper_gpt_lims,
         minor_lower_scales_with_density=tables[
             'minor_scales_with_density_lower'
         ],

@@ -49,6 +49,7 @@ from swirl_lm.equations import common
 from swirl_lm.numerics import root_finder
 from swirl_lm.physics import constants
 from swirl_lm.utility import common_ops
+from swirl_lm.utility import debug_print
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import types
@@ -95,6 +96,8 @@ class MoninObukhovSimilarityTheory(object):
     self.enable_theta_reg = most_params.enable_theta_reg
     self.theta_max = most_params.theta_max
     self.theta_min = most_params.theta_min
+
+    self.dbg = most_params.debug
 
     self.bc_manager = (
         physical_variable_keys_manager.BoundaryConditionKeysHelper())
@@ -397,6 +400,12 @@ class MoninObukhovSimilarityTheory(object):
 
     q_3 = tf.nest.map_structure(surface_heat_flux, theta, u_s, phi_h)
 
+    if self.dbg:
+      tau_13 = debug_print.log_mean_min_max(tau_13, message='tau_13')
+      tau_23 = debug_print.log_mean_min_max(tau_23, message='tau_23')
+      u_s = debug_print.log_mean_min_max(u_s, message='u_s')
+      q_3 = debug_print.log_mean_min_max(q_3, message='q_3')
+
     return tau_13, tau_23, q_3
 
   def surface_shear_stress_and_heat_flux_update_fn(
@@ -544,20 +553,33 @@ class MoninObukhovSimilarityTheory(object):
           phi_zm_i - phi_z0_i)
 
     if isinstance(phi_z0, Sequence) and isinstance(c_h, Sequence):
-      return tf.nest.map_structure(scalar_flux, rho, c_h, u1, u2, phi_zm,
-                                   phi_z0)
+      sc_flux = tf.nest.map_structure(
+          scalar_flux, rho, c_h, u1, u2, phi_zm, phi_z0
+      )
     elif isinstance(c_h, Sequence):
-      return tf.nest.map_structure(
-          functools.partial(scalar_flux, phi_z0_i=phi_z0), rho, c_h, u1, u2,
-          phi_zm)
+      sc_flux = tf.nest.map_structure(
+          functools.partial(scalar_flux, phi_z0_i=phi_z0),
+          rho,
+          c_h,
+          u1,
+          u2,
+          phi_zm,
+      )
     elif isinstance(phi_z0, Sequence):
       flux_fn = lambda rho_i, u1_i, u2_i, phi_zm_i, phi_z0_i: scalar_flux(  # pylint: disable=g-long-lambda
-          rho_i, c_h, u1_i, u2_i, phi_zm_i, phi_z0_i)
-      return tf.nest.map_structure(flux_fn, rho, u1, u2, phi_zm, phi_z0)
+          rho_i, c_h, u1_i, u2_i, phi_zm_i, phi_z0_i
+      )
+      sc_flux = tf.nest.map_structure(flux_fn, rho, u1, u2, phi_zm, phi_z0)
     else:
       flux_fn = lambda rho_i, u1_i, u2_i, phi_zm_i: scalar_flux(  # pylint: disable=g-long-lambda
-          rho_i, c_h, u1_i, u2_i, phi_zm_i, phi_z0)
-      return tf.nest.map_structure(flux_fn, rho, u1, u2, phi_zm)
+          rho_i, c_h, u1_i, u2_i, phi_zm_i, phi_z0
+      )
+      sc_flux = tf.nest.map_structure(flux_fn, rho, u1, u2, phi_zm)
+
+    if self.dbg:
+      sc_flux = debug_print.log_mean_min_max(sc_flux, message='scalar_flux')
+
+    return sc_flux
 
   def neumann_bc_update_fn(
       self,

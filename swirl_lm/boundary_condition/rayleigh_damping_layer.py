@@ -356,6 +356,11 @@ class RayleighDampingLayer(object):
       return tf.nest.map_structure(lambda b, f, t: b * (t - f), beta, field,
                                    target_value)
 
+  @property
+  def varnames(self) -> Sequence[str]:
+    """Generates a tuple of variable names to which sponge is applied."""
+    return tuple(self._sponge_info_map.keys())
+
   def init_fn(
       self,
       config: grid_parametrization.GridParametrization,

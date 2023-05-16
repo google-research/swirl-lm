@@ -13,40 +13,20 @@
 # limitations under the License.
 
 """A library for the turbulent kinetic energy (TKE) modeling."""
-import enum
 import functools
 
-from absl import flags
 import numpy as np
 from swirl_lm.numerics import filters
+from swirl_lm.physics.combustion import turbulent_kinetic_energy_pb2
 from swirl_lm.utility import composite_types
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import types
 import tensorflow as tf
 
-# Parameters required by the constant TKE model.
-flags.DEFINE_float(
-    'tke_constant',
-    50.0,
-    'The value of the constant turbulent kinetic energy.',
-    allow_override=True)
-
-FLAGS = flags.FLAGS
-
 FlowFieldVal = types.FlowFieldVal
 FlowFieldMap = types.FlowFieldMap
 StatesUpdateFn = composite_types.StatesUpdateFn
-
-
-class TkeUpdateOption(enum.Enum):
-  """Opions for updating the TKE."""
-  # Set the TKE to be a constant throughout the flow field.
-  CONSTANT = 1
-  # Computes TKE with the velocity fluctuation estimated by filtered quantities.
-  ALGEBRAIC = 2
-  # Computes the TKE using the turbulent viscosity.
-  TURBULENT_VISCOSITY = 3
 
 
 def _update_local_halos(value: FlowFieldVal, halo_width: int) -> FlowFieldVal:
@@ -225,7 +205,9 @@ def turbulent_viscosity_tke_update_function() -> StatesUpdateFn:
   return additional_states_update_fn
 
 
-def tke_update_fn_manager(tke_update_option: TkeUpdateOption) -> StatesUpdateFn:
+def tke_update_fn_manager(
+    tke_update_option: turbulent_kinetic_energy_pb2.TKE,
+) -> StatesUpdateFn:
   """Generates the TKE update function requested by `tke_update_option`.
 
   Args:
@@ -239,15 +221,20 @@ def tke_update_fn_manager(tke_update_option: TkeUpdateOption) -> StatesUpdateFn:
       "ALGEBRAIC", "TURBULENT_VISCOSITY"
   """
 
-  if tke_update_option == TkeUpdateOption.CONSTANT:
-    update_fn = constant_tke_update_function(FLAGS.tke_constant)
-  elif tke_update_option == TkeUpdateOption.ALGEBRAIC:
+  if tke_update_option.WhichOneof('tke_model_option') == 'constant':
+    update_fn = constant_tke_update_function(
+        tke_update_option.constant.tke_constant
+    )
+  elif tke_update_option.WhichOneof('tke_model_option') == 'algebraic':
     update_fn = algebraic_tke_update_function()
-  elif tke_update_option == TkeUpdateOption.TURBULENT_VISCOSITY:
+  elif (
+      tke_update_option.WhichOneof('tke_model_option') == 'turbulent_viscosity'
+  ):
     update_fn = turbulent_viscosity_tke_update_function()
   else:
     raise ValueError(
         f'Undefined TKE model {tke_update_option}. Available models are: '
-        f'"CONSTANT", "ALGEBRAIC", "TURBULENT_VISCOSITY".')
+        '"constant", "algebraic", "turbulent_viscosity".'
+    )
 
   return update_fn

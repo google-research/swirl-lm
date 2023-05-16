@@ -17,6 +17,7 @@ syntax = "proto2";
 package research.simulation;
 
 import "swirl_lm/numerics/numerics.proto";
+import "swirl_lm/physics/combustion/turbulent_kinetic_energy.proto";
 
 // A library for parameters required by the wood combustion model.
 // References:
@@ -27,7 +28,7 @@ import "swirl_lm/numerics/numerics.proto";
 //     Coupled Atmosphere–fire Model: Basic Fire Behavior and Dependence on Wind
 //     Speed.” Journal of Geophysical Research 110 (D13): 287.
 //
-// Next id: 16
+// Next id: 17
 message Wood {
   // The B scale of the fuel elements, in units of m.
   optional float s_b = 1;
@@ -86,4 +87,8 @@ message Wood {
     DryWood dry_wood = 14;
     MoistWood moist_wood = 15;
   }
+
+  // Defines the turbulent kinetic energy model to be used to compute the
+  // reaction source terms.
+  optional TKE tke = 16;
 }

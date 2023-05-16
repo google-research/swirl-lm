@@ -116,8 +116,21 @@ def distribute_values(strategy: tf.distribute.TPUStrategy, value_fn: ValueFn,
 
   def _wrapped_value_fn(replica_context):
     replica_id = replica_context.replica_id_in_sync_group
-    return value_fn(
-        tf.constant(replica_id, tf.int32), logical_coordinates[replica_id])
+
+    # Places the initialization on the corresponding host for each replica.
+    # Without this, all the initialization is done through worker 0 and then
+    # dispatched to the corresponding TPU replicas, which requires a large peak
+    # memory on worker 0 and puts a bottleneck on the size of the grid we can
+    # squeeze in. With this placement, in one example, the peak memory on the
+    # hosts is reduced from 220G to ~ 20G and it is clearly seen from the
+    # profiling and the memory usage that all worker hosts are now involved in
+    # the initialization.
+    worker_device = strategy.extended._device_assignment.tpu_device(  # pylint: disable=protected-access
+        replica=replica_id)
+    with tf.device(worker_device):
+      values = value_fn(
+          tf.constant(replica_id, tf.int32), logical_coordinates[replica_id])
+    return values
 
   return strategy.experimental_distribute_values_from_function(
       _wrapped_value_fn)

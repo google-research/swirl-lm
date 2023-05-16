@@ -13,7 +13,6 @@
 # limitations under the License.
 
 """A library for the source functions in the humidity equation."""
-
 from typing import Tuple
 
 import numpy as np
@@ -21,22 +20,26 @@ from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.equations import common
 from swirl_lm.equations import utils as eq_utils
 from swirl_lm.equations.source_function import scalar_generic
-from swirl_lm.physics.atmosphere import microphysics_kw1978
+from swirl_lm.physics.atmosphere import microphysics_utils
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import water
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import types
 import tensorflow as tf
 
-HUMIDITY_VARNAME = ['q_t', 'q_r']
+HUMIDITY_VARNAME = ['q_t', 'q_r', 'q_s', 'q_c', 'q_v']
 
 
 class Humidity(scalar_generic.ScalarGeneric):
   """Defines functions for source terms in humidity equation.
 
   This class defines terms that computes the rhs `f(q)` of the humidity update
-  equation `d rho_q / dt = f(q)`, where `q` is either total humidity `q_t` or
-  liquid precipitation `q_r`.
+  equation `d rho_q / dt = f(q)`, where `q` is one of the following:
+  1. total humidity `q_t`;
+  2. rain mass fraction `q_r`;
+  3. snow mass fraction `q_s`;
+  4. vapor phase cloud water mass fraction `q_v`;
+  5. condensed phase cloud water mass fraction `q_c`;
   """
 
   def __init__(
@@ -63,21 +66,34 @@ class Humidity(scalar_generic.ScalarGeneric):
         self._scalar_params.HasField('humidity') and
         self._scalar_params.humidity.include_precipitation)
 
-    if scalar_name == 'q_r':
+    self._include_condensation = (
+        self._scalar_params.HasField('humidity') and
+        self._scalar_params.humidity.include_condensation)
+
+    if scalar_name in ('q_r', 'q_s'):
       assert self._include_precipitation, (
           'Calculating q_r without setting include_precipitation to True is not'
           ' well-defined.'
       )
 
     self._microphysics = None
-    if isinstance(self._thermodynamics.model, water.Water):
-      self._microphysics = microphysics_kw1978.MicrophysicsKW1978(
-          params, self._thermodynamics.model
+    if (
+        self._include_precipitation
+        or self._include_condensation
+        or scalar_name in ('q_r', 'q_s')
+    ):
+      assert self._scalar_params.humidity.HasField('microphysics'), (
+          'A microphysics model is required to consider precipitation or '
+          'condensation in the humidity equation, and to compute the humidity '
+          'variables `q_r` and `q_s`.'
       )
-    else:
-      raise ValueError(
-          '`water` thermodynamics is required for the humidity equation, but'
-          f' {self._thermodynamics.model} is used.'
+      microphysics_model_name = self._scalar_params.humidity.WhichOneof(
+          'microphysics'
+      )
+      self._microphysics, self._microphysics_lib = (
+          microphysics_utils.select_microphysics(
+              microphysics_model_name, self._params, self._thermodynamics
+          )
       )
 
   def _get_thermodynamic_variables(
@@ -114,10 +130,40 @@ class Humidity(scalar_generic.ScalarGeneric):
 
     thermo_states = {self._scalar_name: phi}
 
-    q_t = phi if self._scalar_name == 'q_t' else states['q_t']
+    if self._include_precipitation:
+      thermo_states['q_r'] = (phi if self._scalar_name == 'q_r' else
+                              states['q_r'])
+      if self._scalar_name == 'q_s':
+        thermo_states['q_s'] = phi
+      elif 'q_s' in states:
+        thermo_states['q_s'] = states['q_s']
+      else:
+        # Assumes no snow in the simulation.
+        thermo_states['q_s'] = tf.nest.map_structure(tf.zeros_like, phi)
+
+    if 'q_t' in states:
+      # We solve `q_t`. Other quantities such as `q_c`, `q_v`, are derived from
+      # it. In this case, we need to first calculate `temperature` before
+      # deriving these quantities.
+      thermo_states['q_t'] = (phi if self._scalar_name == 'q_t' else
+                              states['q_t'])
+    else:
+      # We solve `q_c` and `q_v` with their own transport equations. Here we
+      # assume the ice phase is absent.
+      thermo_states['q_c'] = (phi if self._scalar_name == 'q_c' else
+                              states['q_c'])
+      thermo_states['q_v'] = (phi if self._scalar_name == 'q_v' else
+                              states['q_v'])
+      thermo_states['q_l'] = thermo_states['q_c']
+      thermo_states['q_i'] = tf.nest.map_structure(
+          tf.zeros_like, thermo_states['q_c'])
+      thermo_states['q_t'] = tf.nest.map_structure(
+          tf.math.add, thermo_states['q_v'], thermo_states['q_c'])
+
+    q_t = thermo_states['q_t']
     rho_thermal = states['rho_thermal']
     zz = additional_states.get('zz', tf.nest.map_structure(tf.zeros_like, phi))
-    thermo_states.update({'q_t': q_t, 'zz': zz})
+    thermo_states['zz'] = zz
 
     # Compute the temperature.
     if 'theta_li' in states:
@@ -130,14 +176,21 @@ class Humidity(scalar_generic.ScalarGeneric):
           additional_states=additional_states,
       )
     elif 'theta' in states:
-      temperature = self._thermodynamics.model.saturation_adjustment(
-          'theta',
-          states['theta'],
-          rho_thermal,
-          q_t,
-          zz=zz,
-          additional_states=additional_states,
-      )
+      if 'q_c' in states:
+        temperature = (
+            self._thermodynamics.model.potential_temperature_to_temperature(
+                'theta', states['theta'], q_t, thermo_states['q_c'],
+                tf.nest.map_structure(tf.zeros_like, phi), zz,
+                additional_states))
+      else:
+        temperature = self._thermodynamics.model.saturation_adjustment(
+            'theta',
+            states['theta'],
+            rho_thermal,
+            q_t,
+            zz=zz,
+            additional_states=additional_states,
+        )
     elif 'e_t' in states:
       e = self._thermodynamics.model.internal_energy_from_total_energy(
           states['e_t'],
@@ -147,7 +200,7 @@ class Humidity(scalar_generic.ScalarGeneric):
           zz,
       )
       temperature = self._thermodynamics.model.saturation_adjustment(
-          'e_int', e, rho_thermal, q_t, additional_states)
+          'e_int', e, rho_thermal, q_t, additional_states=additional_states)
     elif 'T' in additional_states:
       temperature = additional_states['T']
     thermo_states.update({'T': temperature})
@@ -163,6 +216,17 @@ class Humidity(scalar_generic.ScalarGeneric):
       theta = buf['theta']
     thermo_states.update({'theta': theta})
 
+    if 'q_t' in states:
+      # Compute the liquid and ice humidity for the case `q_t` is a prognostic
+      # variable.
+      q_l, q_i = self._thermodynamics.model.equilibrium_phase_partition(
+          temperature, rho_thermal, thermo_states['q_t']
+      )
+      thermo_states.update({'q_l': q_l, 'q_i': q_i})
+      thermo_states['q_c'] = tf.nest.map_structure(tf.math.add, q_l, q_i)
+      thermo_states['q_v'] = tf.nest.map_structure(
+          tf.math.subtract, q_t, thermo_states['q_c'])
+
     return thermo_states
 
   def _get_wall_diffusive_flux_helper_variables(
@@ -174,8 +238,8 @@ class Humidity(scalar_generic.ScalarGeneric):
     """Prepares the helper variables for the diffusive flux in wall models.
 
     Args:
-      phi: The variable `scalar_name`, either 'q_t' or 'q_r' (defined in the
-        ctor), at the present iteration.
+      phi: The humidity (one of `q_t`, `q_r`, `q_s`, `q_v`, and `q_c` that is
+        defined in the ctor) at the present iteration.
       states: A dictionary that holds all flow field variables.
       additional_states: A dictionary that holds all helper variables.
 
@@ -199,10 +263,17 @@ class Humidity(scalar_generic.ScalarGeneric):
     """Determines the momentum to be used to compute the convection term."""
     momentum = [states[key] for key in common.KEYS_MOMENTUM]
 
-    if self._scalar_name == 'q_r':
+    if self._scalar_name in ('q_r', 'q_s'):
       # Subtract term for rain terminal velocity from the vertical momentum.
-      rain_water_terminal_velocity = self._microphysics.terminal_velocity(
-          states['rho_thermal'], phi, additional_states
+      assert self._microphysics is not None, (
+          f'Terminal velocity for {self._scalar_name} requires a microphysics'
+          ' model but is undefined.'
+      )
+      rain_water_terminal_velocity = self._microphysics_lib.terminal_velocity(
+          self._scalar_name,
+          self._microphysics,
+          {'rho_thermal': states['rho_thermal'], self._scalar_name: phi},
+          additional_states,
       )
       rain_water_momentum = tf.nest.map_structure(
           tf.math.multiply, rain_water_terminal_velocity, states['rho']
@@ -226,8 +297,8 @@ class Humidity(scalar_generic.ScalarGeneric):
     Args:
       replica_id: The index of the local core replica.
       replicas: A 3D array specifying the topology of the partition.
-      phi: The humidity (either `q_t` or `q_r` that is defined in the ctor) at
-        the present iteration.
+      phi: The humidity (one of `q_t`, `q_r`, `q_s`, `q_v`, and `q_c` that is
+        defined in the ctor) at the present iteration.
       states: A dictionary that holds all flow field variables.
       additional_states: A dictionary that holds all helper variables.
 
@@ -248,52 +319,18 @@ class Humidity(scalar_generic.ScalarGeneric):
         phi, states, additional_states
     )
 
-    if self._include_precipitation or self._include_subsidence:
-      # Compute condensate mass fraction.
-      q_c = self._thermodynamics.model.saturation_excess(
-          thermo_states['T'], states['rho_thermal'], thermo_states['q_t']
-      )
-
     # Compute vapor to rain water conversion term if needed.
     if self._include_precipitation:
-      q_r = phi if self._scalar_name == 'q_r' else states['q_r']
-      q_l, _ = self._thermodynamics.model.equilibrium_phase_partition(
-          thermo_states['T'], states['rho_thermal'], thermo_states['q_t']
-      )
-      aut_and_acc = self._microphysics.autoconversion_and_accretion(q_r, q_l)
-      # q_v = q_t - q_l - q_i. Not: We assume q_i == 0 here.
-      q_v = tf.nest.map_structure(tf.math.subtract, thermo_states['q_t'], q_l)
-      rain_water_evaporation_rate = self._microphysics.evaporation(
-          states['rho_thermal'],
-          thermo_states['T'],
-          q_r,
-          q_v,
-          q_l,
-          q_c,
+      cloud_liquid_to_water_source = self._microphysics_lib.humidity_source_fn(
+          self._scalar_name,
+          self._microphysics,
+          states,
           additional_states,
+          thermo_states,
       )
-      # Net vapor to rain water rate is
-      #   (vapor to rain water rate) - (evaporation rate).
-      net_cloud_liquid_to_rain_water_rate = tf.nest.map_structure(
-          tf.math.subtract, aut_and_acc, rain_water_evaporation_rate
+      source = tf.nest.map_structure(
+          tf.math.add, source, cloud_liquid_to_water_source
       )
-      cloud_liquid_to_water_source = tf.nest.map_structure(
-          tf.math.multiply,
-          net_cloud_liquid_to_rain_water_rate,
-          states[common.KEY_RHO],
-      )
-      # Add term for q_r, subtract for q_t.
-      op = None
-      if self._scalar_name == 'q_t':
-        op = tf.math.subtract
-      elif self._scalar_name == 'q_r':
-        op = tf.math.add
-      else:
-        raise NotImplementedError(
-            f'Precipitation for {self._scalar_name} is not implemented. Only'
-            ' "q_t" and "q_r" are supported.'
-        )
-      source = tf.nest.map_structure(op, source, cloud_liquid_to_water_source)
 
     # Compute source terms
     if self._scalar_name == 'q_t' and self._include_subsidence:
@@ -302,11 +339,43 @@ class Humidity(scalar_generic.ScalarGeneric):
           states[common.KEY_RHO],
           thermo_states['zz'],
           self._h[self._g_dim],
-          q_c,
+          thermo_states['q_c'],
           self._g_dim,
       )
 
       # Add external source, e.g. sponge forcing and subsidence.
       source = tf.nest.map_structure(tf.math.add, source, subsidence_source)
+
+    if self._include_condensation:
+      assert isinstance(self._thermodynamics.model, water.Water), (
+          '`water` thermodynamics model is required to consider condensation in'
+          ' the humidity equation.'
+      )
+      assert self._microphysics is not None, (
+          'A microphysics model is required to consider condensation in the'
+          ' humidity equation.'
+      )
+      cond = self._microphysics.condensation_bf2002(
+          states['rho_thermal'],
+          thermo_states['T'],
+          thermo_states['q_v'],
+          thermo_states['q_l'],
+          thermo_states['q_c'],
+          thermo_states['zz'],
+          additional_states,
+      )
+      cond_source = tf.nest.map_structure(
+          tf.math.multiply, states[common.KEY_RHO], cond)
+      op = None
+      if self._scalar_name == 'q_c':
+        op = tf.math.add
+      elif self._scalar_name == 'q_v':
+        op = tf.math.subtract
+      else:
+        raise NotImplementedError(
+            f'Precipitation for {self._scalar_name} is not implemented. Only'
+            ' "q_c" and "q_v" are supported.'
+        )
+      source = tf.nest.map_structure(op, source, cond_source)
 
     return source

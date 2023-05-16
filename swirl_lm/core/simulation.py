@@ -94,7 +94,6 @@ class Simulation:
         self.thermodynamics,
         self.monitor,
         self._ib,
-        self.dbg,
     )
 
     self.scalars = scalars_model.Scalars(self._kernel_op, self._params,

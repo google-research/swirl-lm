@@ -444,6 +444,7 @@ def face_flux_weno(
                         boundary_condition_utils.BoundaryType.UNKNOWN),
     varname: Optional[Text] = None,
     halo_width: Optional[int] = None,
+    order: int = 3,
 ) -> FlowFieldVal:
   """Computes the face flux of `state` normal to `dim` with WENO scheme.
 
@@ -469,6 +470,7 @@ def face_flux_weno(
     varname: The name of the variable.
     halo_width: The number of points in the halo layer in the direction normal
       to a boundary plane.
+    order: The order/stencil width of the interpolation.
 
   Returns:
     The flux of `state` on faces that are normal to `dim`.
@@ -476,7 +478,7 @@ def face_flux_weno(
   Raises:
     ValueError if `dim` is not one of 0, 1, and 2.
   """
-  del replica_id, replicas, bc_types, halo_width
+  del replica_id, bc_types, halo_width
   dims = ('x', 'y', 'z')
 
   if varname is not None and varname in (common.KEYS_VELOCITY[dim],
@@ -486,15 +488,20 @@ def face_flux_weno(
   else:
     flux = tf.nest.map_structure(tf.math.multiply, rhou, state)
 
-  flux_m = tf.nest.map_structure(lambda f, u, s: 0.5 * (f - tf.abs(u) * s),
-                                 flux, rhou, state)
-  flux_p = tf.nest.map_structure(lambda f, u, s: 0.5 * (f + tf.abs(u) * s),
-                                 flux, rhou, state)
+  num_replicas = np.prod(replicas.shape)
+  group_assignment = np.array([range(num_replicas)], dtype=np.int32)
+  l_inf_norm_op = lambda u: tf.math.reduce_max(tf.abs(u))
+  rhou_max = common_ops.global_reduce(rhou, l_inf_norm_op, group_assignment)
+
+  flux_m = tf.nest.map_structure(lambda f, s: 0.5 * (f - rhou_max * s),
+                                 flux, state)
+  flux_p = tf.nest.map_structure(lambda f, s: 0.5 * (f + rhou_max * s),
+                                 flux, state)
 
   # Interpolates the scalar value onto faces. Note that the `weno` functions
   # stores value on face i + 1/2 at i.
-  f_neg, _ = interpolation.weno(flux_p, dims[dim])
-  _, f_pos = interpolation.weno(flux_m, dims[dim])
+  f_neg, _ = interpolation.weno(flux_p, dims[dim], order)
+  _, f_pos = interpolation.weno(flux_m, dims[dim], order)
 
   return tf.nest.map_structure(tf.math.add, f_neg, f_pos)
 
@@ -514,6 +521,7 @@ def convection_weno(
                         boundary_condition_utils.BoundaryType.UNKNOWN),
     varname: Optional[Text] = None,
     halo_width: Optional[int] = None,
+    order: int = 3,
 ) -> FlowFieldVal:
   """Computes the convection term for convservative variables with WENO scheme.
 
@@ -532,6 +540,7 @@ def convection_weno(
     varname: The name of the variable.
     halo_width: The number of points in the halo layer in the direction normal
       to a boundary plane.
+    order: The order/stencil width of the interpolation.
 
   Returns:
     The convection term of `f`. Values within `halo_width` of 3 are invalid.
@@ -552,7 +561,7 @@ def convection_weno(
     raise ValueError('`dim` has to be 0, 1, or 2. {} is provided.'.format(dim))
 
   flux = face_flux_weno(replica_id, replicas, state, rhou, pressure, dim,
-                        bc_types, varname, halo_width)
+                        bc_types, varname, halo_width, order)
 
   return [d_flux / dx for d_flux in kernel_fn(flux, *diff_op_type)]
 
@@ -712,9 +721,12 @@ def convection_term(
     return convection_quick(kernel_op, replica_id, replicas, state, rhou,
                             pressure, dx, dt, dim, bc_types, varname,
                             halo_width, src, apply_correction)
-  elif scheme == ConvectionScheme.CONVECTION_SCHEME_WENO:
+  elif scheme == ConvectionScheme.CONVECTION_SCHEME_WENO_3:
     return convection_weno(kernel_op, replica_id, replicas, state, rhou,
-                           pressure, dx, dim, bc_types, varname, halo_width)
+                           pressure, dx, dim, bc_types, varname, halo_width, 2)
+  elif scheme == ConvectionScheme.CONVECTION_SCHEME_WENO_5:
+    return convection_weno(kernel_op, replica_id, replicas, state, rhou,
+                           pressure, dx, dim, bc_types, varname, halo_width, 3)
   elif scheme == ConvectionScheme.CONVECTION_SCHEME_UPWIND_1:
     return convection_upwinding_1(kernel_op, replica_id, replicas, state, rhou,
                                   pressure, dx, dt, dim, bc_types, varname,
@@ -724,12 +736,14 @@ def convection_term(
   else:
     raise NotImplementedError(
         '{} is not implemented. Available options are: '
-        '{}, {}, {}, {}.'.format(
+        '{}, {}, {}, {}, {}.'.format(
             numerics_pb2.ConvectionScheme.Name(scheme),
             numerics_pb2.ConvectionScheme.Name(
                 ConvectionScheme.CONVECTION_SCHEME_QUICK),
             numerics_pb2.ConvectionScheme.Name(
-                ConvectionScheme.CONVECTION_SCHEME_WENO),
+                ConvectionScheme.CONVECTION_SCHEME_WENO_3),
+            numerics_pb2.ConvectionScheme.Name(
+                ConvectionScheme.CONVECTION_SCHEME_WENO_5),
             numerics_pb2.ConvectionScheme.Name(
                 ConvectionScheme.CONVECTION_SCHEME_UPWIND_1),
             numerics_pb2.ConvectionScheme.Name(

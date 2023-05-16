@@ -29,10 +29,7 @@
 
 import abc
 import dataclasses
-import os
-import tempfile
 from typing import Dict, Sequence, Tuple
-import zipfile
 
 import netCDF4 as nc
 import numpy as np
@@ -69,13 +66,7 @@ class DataLoaderBase(metaclass=abc.ABCMeta):
       A 3-tuple of 1) the original netCDF Dataset, 2) a dictionary containing
       the data as tf.Variable, and 3) a dictionary of dimensions.
     """
-    filename = os.path.basename(path)
-    with tempfile.TemporaryDirectory() as tmp_dir:
-      with zipfile.ZipFile(path, 'r') as zip_file:
-        zip_file.extractall(tmp_dir)
-        filename = os.path.splitext(filename)[0]
-        extracted_path = os.path.join(tmp_dir, filename + '.nc')
-      ds = nc.Dataset(extracted_path, 'r')
+    ds = nc.Dataset(path, 'r')
 
     tensor_dict = {}
     dim_map = {k: v.size for k, v in ds.dimensions.items()}

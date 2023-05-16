@@ -20,9 +20,8 @@ from swirl_lm.equations import common
 from swirl_lm.equations import utils as eq_utils
 from swirl_lm.equations.source_function import scalar_generic
 from swirl_lm.numerics import calculus
-from swirl_lm.physics import constants
 from swirl_lm.physics.atmosphere import cloud
-from swirl_lm.physics.atmosphere import microphysics_kw1978
+from swirl_lm.physics.atmosphere import microphysics_utils
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import water
 from swirl_lm.utility import get_kernel_fn
@@ -63,6 +62,11 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
         ' provided.'
     )
 
+    assert isinstance(self._thermodynamics.model, water.Water), (
+        '`water` thermodynamics is required for the total energy equation, but'
+        f' {self._thermodynamics.model} is used.'
+    )
+
     self._include_radiation = (
         self._scalar_params.HasField('total_energy') and
         self._scalar_params.total_energy.include_radiation and
@@ -78,19 +82,22 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
         self._scalar_params.total_energy.include_precipitation and
         self._g_dim is not None)
 
-    self._cloud = None
     self._microphysics = None
-    if isinstance(self._thermodynamics.model, water.Water):
-      self._cloud = cloud.Cloud(
-          self._thermodynamics.model)
-      self._microphysics = microphysics_kw1978.MicrophysicsKW1978(
-          params, self._thermodynamics.model
+    if self._include_precipitation:
+      assert self._scalar_params.total_energy.HasField('microphysics'), (
+          'A microphysics model is required to consider precipitation in the'
+          ' total energy equation.'
       )
-    else:
-      raise ValueError(
-          '`water` thermodynamics is required for the total energy equation, '
-          f'but {self._thermodynamics.model} is used.'
+      microphysics_model_name = self._scalar_params.total_energy.WhichOneof(
+          'microphysics'
       )
+      self._microphysics, self._microphysics_lib = (
+          microphysics_utils.select_microphysics(
+              microphysics_model_name, self._params, self._thermodynamics
+          )
+      )
+
+    self._cloud = cloud.Cloud(self._thermodynamics.model)
 
   def _get_thermodynamic_variables(
       self,
@@ -149,7 +156,7 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
         phi, rho_thermal, q_t, temperature
     )
 
-    return {
+    thermo_states = {
         self._scalar_name: phi,
         'q_t': q_t,
         'zz': zz,
@@ -157,6 +164,34 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
         'theta': theta,
         'h_t': h_t,
     }
+
+    if self._include_radiation or self._include_precipitation:
+      q_l, _ = self._thermodynamics.model.equilibrium_phase_partition(
+          temperature, rho_thermal, q_t
+      )
+      thermo_states['q_l'] = q_l
+
+    if self._include_precipitation:
+      e_v, e_l, e_i = self._thermodynamics.model.internal_energy_components(
+          temperature
+      )
+
+      # Add precipitation mass fractions to thermal states.
+      thermo_states['q_r'] = states['q_r']
+      if 'q_s' in states:
+        thermo_states['q_s'] = states['q_s']
+
+      q_c = self._thermodynamics.model.saturation_excess(
+          temperature, rho_thermal, q_t
+      )
+      # Find q_v from the invariant q_t = q_c + q_v = q_l + q_i + q_v.
+      q_v = tf.nest.map_structure(tf.math.subtract, q_t, q_c)
+
+      thermo_states.update(
+          {'e_v': e_v, 'e_l': e_l, 'e_i': e_i, 'q_c': q_c, 'q_v': q_v}
+      )
+
+    return thermo_states
 
   def _get_scalar_for_convection(
       self,
@@ -241,7 +276,6 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
       )
 
     rho = states[common.KEY_RHO]
-    rho_thermal = states['rho_thermal']
     thermo_states = self._get_thermodynamic_variables(
         phi, states, additional_states
     )
@@ -304,17 +338,12 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
     ]
     div_terms = rho_u_tau
 
-    if self._include_radiation or self._include_precipitation:
-      q_l, _ = self._thermodynamics.model.equilibrium_phase_partition(
-          thermo_states['T'], states['rho_thermal'], thermo_states['q_t']
-      )
-
     # Compute the source terms due to dilatation, wind shear, radiation,
     # subsidence velocity, and precipitation.
     if self._include_radiation:
       halos = [self._params.halo_width] * 3
       f_r = self._cloud.source_by_radiation(
-          q_l,
+          thermo_states['q_l'],
           states['rho_thermal'],
           thermo_states['zz'],
           self._h[self._g_dim],
@@ -343,37 +372,9 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
       source = tf.nest.map_structure(tf.math.add, source, src_subsidence)
 
     if self._include_precipitation:
-      e_v, e_l, _ = self._thermodynamics.model.internal_energy_components(
-          thermo_states['T']
+      src_precipitation = self._microphysics_lib.total_energy_source_fn(
+          self._microphysics, states, additional_states, thermo_states
       )
-      # Get conversion rates from cloud water to rain water (for liquid and
-      # vapor phase).
-      q_r = states['q_r']
-      cloud_liquid_to_rain_water_rate = (
-          self._microphysics.autoconversion_and_accretion(q_r, q_l)
-      )
-      q_c = self._thermodynamics.model.saturation_excess(
-          thermo_states['T'], rho_thermal, thermo_states['q_t']
-      )
-      # Find q_v from the invariant q_t = q_c + q_v = q_l + q_i + q_v.
-      q_v = tf.nest.map_structure(tf.math.subtract, thermo_states['q_t'], q_c)
-      rain_water_evaporation_rate = self._microphysics.evaporation(
-          rho_thermal, thermo_states['T'], q_r, q_v, q_l, q_c, additional_states
-      )
-      # Get potential energy.
-      pe = tf.nest.map_structure(
-          lambda zz_i: constants.G * zz_i, thermo_states['zz']
-      )
-      # Calculate source terms for vapor and liquid conversions, respectively.
-      # Use that c_{q_v->q_l} = -c_{q_l->q_v}, i.e. minus the evaporation
-      # rate.
-      source_v = tf.nest.map_structure(
-          lambda e, pe, rho, c_lv: (e + pe) * rho * (-c_lv), e_v, pe, rho,
-          rain_water_evaporation_rate)
-      source_l = tf.nest.map_structure(
-          lambda e, pe, rho, c_lr: (e + pe) * rho * c_lr, e_l, pe, rho,
-          cloud_liquid_to_rain_water_rate)
-      source = tf.nest.map_structure(lambda s, sv, sl: s + sv + sl, source,
-                                     source_v, source_l)
+      source = tf.nest.map_structure(tf.math.add, source, src_precipitation)
 
     return source

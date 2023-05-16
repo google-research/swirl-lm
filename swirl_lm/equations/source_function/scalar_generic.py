@@ -15,10 +15,13 @@
 """A class that computes terms in a generic scalar transport equation."""
 
 import abc
+import copy
 from typing import List, Tuple
 
+from absl import logging
 import numpy as np
 from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.boundary_condition import boundary_condition_utils
 from swirl_lm.equations import common
 from swirl_lm.numerics import convection
 from swirl_lm.numerics import diffusion
@@ -47,6 +50,7 @@ class ScalarGeneric(abc.ABC):
     """Prepares helper variables for function evaluations."""
     self._kernel_op = kernel_op
     self._params = params
+    self._bc_types = copy.deepcopy(params.bc_type)
     self._scalar_name = scalar_name
     self._thermodynamics = thermodynamics
 
@@ -60,6 +64,17 @@ class ScalarGeneric(abc.ABC):
     assert (
         self._scalar_params is not None
     ), f'{self._scalar_name} is not configured.'
+
+    for override_bc in self._scalar_params.override_bc_type:
+      dim = override_bc.dim
+      face = override_bc.face
+      logging.info('BC type for scalar: %s '
+                   'will be reset to %s (originally %s) for dimension %d at '
+                   'face %d', self._scalar_name,
+                   str(boundary_condition_utils.BoundaryType.UNKNOWN),
+                   str(self._bc_types[dim][face]), dim, face)
+      self._bc_types[dim][face] = (
+          boundary_condition_utils.BoundaryType.UNKNOWN)
 
     # Find the direction of gravity. Only vector along a particular dimension is
     # considered currently.
@@ -231,7 +246,7 @@ class ScalarGeneric(abc.ABC):
           self._h[dim],
           self._params.dt,
           dim,
-          bc_types=tuple(self._params.bc_type[dim]),
+          bc_types=tuple(self._bc_types[dim]),
           varname=momentum_component,
           halo_width=self._params.halo_width,
           scheme=self._scalar_params.scheme,

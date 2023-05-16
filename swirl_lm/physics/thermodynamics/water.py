@@ -29,6 +29,7 @@ from swirl_lm.numerics import root_finder
 from swirl_lm.physics import constants
 from swirl_lm.physics.thermodynamics import thermodynamics_generic
 from swirl_lm.physics.thermodynamics import thermodynamics_pb2
+from swirl_lm.utility import get_kernel_fn
 import tensorflow as tf
 
 FlowFieldVal = thermodynamics_generic.FlowFieldVal
@@ -126,6 +127,98 @@ class Water(thermodynamics_generic.ThermodynamicModel):
   def lh_v0(self):
     """The latent heat of vaporization."""
     return self._lh_v0
+
+  def lh_v(self, temperature: FlowFieldVal) -> FlowFieldVal:
+    """Computes the latent heat of vaporization at `temperature`.
+
+    Args:
+      temperature: The temperature of the flow field [K].
+
+    Returns:
+      The latent heat of vaporization at the input temperature.
+    """
+    return tf.nest.map_structure(
+        lambda t: self._lh_v0 + (self._cp_v - self._cp_l) * (t - self._t_0),
+        temperature)
+
+  @property
+  def lh_s0(self):
+    """The latent heat of sublimation."""
+    return self._lh_s0
+
+  def lh_s(self, temperature: FlowFieldVal) -> FlowFieldVal:
+    """Computes the latent heat of sublimation at `temperature`.
+
+    Args:
+      temperature: The temperature of the flow field [K].
+
+    Returns:
+      The latent heat of sublimation at the input temperature.
+    """
+    return tf.nest.map_structure(
+        lambda t: self._lh_s0 + (self._cp_v - self._cp_i) * (t - self._t_0),
+        temperature)
+
+  def humidity_to_volume_mixing_ratio(
+      self,
+      q_t: FlowFieldVal,
+      q_c: FlowFieldVal,
+  ) -> FlowFieldVal:
+    """Computes the water vapor volume mixing ratio from specific humidities.
+
+    Args:
+      q_t: The total specific humidity.
+      q_c: The condensed phase specific humidity.
+
+    Returns:
+      A field containing the volume mixing ratio of water vapor.
+    """
+    mol_ratio = self.r_v / constants.R_D
+
+    def vmr_fn(q_t, q_c):
+      q_v = q_t - q_c
+      mix_ratio = q_v / (1.0 - q_t)
+      return mol_ratio * mix_ratio
+
+    return tf.nest.map_structure(vmr_fn, q_t, q_c)
+
+  def air_molecules_per_area(
+      self,
+      kernel_op: get_kernel_fn.ApplyKernelOp,
+      p: FlowFieldVal,
+      g_dim: int,
+      vmr_h2o: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldVal:
+    """Computes the number of molecules in an atmospheric grid cell per area.
+
+    The computation assumes the atmosphere to be in hydrostatic equilibrium.
+
+    Args:
+      kernel_op: An object holding a library of kernel operations.
+      p: The hydrostatic pressure variable.
+      g_dim: The direction of gravity.
+      vmr_h2o: The volume mixing ratio of water vapor.
+
+    Returns:
+      A field containing the number of molecules of atmospheric gases per area
+        [molecules/m^2].
+    """
+    grad_central = [
+        lambda f: kernel_op.apply_kernel_op_x(f, 'kDx'),
+        lambda f: kernel_op.apply_kernel_op_y(f, 'kDy'),
+        lambda f: kernel_op.apply_kernel_op_z(f, 'kDz', 'kDzsh'),
+    ]
+    dp = tf.nest.map_structure(lambda dp: 0.5 * dp, grad_central[g_dim](p))
+
+    def mols_fn(dp, vmr):
+      mol_m_air = constants.DRY_AIR_MOL_MASS + constants.WATER_MOL_MASS * vmr
+      return -(dp / constants.G) * constants.AVOGADRO / mol_m_air
+
+    return tf.nest.map_structure(
+        mols_fn,
+        dp,
+        vmr_h2o,
+    )
 
   def cv_m(
       self,
@@ -368,11 +461,17 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       zeros = tf.nest.map_structure(
           tf.zeros_like, additional_states['theta_ref']
       )
-      q_t = (
-          zeros
-          if 'q_t_init' not in additional_states
-          else additional_states['q_t_init']
-      )
+
+      if 'q_t_init' in additional_states:
+        q_t = additional_states['q_t_init']
+      elif ('q_c_init' in additional_states and
+            'q_v_init' in additional_states):
+        q_t = tf.nest.map_structure(tf.add, additional_states['q_c_init'],
+                                    additional_states['q_v_init'])
+      else:
+        # No humidity is included, assuming it is a dry case.
+        q_t = zeros
+
       temperature = self.potential_temperature_to_temperature(
           theta_name='theta',
           theta=additional_states['theta_ref'],
@@ -402,10 +501,20 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     Returns:
       The reference density as a function of height.
     """
-    if additional_states is not None and 'q_t_init' in additional_states:
+    if additional_states is not None:
+      if 'q_t_init' in additional_states:
+        q_t = additional_states['q_t_init']
+      elif ('q_c_init' in additional_states and
+            'q_v_init' in additional_states):
+        q_t = tf.nest.map_structure(
+            tf.add, additional_states['q_c_init'],
+            additional_states['q_v_init'])
+      else:
+        q_t = tf.nest.map_structure(tf.zeros_like, zz)
+
       r_m = self.r_mix(
-          additional_states['q_t_init'],
-          tf.nest.map_structure(tf.zeros_like, additional_states['q_t_init']),
+          q_t,
+          tf.nest.map_structure(tf.zeros_like, q_t),
       )
       return tf.nest.map_structure(
           lambda p_ref, r, t_ref: p_ref / r / t_ref,
@@ -1494,8 +1603,10 @@ class Water(thermodynamics_generic.ThermodynamicModel):
           f'temperature), or "{PotentialTemperature.THETA_LI.value}" (the '
           f'liquid-ice potential temperature).')
 
+    q_t = states['q_t'] if 'q_t' in states else (
+        tf.nest.map_structure(tf.math.add, states['q_c'], states['q_v']))
     return self.saturation_density(prognostic_var_name,
-                                   states[prognostic_var_name], states['q_t'],
+                                   states[prognostic_var_name], q_t,
                                    states['u'], states['v'], states['w'],
                                    states['rho'], zz, additional_states)
 
@@ -1547,18 +1658,22 @@ class Water(thermodynamics_generic.ThermodynamicModel):
         self.update_density(states, additional_states) if
         self._solver_mode == thermodynamics_pb2.Thermodynamics.ANELASTIC else
         states['rho'])
+
+    q_t = states['q_t'] if 'q_t' in states else (
+        tf.nest.map_structure(tf.math.add, states['q_c'], states['q_v']))
+
     temperatures = {
         'T': self.saturation_adjustment(
             target_var_name,
             target_var,
             rho_thermal,
-            states['q_t'],
+            q_t,
             zz,
             additional_states,
         )
     }
     temperatures.update(
-        self.potential_temperatures(temperatures['T'], states['q_t'],
+        self.potential_temperatures(temperatures['T'], q_t,
                                     rho_thermal, zz, additional_states))
 
     return temperatures

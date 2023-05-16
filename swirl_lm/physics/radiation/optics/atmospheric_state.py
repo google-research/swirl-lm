@@ -38,7 +38,7 @@ from swirl_lm.utility import types
 # Default site corresponding to coordinates 13.5 N, 298.5 E.
 DEFAULT_SITE_COORD = 9
 # Default RFMIP experiment id.
-DEFAULT_RFMIP_EXP_LABEL = 1
+DEFAULT_RFMIP_EXP_LABEL = 0
 
 
 @dataclasses.dataclass(frozen=True)

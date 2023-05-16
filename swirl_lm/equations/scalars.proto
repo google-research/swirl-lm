@@ -17,9 +17,10 @@ syntax = "proto2";
 package research.simulation;
 
 import "swirl_lm/numerics/numerics.proto";
+import "swirl_lm/physics/atmosphere/microphysics.proto";
 
 // Defines the properties of a scalar to be included in the flow field.
-// Next id: 15
+// Next id: 16
 message Scalar {
   // The name of the scalar.
   optional string name = 1;
@@ -70,13 +71,33 @@ message Scalar {
     Humidity humidity = 12;
     PotentialTemperature potential_temperature = 14;
   }
+
+  // By default, the wall BC type (e.g. SLIP_WALL, NON_SLIP_WALL) used for
+  // scalar transport convection term calculation is derived from velocity
+  // BC. This allows the overriding of the derived BC for a specific scalar
+  // in a specific dimension, on a specific face. This will set the BC type
+  // to UNKNOWN, which affects the convection term calculation for this scalar
+  // at the boundary, e.g. when the original boundary type is a wall.
+  message OverrideBCType {
+    // The dimension of the wall BC type to be overriden. Allowed values are 0,
+    // 1, and 2, which corresponds to the x, y, and z directions, respectively.
+    optional int32 dim = 1;
+    // The face index of the wall BC type to be overriden. Should be one of 0
+    // and 1, where 0 indicates the flux is on the lower end of `dim`, and 1 is
+    // on the higher end of `dim`.
+    optional int32 face = 2;
+  }
+
+  // Override the BC type for this scalar, which affects the convection term
+  // calculation.
+  repeated OverrideBCType override_bc_type = 15;
 }
 
 // Defines configurations for a generic scalar.
 message GenericScalar {}
 
 // Defines configurations for total energy.
-// Next id: 4
+// Next id: 6
 message TotalEnergy {
   // An option of whether radiation is included in the total energy equation.
   optional bool include_radiation = 1;
@@ -86,10 +107,16 @@ message TotalEnergy {
   // An option of whether the effects of precipitation is included in the
   // total energy equation.
   optional bool include_precipitation = 3;
+  // Specifies the option of microphysics, which will be used if
+  // `include_precipitation` is true.
+  oneof microphysics {
+    Kessler kessler = 4;
+    OneMoment one_moment = 5;
+  }
 }
 
 // Defines configurations for total humidity.
-// Next id: 3
+// Next id: 6
 message Humidity {
   // An option of whether the effect of subsidence velocity is included in the
   // total humidity equation.
@@ -97,10 +124,19 @@ message Humidity {
   // An option of whether the effects of precipitation is included in the
   // equations for total humidity and rain water.
   optional bool include_precipitation = 2;
+  // An option of whether condensation is included in the equations for
+  // humidity.
+  optional bool include_condensation = 3;
+  // Specifies the option of microphysics, which will be used if
+  // `include_precipitation` is true.
+  oneof microphysics {
+    Kessler kessler = 4;
+    OneMoment one_moment = 5;
+  }
 }
 
 // Defines configurations for the liquid-ice potential temperature.
-// Next id: 5
+// Next id: 7
 message PotentialTemperature {
   // An option of whether radiation is included in the liquid-ice potential
   // temperature equation.
@@ -111,7 +147,13 @@ message PotentialTemperature {
   // An option of whether condensation is included in the potential temperature
   // equation.
   optional bool include_condensation = 3;
-  // An option of whether evaporation is included in the potential temperature
+  // An option of whether precipitation is included in the potential temperature
   // equation.
-  optional bool include_evaporation = 4;
+  optional bool include_precipitation = 4;
+  // Specifies the option of microphysics, which will be used if
+  // `include_precipitation` or `include_condensation` is true.
+  oneof microphysics {
+    Kessler kessler = 5;
+    OneMoment one_moment = 6;
+  }
 }

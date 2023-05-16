@@ -19,7 +19,7 @@ package research.simulation;
 option java_multiple_files = true;
 
 // Parameters required by the Monin-Obukhov Similarity Theory.
-// Next id = 18;
+// Next id = 19;
 message MoninObukhovSimilarityTheory {
   // The roughness length, in units of m.
   optional float z_0 = 1;
@@ -82,4 +82,8 @@ message MoninObukhovSimilarityTheory {
 
   // Specifies scalars to which MOST is applied.
   repeated string active_scalar = 16;
+
+  // An option for printing debuging information in log. To activate the debug
+  // prints, the following flag is required: swirl_debug_log_level=INFO.
+  optional bool debug = 18 [default = false];
 }

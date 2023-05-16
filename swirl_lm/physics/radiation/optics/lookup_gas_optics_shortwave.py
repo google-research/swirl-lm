@@ -37,7 +37,7 @@ import tensorflow as tf
 
 
 @dataclasses.dataclass(frozen=True)
-class LookupGasOpticsShortwave(gas_base.LookupGasOpticsBase):
+class LookupGasOpticsShortwave(gas_base.AbstractLookupGasOptics):
   """Lookup table of gases' optical properties in the shortwave bands."""
 
   # Total solar irradiation

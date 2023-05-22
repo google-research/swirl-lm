@@ -63,6 +63,9 @@ FlowFieldMap = types.FlowFieldMap
 _KAPPA = 0.4
 # The stability correction for momentum.
 _PHI_M = 0.0
+# The threshold of the ratio between the height of the first fluid layer and the
+# surface roughness.
+_HEIGHT_TO_SURFACE_ROUGHNESS_RATIO_THRESHOLD = 1.1
 
 
 class MoninObukhovSimilarityTheory(object):
@@ -642,10 +645,6 @@ class MoninObukhovSimilarityTheory(object):
     helper_states.update({'theta': theta})
 
     # Get the turbulent viscosity and diffusivity.
-    # BEGIN: GOOGLE_INTERNAL
-    # TODO(b/242739803): Add support for turbulent diffusivity computed from
-    # scalar gradients.
-    # END: GOOGLE_INTERNAL
     nu_t = additional_states.get('nu_t', 0.0)
     if self.params.sgs_model.WhichOneof('sgs_model_type') == 'smagorinsky':
       pr_t = self.params.sgs_model.smagorinsky.pr_t
@@ -712,9 +711,6 @@ class MoninObukhovSimilarityTheory(object):
 
     return additional_states_new
 
-  # BEGIN: GOOGLE_INTERNAL
-  # TODO(b/240981325): Remove functions in this class from this line below.
-  # END: GOOGLE_INTERNAL
   def _compute_obukhov_length(
       self,
       m: tf.Tensor,
@@ -1275,6 +1271,8 @@ def monin_obukhov_similarity_theory_factory(
     ValueError: If `most` is not defined in the parameter context.
     ValueError: If `gravity_direction` is absent, or is not aligned with a
       particular dimension.
+    AssertionError: If the first fluid layer is below the tolerated surface
+      roughness.
   """
   if not params.boundary_models.HasField('most'):
     raise ValueError(
@@ -1298,5 +1296,19 @@ def monin_obukhov_similarity_theory_factory(
     raise ValueError(
         'Gravity must be defined to use the Monin-Obukhov boundary layer '
         'model.')
+
+  # If the height of the first fluid layer is close or below the surface
+  # roughness, the wall is considered resolved, and a non-slip wall should be
+  # used without the MOST model.
+  height = 0.5 * (params.dx, params.dy, params.dz)[vertical_dim]
+  z_0 = (
+      _HEIGHT_TO_SURFACE_ROUGHNESS_RATIO_THRESHOLD
+      * params.boundary_models.most.z_0
+  )
+  assert height > z_0, (
+      f'The height of the first fluid layer ({height} m) is below the tolerated'
+      f' surface roughness ({z_0} m). MOST model should be disabled and'
+      ' replaced by a non-slip wall BC.'
+  )
 
   return MoninObukhovSimilarityTheory(params, vertical_dim)

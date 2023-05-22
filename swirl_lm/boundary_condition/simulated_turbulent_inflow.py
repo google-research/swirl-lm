@@ -148,9 +148,6 @@ class SimulatedTurbulentInflow():
       plane = tf.squeeze(inflow_data[index, ...])
       tiles = [1, 1, 1]
       tiles[self._inflow_axis] = self._params.halo_width + 1
-      # BEGIN: GOOGLE-INTERNAL
-      # TODO(wqing): Remove the unstack after 3D tf.Tensor is supported.
-      # END: GOOGLE-INTERNAL
       return tf.unstack(
           tf.tile(tf.expand_dims(plane, self._inflow_axis), tiles))
 
@@ -347,9 +344,6 @@ class SimulatedTurbulentInflow():
             lambda bc_0, bc_1: (1.0 - t_fraction) * bc_0 + t_fraction * bc_1,
             bc_val_0, bc_val_1)
 
-        # BEGIN: GOOGLE-INTERNAL
-        # TODO(wqing): Remove the unstack after 3D tf.Tensor is supported.
-        # END: GOOGLE-INTERNAL
         inflow_bc.update({bc_key: tf.unstack(bc_val)})
 
     return inflow_bc

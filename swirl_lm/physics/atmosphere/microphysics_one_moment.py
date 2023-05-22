@@ -66,7 +66,7 @@ References:
 """
 
 import dataclasses
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 import numpy as np
 from swirl_lm.base import parameters as parameters_lib
@@ -89,7 +89,7 @@ NU_AIR = 1.6e-5
 D_VAP = 2.26e-5
 
 
-def _gamma(x: float | tf.Tensor) -> tf.Tensor:
+def _gamma(x: Union[float, tf.Tensor]) -> tf.Tensor:
   """Computes the Gamma function of x."""
   with tf.control_dependencies(
       [
@@ -240,7 +240,7 @@ class Accretion:
 
 
 def _n_0(
-    coeff: Rain | Snow | Ice,
+    coeff: Union[Rain, Snow, Ice],
     rho: Optional[tf.Tensor] = None,
     q_s: Optional[tf.Tensor] = None,
 ) -> tf.Tensor:
@@ -259,7 +259,8 @@ def _n_0(
     )
 
 
-def _v_0(coeff: Rain | Snow, rho: Optional[tf.Tensor] = None) -> tf.Tensor:
+def _v_0(coeff: Union[Rain, Snow],
+         rho: Optional[tf.Tensor] = None) -> tf.Tensor:
   """Computes unit terminal velocity."""
   if isinstance(coeff, Rain):
     assert rho is not None
@@ -291,7 +292,7 @@ class OneMoment(microphysics_generic.Microphysics):
 
   def _marshall_palmer_distribution_parameter_lambda(
       self,
-      coeff: Rain | Snow | Ice,
+      coeff: Union[Rain, Snow, Ice],
       rho: types.FlowFieldVal,
       q: types.FlowFieldVal,
   ) -> types.FlowFieldVal:
@@ -353,7 +354,7 @@ class OneMoment(microphysics_generic.Microphysics):
 
   def _conduction_and_diffusion(
       self,
-      coeff: Rain | Snow,
+      coeff: Union[Rain, Snow],
       temperature: types.FlowFieldVal,
       q_l: Optional[types.FlowFieldVal] = None,
       q_c: Optional[types.FlowFieldVal] = None,
@@ -397,7 +398,7 @@ class OneMoment(microphysics_generic.Microphysics):
 
   def _accretion(
       self,
-      coeff: Rain | Snow,
+      coeff: Union[Rain, Snow],
       rho: types.FlowFieldVal,
       q_l: types.FlowFieldVal,
       q_i: types.FlowFieldVal,
@@ -452,7 +453,7 @@ class OneMoment(microphysics_generic.Microphysics):
 
   def _autoconversion(
       self,
-      coeff: Rain | Snow,
+      coeff: Union[Rain, Snow],
       q: types.FlowFieldVal,
   ) -> types.FlowFieldVal:
     """Computes the increase rate of precipitation due to autoconversion.
@@ -545,7 +546,7 @@ class OneMoment(microphysics_generic.Microphysics):
 
   def evaporation_sublimation(
       self,
-      coeff: Rain | Snow,
+      coeff: Union[Rain, Snow],
       temperature: types.FlowFieldVal,
       rho: types.FlowFieldVal,
       q_v: types.FlowFieldVal,
@@ -652,7 +653,7 @@ class OneMoment(microphysics_generic.Microphysics):
 
   def autoconversion_and_accretion(
       self,
-      coeff: Rain | Snow,
+      coeff: Union[Rain, Snow],
       temperature: types.FlowFieldVal,
       rho: types.FlowFieldVal,
       q_v: types.FlowFieldVal,
@@ -688,7 +689,7 @@ class OneMoment(microphysics_generic.Microphysics):
 
   def terminal_velocity(
       self,
-      coeff: Rain | Snow,
+      coeff: Union[Rain, Snow],
       rho: types.FlowFieldVal,
       q_p: types.FlowFieldVal,
   ) -> types.FlowFieldVal:

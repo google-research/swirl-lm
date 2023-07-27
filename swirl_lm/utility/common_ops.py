@@ -396,7 +396,7 @@ def group_replicas(
   transpose_axes = remaining_axis + axis
   transposed_replicas = replicas.transpose(transpose_axes)
   # Flatten replica slices.
-  slice_size = np.product([replicas.shape[dim] for dim in axis])
+  slice_size = np.prod([replicas.shape[dim] for dim in axis])
   return transposed_replicas.reshape([-1, slice_size])
 
 
@@ -781,7 +781,7 @@ def local_dot(
   representing 1-D, 2-D or 3D fields.
 
   Args:
-    vec1: One of the vectors for the dot prodcut.
+    vec1: One of the vectors for the dot product.
     vec2: The other vector for the dot product.
 
   Returns:
@@ -828,7 +828,7 @@ def global_dot(
   representing 1-D, 2-D or 3D fields.
 
   Args:
-    vec1: One of the vectors for the dot prodcut.
+    vec1: One of the vectors for the dot product.
     vec2: The other vector for the dot product.
     group_assignment: A 2d int32 lists with shape [num_groups,
       num_replicas_per_group]
@@ -1539,33 +1539,34 @@ def get_face(value: FlowFieldVal,
   if isinstance(value, tf.Tensor):
     # Handles the case of single 3D tensor.
     shifted_dim = (dim + 1) % 3
-    n = value.get_shape().as_list()[shifted_dim]
+    shape = value.get_shape().as_list()
+    n = shape[shifted_dim]
+    start_idx = [0, 0, 0]
 
-    slices = [slice(None), slice(None), slice(None)]
     if face == 0:  # low
-      slices[shifted_dim] = slice(index, index + 1)
+      start_idx[shifted_dim] = index
     elif face == 1:  # high
-      slices[shifted_dim] = slice(n - index - 1, n - index)
+      start_idx[shifted_dim] = n - index - 1
 
-    return scaling_factor * value[slices]
+    shape[shifted_dim] = 1
+    return scaling_factor * tf.slice(value, start_idx, shape)
 
   # Handles the case of list of 2D tensors.
   nz = len(value)
-  nx, ny = value[0].get_shape().as_list()
-  if dim == 0:  # X
-    if face == 0:  # low
-      bc_value = [[scaling_factor * val[index:index + 1, :] for val in value]]
-    elif face == 1:  # high
-      bc_value = [[
-          scaling_factor * val[nx - index - 1:nx - index, :] for val in value
-      ]]
-  elif dim == 1:  # Y
-    if face == 0:  # low
-      bc_value = [[scaling_factor * val[:, index:index + 1] for val in value]]
-    elif face == 1:  # high
-      bc_value = [[
-          scaling_factor * val[:, ny - index - 1:ny - index] for val in value
-      ]]
+  if dim in (0, 1):
+    shape = value[0].get_shape().as_list()
+    n = shape[dim]
+    start_idx = [0, 0]
+    if face == 0:
+      start_idx[dim] = index
+    elif face == 1:
+      start_idx[dim] = n - index - 1
+    shape[dim] = 1
+    bc_value = [
+        tf.nest.map_structure(
+            lambda x: scaling_factor * tf.slice(x, start_idx, shape), value
+        )
+    ]
   elif dim == 2:  # Z
     if face == 0:  # low
       bc_value = [
@@ -1613,20 +1614,13 @@ def meshgrid(xs: _TensorEquivalent, ys: _TensorEquivalent,
     raise ValueError('Rank for inputs xs, ys, and zs must all be 1, but got '
                      '(%d, %d, %d) instead.' %
                      (xs_ts.shape.rank, ys_ts.shape.rank, zs_ts.shape.rank))
-  xlen = xs_ts.shape.as_list()[0]
-  ylen = ys_ts.shape.as_list()[0]
-  zlen = zs_ts.shape.as_list()[0]
-  xx = tf.matmul(
-      tf.expand_dims(
-          tf.matmul(tf.expand_dims(xs_ts, 1), tf.ones([1, ylen], dtype=_DTYPE)),
-          2), tf.ones([xlen, 1, zlen], dtype=_DTYPE))
-  yy = tf.matmul(
-      tf.expand_dims(
-          tf.matmul(tf.ones([xlen, 1], dtype=_DTYPE), tf.expand_dims(ys_ts, 0)),
-          2), tf.ones([xlen, 1, zlen], dtype=_DTYPE))
-  zz = tf.matmul(
-      tf.ones([xlen, ylen, 1], dtype=_DTYPE),
-      tf.expand_dims(
-          tf.matmul(tf.ones([xlen, 1], dtype=_DTYPE), tf.expand_dims(zs_ts, 0)),
-          1))
+
+  xx = tf.einsum('ij,k->ijk', tf.einsum('i,j->ij', xs_ts, tf.ones_like(ys_ts)),
+                 tf.ones_like(zs_ts))
+  yy = tf.einsum('ij,k->ijk', tf.einsum('i,j->ij', tf.ones_like(xs_ts), ys_ts),
+                 tf.ones_like(zs_ts))
+  zz = tf.einsum('ij,k->ijk',
+                 tf.einsum('i,j->ij', tf.ones_like(xs_ts), tf.ones_like(ys_ts)),
+                 zs_ts)
+
   return xx, yy, zz

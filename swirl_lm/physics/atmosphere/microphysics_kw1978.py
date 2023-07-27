@@ -27,6 +27,8 @@
 # limitations under the License.
 """A library of the microphysics from Klemp & Wilhelmson, 1978."""
 
+from typing import Optional
+
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.equations import common
 from swirl_lm.physics import constants
@@ -37,16 +39,6 @@ import tensorflow as tf
 
 class MicrophysicsKW1978(microphysics_generic.Microphysics):
   """An object for handling precipitation modeling."""
-
-  def __init__(
-      self,
-      params: parameters_lib.SwirlLMParameters,
-      water_model: water.Water,
-  ) -> None:
-    """Initialize with a water thermodynamics model."""
-    super().__init__(params)
-
-    self._water_model = water_model
 
   def evaporation(
       self,
@@ -101,8 +93,8 @@ class MicrophysicsKW1978(microphysics_generic.Microphysics):
       ValueError: If the thermodynamics model is not `Water`.
     """
     zz = additional_states.get('zz', tf.nest.map_structure(tf.zeros_like, q_r))
-    rho_bar = self._water_model.rho_ref(zz, additional_states)
-    p_bar = self._water_model.p_ref(zz, additional_states)
+    rho_bar = self.water_model.rho_ref(zz, additional_states)
+    p_bar = self.water_model.p_ref(zz, additional_states)
     q_vs = self.water_model.saturation_q_vapor(temperature, rho, q_l, q_c)
     p_vs = tf.nest.map_structure(tf.math.multiply, q_vs, p_bar)
 
@@ -225,7 +217,7 @@ class MicrophysicsKW1978(microphysics_generic.Microphysics):
     del rho
 
     zz = additional_states.get('zz', tf.nest.map_structure(tf.zeros_like, q_r))
-    rho_bar = self._water_model.rho_ref(zz, additional_states)
+    rho_bar = self.water_model.rho_ref(zz, additional_states)
 
     k1 = 14.34
     k2 = 0.1346
@@ -248,244 +240,294 @@ class MicrophysicsKW1978(microphysics_generic.Microphysics):
     return tf.nest.map_structure(tf.math.multiply, f1, f2)
 
 
-def terminal_velocity(
-    varname: str,
-    microphysics: MicrophysicsKW1978,
-    states: water.FlowFieldMap,
-    additional_states: water.FlowFieldMap,
-) -> water.FlowFieldVal:
-  """Computes the terminal velocity for `q_r` or `q_s`.
+class Adapter(microphysics_generic.MicrophysicsAdapter):
+  """Interface between the Kessler microphysics model and rest of Swirl-LM."""
 
-  Args:
-    varname: The name of the humidity variable, either `q_r` or `q_s`.
-    microphysics: An instance of the `MicrophysicsKW1978` class.
-    states: A dictionary that holds all flow field variables.
-    additional_states: A dictionary that holds all helper variables.
+  _kessler: MicrophysicsKW1978
 
-  Returns:
-    The terminal velocity for `q_r` or `q_s`.
+  def __init__(
+      self, params: parameters_lib.SwirlLMParameters, water_model: water.Water
+  ):
+    self._kessler = MicrophysicsKW1978(params, water_model)
 
-  Raises:
-    NotImplementedError If `varname` is not one of `q_r` or `q_s`.
-  """
-  assert varname in (
-      'q_r',
-      'q_s',
-  ), f'Terminal velocity is for `q_r` or `q_s` only, but {varname} is provided.'
+  def terminal_velocity(
+      self,
+      varname: str,
+      states: water.FlowFieldMap,
+      additional_states: water.FlowFieldMap,
+  ) -> water.FlowFieldVal:
+    """Computes the terminal velocity for `q_r` or `q_s`.
 
-  return microphysics.terminal_velocity(
-      states['rho_thermal'], states[varname], additional_states
-  )
+    Args:
+      varname: The name of the humidity variable, either `q_r` or `q_s`.
+      states: A dictionary that holds all flow field variables.
+      additional_states: A dictionary that holds all helper variables.
 
+    Returns:
+      The terminal velocity for `q_r` or `q_s`.
 
-def humidity_source_fn(
-    varname: str,
-    microphysics: MicrophysicsKW1978,
-    states: water.FlowFieldMap,
-    additional_states: water.FlowFieldMap,
-    thermo_states: water.FlowFieldMap,
-) -> water.FlowFieldVal:
-  """Computes the source term in a humidity equation.
-
-  Supported types of humidity are `q_t` and `q_r`.
-
-  Args:
-    varname: The name of the humidity variable, either `q_r` or `q_t`.
-    microphysics: An instance of the `MicrophysicsKW1978` class.
-    states: A dictionary that holds all flow field variables.
-    additional_states: A dictionary that holds all helper variables.
-    thermo_states: A dictionary that holds all thermodynamics variables.
-
-  Returns:
-    The source term in a humidity equation due to microphysics.
-
-  Raises:
-    NotImplementedError If `varname` is not one of `q_t` `q_c`, `q_v`, or `q_r`.
-  """
-  q_r = thermo_states['q_r']
-  q_l = thermo_states['q_l']
-  aut_and_acc = microphysics.autoconversion_and_accretion(q_r, q_l)
-  rain_water_evaporation_rate = microphysics.evaporation(
-      states['rho_thermal'],
-      thermo_states['T'],
-      q_r,
-      thermo_states['q_v'],
-      q_l,
-      thermo_states['q_c'],
-      additional_states,
-  )
-  # Net vapor to rain water rate is
-  #   (vapor to rain water rate) - (evaporation rate).
-  net_cloud_liquid_to_rain_water_rate = tf.nest.map_structure(
-      tf.math.subtract, aut_and_acc, rain_water_evaporation_rate
-  )
-  cloud_liquid_to_water_source = tf.nest.map_structure(
-      tf.math.multiply,
-      net_cloud_liquid_to_rain_water_rate,
-      states[common.KEY_RHO],
-  )
-  # Add term for q_r, subtract for q_t.
-  if varname == 'q_t':
-    return tf.nest.map_structure(tf.math.negative, cloud_liquid_to_water_source)
-  elif varname == 'q_r':
-    return cloud_liquid_to_water_source
-  # aut_and_acc process consumes cloud liquid.
-  elif varname == 'q_c':
-    rho_aut_acc = tf.nest.map_structure(tf.math.multiply,
-                                        aut_and_acc, states[common.KEY_RHO])
-    return tf.nest.map_structure(tf.math.negative, rho_aut_acc)
-  # rain evaporation contributes to add cloud vapor.
-  elif varname == 'q_v':
-    rho_evap_rate = tf.nest.map_structure(tf.math.multiply,
-                                          rain_water_evaporation_rate,
-                                          states[common.KEY_RHO])
-    return rho_evap_rate
-  else:
-    raise NotImplementedError(
-        f'Precipitation for {varname} is not implemented. Only'
-        ' `q_t`, `q_r`, `q_c` and `q_v` are supported.'
+    Raises:
+      NotImplementedError If `varname` is not one of `q_r` or `q_s`.
+    """
+    assert varname in (
+        'q_r',
+        'q_s',
+    ), (
+        f'Terminal velocity is for `q_r` or `q_s` only, but {varname} is'
+        ' provided.'
     )
 
+    return self._kessler.terminal_velocity(
+        states['rho_thermal'], states[varname], additional_states
+    )
 
-def potential_temperature_source_fn(
-    varname: str,
-    microphysics: MicrophysicsKW1978,
-    states: water.FlowFieldMap,
-    additional_states: water.FlowFieldMap,
-    thermo_states: water.FlowFieldMap,
-) -> water.FlowFieldVal:
-  """Computes the source term in a potential temperature equation.
+  def humidity_source_fn(
+      self,
+      varname: str,
+      states: water.FlowFieldMap,
+      additional_states: water.FlowFieldMap,
+      thermo_states: water.FlowFieldMap,
+  ) -> water.FlowFieldVal:
+    """Computes the source term in a humidity equation.
 
-  Supported types of potential temperature are `theta` and `theta_li`.
+    Supported types of humidity are `q_t` and `q_r`.
 
-  Args:
-    varname: The name of the potential temperature variable, either `theta` or
-      `theta_li`.
-    microphysics: An instance of the `MicrophysicsKW1978` class.
-    states: A dictionary that holds all flow field variables.
-    additional_states: A dictionary that holds all helper variables.
-    thermo_states: A dictionary that holds all thermodynamics variables.
+    Args:
+      varname: The name of the humidity variable, either `q_r` or `q_t`.
+      states: A dictionary that holds all flow field variables.
+      additional_states: A dictionary that holds all helper variables.
+      thermo_states: A dictionary that holds all thermodynamics variables.
 
-  Returns:
-    The source term in a potential equation due to microphysics.
+    Returns:
+      The source term in a humidity equation due to microphysics.
 
-  Raises:
-    AssertionError If `varname` is not one of `theta` or `theta_li`.
-  """
-  assert varname in ('theta', 'theta_li'), (
-      'Only `theta` and `theta_li` are supported for the microphysics source'
-      f' term computation, but {varname} is provided.'
-  )
+    Raises:
+      NotImplementedError If `varname` is not one of `q_t` `q_c`, `q_v`, or
+      `q_r`.
+    """
+    q_r = thermo_states['q_r']
+    q_l = thermo_states['q_l']
+    aut_and_acc = self._kessler.autoconversion_and_accretion(q_r, q_l)
+    rain_water_evaporation_rate = self._kessler.evaporation(
+        states['rho_thermal'],
+        thermo_states['T'],
+        q_r,
+        thermo_states['q_v'],
+        q_l,
+        thermo_states['q_c'],
+        additional_states,
+    )
+    # Net vapor to rain water rate is
+    #   (vapor to rain water rate) - (evaporation rate).
+    net_cloud_liquid_to_rain_water_rate = tf.nest.map_structure(
+        tf.math.subtract, aut_and_acc, rain_water_evaporation_rate
+    )
+    cloud_liquid_to_water_source = tf.nest.map_structure(
+        tf.math.multiply,
+        net_cloud_liquid_to_rain_water_rate,
+        states[common.KEY_RHO],
+    )
+    # Add term for q_r, subtract for q_t.
+    if varname == 'q_t':
+      return tf.nest.map_structure(
+          tf.math.negative, cloud_liquid_to_water_source
+      )
+    elif varname == 'q_r':
+      return cloud_liquid_to_water_source
+    # aut_and_acc process consumes cloud liquid.
+    elif varname == 'q_c':
+      rho_aut_acc = tf.nest.map_structure(
+          tf.math.multiply, aut_and_acc, states[common.KEY_RHO]
+      )
+      return tf.nest.map_structure(tf.math.negative, rho_aut_acc)
+    # rain evaporation contributes to add cloud vapor.
+    elif varname == 'q_v':
+      rho_evap_rate = tf.nest.map_structure(
+          tf.math.multiply, rain_water_evaporation_rate, states[common.KEY_RHO]
+      )
+      return rho_evap_rate
+    else:
+      raise NotImplementedError(
+          f'Precipitation for {varname} is not implemented. Only'
+          ' `q_t`, `q_r`, `q_c` and `q_v` are supported.'
+      )
 
-  # Calculate source terms for vapor and liquid conversions, respectively.
-  # Use that c_{q_v->q_r} = -c_{q_r->q_v}, i.e. minus the evaporation
-  # rate.
-  source = tf.nest.map_structure(
-      tf.math.negative,
-      microphysics.evaporation(
-          states['rho_thermal'],
-          thermo_states['T'],
-          states['q_r'],
-          thermo_states['q_v'],
-          thermo_states['q_l'],
-          thermo_states['q_c'],
-          additional_states,
-      ),
-  )
+  def potential_temperature_source_fn(
+      self,
+      varname: str,
+      states: water.FlowFieldMap,
+      additional_states: water.FlowFieldMap,
+      thermo_states: water.FlowFieldMap,
+  ) -> water.FlowFieldVal:
+    """Computes the source term in a potential temperature equation.
 
-  if varname == 'theta_li':
-    # Get conversion rates and energy source from cloud water/ice to rain.
-    # This source term applies to the liquid-ice potential temperature only.
+    Supported types of potential temperature are `theta` and `theta_li`.
+
+    Args:
+      varname: The name of the potential temperature variable, either `theta` or
+        `theta_li`.
+      states: A dictionary that holds all flow field variables.
+      additional_states: A dictionary that holds all helper variables.
+      thermo_states: A dictionary that holds all thermodynamics variables.
+
+    Returns:
+      The source term in a potential equation due to microphysics.
+
+    Raises:
+      AssertionError If `varname` is not one of `theta` or `theta_li`.
+    """
+    assert varname in ('theta', 'theta_li'), (
+        'Only `theta` and `theta_li` are supported for the microphysics source'
+        f' term computation, but {varname} is provided.'
+    )
+
+    # Calculate source terms for vapor and liquid conversions, respectively.
+    # Use that c_{q_v->q_r} = -c_{q_r->q_v}, i.e. minus the evaporation
+    # rate.
     source = tf.nest.map_structure(
-        tf.math.add,
-        source,
-        microphysics.autoconversion_and_accretion(
-            states['q_r'], thermo_states['q_l']
+        tf.math.negative,
+        self._kessler.evaporation(
+            states['rho_thermal'],
+            thermo_states['T'],
+            states['q_r'],
+            thermo_states['q_v'],
+            thermo_states['q_l'],
+            thermo_states['q_c'],
+            additional_states,
         ),
     )
 
-  # Converts water mass fraction conversion rates to an energy source term.
-  t_0 = microphysics.water_model.t_ref(thermo_states['zz'], additional_states)
-  zeros = tf.nest.map_structure(tf.zeros_like, t_0)
-  theta_0 = microphysics.water_model.temperature_to_potential_temperature(
-      'theta',
-      t_0,
-      zeros,
-      zeros,
-      zeros,
-      thermo_states['zz'],
-      additional_states,
-  )
-  cp = microphysics.water_model.cp_m(
-      thermo_states['q_t'], thermo_states['q_l'], thermo_states['q_i']
-  )
+    if varname == 'theta_li':
+      # Get conversion rates and energy source from cloud water/ice to rain.
+      # This source term applies to the liquid-ice potential temperature only.
+      source = tf.nest.map_structure(
+          tf.math.add,
+          source,
+          self._kessler.autoconversion_and_accretion(
+              states['q_r'], thermo_states['q_l']
+          ),
+      )
 
-  def energy_source_fn(
-      rho: tf.Tensor,
-      cp: tf.Tensor,
-      t_0: tf.Tensor,
-      theta_0: tf.Tensor,
-      s: tf.Tensor,
-  ) -> tf.Tensor:
-    """Computes the condensation source term."""
-    return rho * (microphysics.water_model.lh_v0 / cp) * (theta_0 / t_0) * s
+    # Converts water mass fraction conversion rates to an energy source term.
+    t_0 = self._kessler.water_model.t_ref(
+        thermo_states['zz'], additional_states
+    )
+    zeros = tf.nest.map_structure(tf.zeros_like, t_0)
+    theta_0 = self._kessler.water_model.temperature_to_potential_temperature(
+        'theta',
+        t_0,
+        zeros,
+        zeros,
+        zeros,
+        thermo_states['zz'],
+        additional_states,
+    )
+    cp = self._kessler.water_model.cp_m(
+        thermo_states['q_t'], thermo_states['q_l'], thermo_states['q_i']
+    )
 
-  return tf.nest.map_structure(
-      energy_source_fn, states['rho'], cp, t_0, theta_0, source
-  )
+    def energy_source_fn(
+        rho: tf.Tensor,
+        cp: tf.Tensor,
+        t_0: tf.Tensor,
+        theta_0: tf.Tensor,
+        s: tf.Tensor,
+    ) -> tf.Tensor:
+      """Computes the condensation source term."""
+      return rho * (self._kessler.water_model.lh_v0 / cp) * (theta_0 / t_0) * s
 
+    return tf.nest.map_structure(
+        energy_source_fn, states['rho'], cp, t_0, theta_0, source
+    )
 
-def total_energy_source_fn(
-    microphysics: MicrophysicsKW1978,
-    states: water.FlowFieldMap,
-    additional_states: water.FlowFieldMap,
-    thermo_states: water.FlowFieldMap,
-) -> water.FlowFieldVal:
-  """Computes the source term in the total energy equation.
+  def total_energy_source_fn(
+      self,
+      states: water.FlowFieldMap,
+      additional_states: water.FlowFieldMap,
+      thermo_states: water.FlowFieldMap,
+  ) -> water.FlowFieldVal:
+    """Computes the source term in the total energy equation.
 
-  Args:
-    microphysics: An instance of the `MicrophysicsKW1978` class.
-    states: A dictionary that holds all flow field variables.
-    additional_states: A dictionary that holds all helper variables.
-    thermo_states: A dictionary that holds all thermodynamics variables.
+    Args:
+      states: A dictionary that holds all flow field variables.
+      additional_states: A dictionary that holds all helper variables.
+      thermo_states: A dictionary that holds all thermodynamics variables.
 
-  Returns:
-    The source term in a total energy equation due to microphysics.
-  """
-  # Get conversion rates from cloud water to rain water (for liquid and
-  # vapor phase).
-  cloud_liquid_to_rain_water_rate = microphysics.autoconversion_and_accretion(
-      thermo_states['q_r'], thermo_states['q_l']
-  )
-  # Find q_v from the invariant q_t = q_c + q_v = q_l + q_i + q_v.
-  rain_water_evaporation_rate = microphysics.evaporation(
-      states['rho_thermal'],
-      thermo_states['T'],
-      thermo_states['q_r'],
-      thermo_states['q_v'],
-      thermo_states['q_l'],
-      thermo_states['q_c'],
-      additional_states,
-  )
-  # Get potential energy.
-  pe = tf.nest.map_structure(
-      lambda zz_i: constants.G * zz_i, thermo_states['zz']
-  )
-  # Calculate source terms for vapor and liquid conversions, respectively.
-  # Use that c_{q_v->q_l} = -c_{q_l->q_v}, i.e. minus the evaporation
-  # rate.
-  source_v = tf.nest.map_structure(
-      lambda e, pe, rho, c_lv: (e + pe) * rho * (-c_lv),
-      thermo_states['e_v'],
-      pe,
-      states['rho'],
-      rain_water_evaporation_rate,
-  )
-  source_l = tf.nest.map_structure(
-      lambda e, pe, rho, c_lr: (e + pe) * rho * c_lr,
-      thermo_states['e_l'],
-      pe,
-      states['rho'],
-      cloud_liquid_to_rain_water_rate,
-  )
-  return tf.nest.map_structure(tf.math.add, source_v, source_l)
+    Returns:
+      The source term in a total energy equation due to microphysics.
+    """
+    # Get conversion rates from cloud water to rain water (for liquid and
+    # vapor phase).
+    cloud_liquid_to_rain_water_rate = (
+        self._kessler.autoconversion_and_accretion(
+            thermo_states['q_r'], thermo_states['q_l']
+        )
+    )
+    # Find q_v from the invariant q_t = q_c + q_v = q_l + q_i + q_v.
+    rain_water_evaporation_rate = self._kessler.evaporation(
+        states['rho_thermal'],
+        thermo_states['T'],
+        thermo_states['q_r'],
+        thermo_states['q_v'],
+        thermo_states['q_l'],
+        thermo_states['q_c'],
+        additional_states,
+    )
+    # Get potential energy.
+    pe = tf.nest.map_structure(
+        lambda zz_i: constants.G * zz_i, thermo_states['zz']
+    )
+    # Calculate source terms for vapor and liquid conversions, respectively.
+    # Use that c_{q_v->q_l} = -c_{q_l->q_v}, i.e. minus the evaporation
+    # rate.
+    source_v = tf.nest.map_structure(
+        lambda e, pe, rho, c_lv: (e + pe) * rho * (-c_lv),
+        thermo_states['e_v'],
+        pe,
+        states['rho'],
+        rain_water_evaporation_rate,
+    )
+    source_l = tf.nest.map_structure(
+        lambda e, pe, rho, c_lr: (e + pe) * rho * c_lr,
+        thermo_states['e_l'],
+        pe,
+        states['rho'],
+        cloud_liquid_to_rain_water_rate,
+    )
+    return tf.nest.map_structure(tf.math.add, source_v, source_l)
+
+  def condensation(
+      self,
+      rho: water.FlowFieldVal,
+      temperature: water.FlowFieldVal,
+      q_v: water.FlowFieldVal,
+      q_l: water.FlowFieldVal,
+      q_c: water.FlowFieldVal,
+      zz: Optional[water.FlowFieldVal] = None,
+      additional_states: Optional[water.FlowFieldMap] = None,
+  ) -> water.FlowFieldVal:
+    """Computes the condensation rate using Bryan & Fritsch (2002).
+
+    Args:
+      rho: The moist air density, in kg/m^3.
+      temperature: The temperature.
+      q_v: The cloud vapor fraction (kg/kg).
+      q_l: The specific humidity of the cloud liquid phase (kg/kg).
+      q_c: The specific humidity of the cloud humidity condensed phase,
+        including ice and liquid (kg/kg).
+      zz: The vertical coordinates (m). Not used.
+      additional_states: Helper variables including those needed to compute
+        reference states. Not used.
+
+    Returns:
+      The condensation rate.
+    """
+    return self._kessler.condensation_bf2002(
+        rho,
+        temperature,
+        q_v,
+        q_l,
+        q_c,
+        zz,
+        additional_states,
+    )

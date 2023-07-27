@@ -80,7 +80,8 @@ def find_bc_type(
       if velocity == wall_normal_velocity:
         continue
       # Zero shear needs to be applied at a slip wall.
-      if (bc[velocity][dim][face][0] != halo_exchange.BCType.NEUMANN or
+      if (bc[velocity][dim][face][0] not in (
+          halo_exchange.BCType.NEUMANN, halo_exchange.BCType.NEUMANN_2) or
           bc[velocity][dim][face][1] != 0.0):
         return False
 
@@ -103,7 +104,8 @@ def find_bc_type(
       if velocity == wall_normal_velocity:
         continue
       # Zero shear needs to be applied at a slip wall.
-      if bc[velocity][dim][face][0] != halo_exchange.BCType.NEUMANN:
+      if bc[velocity][dim][face][0] not in (
+          halo_exchange.BCType.NEUMANN, halo_exchange.BCType.NEUMANN_2):
         return False
 
       if bc[velocity][dim][face][1] != 0.0:
@@ -135,9 +137,12 @@ def find_bc_type(
 
     # Here we only consider the case in which the outflow is specified by an
     # all-Neumann boundary condition.
-    return (bc['u'][dim][face][0] == halo_exchange.BCType.NEUMANN and
-            bc['v'][dim][face][0] == halo_exchange.BCType.NEUMANN and
-            bc['w'][dim][face][0] == halo_exchange.BCType.NEUMANN)
+    return (bc['u'][dim][face][0] in (halo_exchange.BCType.NEUMANN,
+                                      halo_exchange.BCType.NEUMANN_2) and
+            bc['v'][dim][face][0] in (halo_exchange.BCType.NEUMANN,
+                                      halo_exchange.BCType.NEUMANN_2) and
+            bc['w'][dim][face][0] in (halo_exchange.BCType.NEUMANN,
+                                      halo_exchange.BCType.NEUMANN_2))
 
   for dim in range(3):
     if periodic_dims[dim]:

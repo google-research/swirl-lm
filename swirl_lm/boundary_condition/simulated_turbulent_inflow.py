@@ -219,17 +219,18 @@ class SimulatedTurbulentInflow():
       raise ValueError(
           'The read_inflow operation is only available for inflow enforcement.')
 
-    states = [
+    states = tuple([
         {
             key: tf.constant(0, dtype=types.TF_DTYPE)
             for key in _INFLOW_DATA_NAMES
         },
-    ] * len(coordinates)
+    ] * len(coordinates))
     return driver_tpu.distributed_read_state(
         strategy, states, coordinates,
         self._model_params.enforcement.inflow_data_dir,
         self._model_params.enforcement.inflow_data_prefix,
-        self._model_params.enforcement.inflow_data_step)
+        tf.constant(
+            self._model_params.enforcement.inflow_data_step, tf.int32))
 
   # This function is not currently used in simulations.
   def update_inflow_states(

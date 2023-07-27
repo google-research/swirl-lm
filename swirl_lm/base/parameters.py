@@ -34,6 +34,11 @@ import tensorflow as tf
 
 from google.protobuf import text_format
 
+# The threshold of the difference between the absolute value of the
+# gravitational vector along a dimension and one. Below this threshold the
+# cooresponding dimension is the gravity (vertical) dimension.
+_G_THRESHOLD = 1e-6
+
 flags.DEFINE_string(
     'config_filepath', None,
     'The full path to the text proto file that stores all input parameters.')
@@ -123,6 +128,39 @@ _BCType = grid_parametrization_pb2.BoundaryConditionType
 FLAGS = flags.FLAGS
 
 
+def _get_gravity_direction(
+    config: parameters_pb2.SwirlLMParameters,
+) -> Sequence[float]:
+  """Derives the gravitational vector from the configuration.
+
+  Args:
+    config: An instance of the `SwirlLMParameters` proto.
+
+  Returns:
+    A 3-component vector that represents the direction of the gravity
+    (normalized) if `gravity_direction` is defined in the simulation
+    configuration and the magnitude is non-trivial; otherwise a vector with all
+    zeros is returned.
+  """
+  if config.HasField('gravity_direction'):
+    gravity_direction = [
+        config.gravity_direction.dim_0, config.gravity_direction.dim_1,
+        config.gravity_direction.dim_2
+    ]
+    # Normalize the gravitational vector.
+    g_magnitude = np.linalg.norm(gravity_direction)
+    if g_magnitude > _G_THRESHOLD:
+      gravity_direction = [
+          g_dir / g_magnitude for g_dir in gravity_direction
+      ]
+    else:
+      gravity_direction = [0.] * 3
+  else:
+    gravity_direction = [0.] * 3
+
+  return gravity_direction
+
+
 class SwirlLMParameters(grid_parametrization.GridParametrization):
   """Parameters for running the incompressible Navier-Stokes solver."""
 
@@ -147,6 +185,7 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
 
     self.solver_procedure = config.solver_procedure
     self.convection_scheme = config.convection_scheme
+    self.numerical_flux = config.numerical_flux
     self.diffusion_scheme = config.diffusion_scheme
     self.time_integration_scheme = config.time_integration_scheme
 
@@ -182,13 +221,16 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
 
     # Initialize the direction vector of gravitational force. Set to 0 if
     # gravity is not defined in the simulation.
-    if config.HasField('gravity_direction'):
-      self.gravity_direction = [
-          config.gravity_direction.dim_0, config.gravity_direction.dim_1,
-          config.gravity_direction.dim_2
-      ]
-    else:
-      self.gravity_direction = [0.] * 3
+    self.gravity_direction = _get_gravity_direction(config)
+
+    g_dim = np.unique(
+        np.nonzero(np.abs(np.abs(self.gravity_direction) - 1.0) < _G_THRESHOLD)
+    )
+    assert len(g_dim) <= 1, (
+        'Gravity dimension is ambiguous if it is not aligned with an axis.'
+        f' {g_dim} is provided.'
+    )
+    self.g_dim = g_dim.item() if len(g_dim) == 1 else None
 
     # Get the scalar related quantities if scalars are solved as a
     # `List[SwirlLMParameters.Scalar]`.
@@ -463,6 +505,8 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
       return (halo_exchange.BCType.DIRICHLET, boundary_info.value)
     elif boundary_info.type == _BCType.BC_TYPE_NEUMANN:
       return (halo_exchange.BCType.NEUMANN, boundary_info.value)
+    elif boundary_info.type == _BCType.BC_TYPE_NEUMANN_2:
+      return (halo_exchange.BCType.NEUMANN_2, boundary_info.value)
     elif boundary_info.type == _BCType.BC_TYPE_NO_TOUCH:
       return (halo_exchange.BCType.NO_TOUCH, 0.0)
     else:
@@ -719,6 +763,37 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
   def postprocessing_states_update_fn(self, update_fn):
     """Sets the function that postprocesses `states`."""
     self._postprocessing_states_update_fn = update_fn
+
+  def maybe_grid_vertical(
+      self,
+      replica_id: tf.Tensor,
+      replicas: np.ndarray,
+  ) -> types.FlowFieldVal:
+    """The vertical grid local to `replica_id` if `g_dim` is not None.
+
+    Note that this function supports flow field variables that are represented
+    as List[tf.Tensor] only.
+
+    Args:
+      replica_id: The index of the current replica.
+      replicas: A 3D tensor that saves the topology of the partitioning.
+
+    Returns:
+      The local grid (with halo) along the gravity direction. If no gravity
+      direction is specified, returns zeros that has the same structure as the
+      flow field.
+    """
+    if self.g_dim == 0:
+      grid_vertical = self.x_local_ext(replica_id, replicas)
+      return [grid_vertical[:, tf.newaxis]] * self.nz
+    elif self.g_dim == 1:
+      grid_vertical = self.y_local_ext(replica_id, replicas)
+      return [grid_vertical[tf.newaxis, :]] * self.nz
+    elif self.g_dim == 2:
+      grid_vertical = self.z_local_ext(replica_id, replicas)
+      return tf.unstack(grid_vertical, num=self.nz)
+    else:
+      return [tf.zeros((1, 1), dtype=types.TF_DTYPE)] * self.nz
 
   def diffusivity(self, scalar_name: str) -> float:
     """Retrieves the diffusivity of a scalar.

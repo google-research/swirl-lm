@@ -250,6 +250,7 @@ class ScalarGeneric(abc.ABC):
           varname=momentum_component,
           halo_width=self._params.halo_width,
           scheme=self._scalar_params.scheme,
+          flux_scheme=self._params.numerical_flux,
           src=None,
           apply_correction=False)
 
@@ -280,10 +281,21 @@ class ScalarGeneric(abc.ABC):
     # Get the variable for which the diffusion term is computed.
     phi_diffuse = self._get_scalar_for_diffusion(phi, states, additional_states)
 
+    helper_variables = {}
+
     # Helper variables required by the Monin-Obukhov similarity theory.
-    helper_variables = self._get_wall_diffusive_flux_helper_variables(
-        phi, states, additional_states
+    helper_variables.update(
+        self._get_wall_diffusive_flux_helper_variables(
+            phi, states, additional_states
+        )
     )
+
+    # Gather all diffusion fluxes specified by a variable.
+    for flux_info in self._scalar_params.diffusive_flux:
+      if flux_info.WhichOneof('flux') == 'varname':
+        helper_variables[flux_info.varname] = additional_states[
+            flux_info.varname
+        ]
 
     return self._diffusion_fn(
         self._kernel_op,

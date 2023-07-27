@@ -205,6 +205,122 @@ def get_fluid_solid_interface_z(
       width=halo_width)
 
 
+def interp_1d_coeff_init_fn(
+    surface: tf.Tensor,
+    dim: int,
+    n_cores: initializer.ThreeIntTuple,
+) -> InitFn:
+  """Generates an `init_fn` for a tensor that interpolates `surface` along dim.
+
+  Args:
+    surface: A 2D tensor that defines a surface that cuts through `dim` as a
+      function of the 2 coordinates perpendicular to `dim`. The size of it must
+      equal to the size of the coordinates perpendicular to `dim` with halos
+      excluded.
+    dim: The dimension along which `surface` is interpolated onto.
+    n_cores: The number of cores along the 3 dimensions.
+
+  Returns:
+    An `init_fn` that initializes the interpolation coefficients of surface in
+    each core. Grid points that are not adjacent to `surface` are set to 0.
+  """
+  n_total = surface.shape
+  n_non_dim_cores = list(n_cores)
+  del n_non_dim_cores[dim]
+
+  assert len(n_total) == 2, (
+      f'`surface` needs to be a 2D tensor, but a {len(n_total)}-dimension'
+      ' tensor is provided.'
+  )
+
+  core_n = []
+  for n, nc in zip(n_total, n_non_dim_cores):
+    assert n % nc == 0, (
+        f'`surface` size ({n}) is not fully divisible by the number of cores'
+        f' ({nc}).'
+    )
+    core_n.append(int(n // nc))
+
+  def init_fn(
+      xx: tf.Tensor,
+      yy: tf.Tensor,
+      zz: tf.Tensor,
+      lx: float,
+      ly: float,
+      lz: float,
+      coord: initializer.ThreeIntTuple,
+  ) -> tf.Tensor:
+    """Computes the interpolation coefficients for surface."""
+    del lx, ly, lz
+
+    # Check if dimension of `surface` matches the mesh.
+    mesh_size_non_dim = xx.get_shape().as_list()
+    del mesh_size_non_dim[dim]
+
+    for n_target, n_mesh in zip(core_n, mesh_size_non_dim):
+      assert n_target == n_mesh, (
+          f'`surface` local tensor dimension ({n_target}) mismatch with the'
+          f' mesh size ({n_mesh}).'
+      )
+
+    # Get part of the surface that is local to the current core.
+    coord = list(coord)
+    del coord[dim]
+
+    indices = [
+        (core_n[i] * coord[i], core_n[i] * (coord[i] + 1)) for i in range(2)
+    ]
+    surface_local = tf.expand_dims(
+        surface[
+            slice(indices[0][0], indices[0][1]),
+            slice(indices[1][0], indices[1][1]),
+        ],
+        dim,
+    )
+
+    # Compute the interpolation weights. Because the point where the surface
+    # cuts through the axis along `dim` has to fall between a mesh grid,
+    # denoted by an interval [lo, hi] with a distance delta between lo and hi
+    # being the grid spacing, the interpolation coefficient at each grid point
+    # needs to be computed twice based on its 2 neighboring intervals. We
+    # combine the 2 tensors after eliminating values on nodes that are not
+    # adjacent to the surface to form the valid interpolation tensor.
+    # In the case where the immersed boundary falls on a node, both tensors will
+    # have a value 1 at that node. Here we consider the one computed with the
+    # lower limit of the interval only.
+    grid = (xx, yy, zz)[dim]
+    delta = tf.experimental.numpy.diff(grid, axis=dim)
+    paddings_lo = [[0, 0], [0, 0], [0, 0]]
+    paddings_lo[dim] = [0, 1]
+    surface_to_lo_coeff = tf.abs(
+        (surface_local - grid) / tf.pad(delta, paddings_lo, 'SYMMETRIC')
+    )
+    paddings_hi = [[0, 0], [0, 0], [0, 0]]
+    paddings_hi[dim] = [1, 0]
+    surface_to_hi_coeff = tf.abs(
+        (surface_local - grid) / tf.pad(delta, paddings_hi, 'SYMMETRIC')
+    )
+    interp_tensor_lo = tf.where(
+        tf.logical_and(
+            tf.less_equal(surface_to_lo_coeff, 1.0),
+            tf.less_equal(zz, surface_local),
+        ),
+        1.0 - surface_to_lo_coeff,
+        tf.zeros_like(surface_to_lo_coeff),
+    )
+    interp_tensor_hi = tf.where(
+        tf.logical_and(
+            tf.less(surface_to_hi_coeff, 1.0), tf.greater(zz, surface_local)
+        ),
+        1.0 - surface_to_hi_coeff,
+        tf.zeros_like(surface_to_hi_coeff),
+    )
+
+    return interp_tensor_lo + interp_tensor_hi
+
+  return init_fn
+
+
 def get_fluid_solid_interface_value_z(
     replicas: np.ndarray,
     value: FlowFieldVal,
@@ -290,9 +406,16 @@ class ImmersedBoundaryMethod(object):
       return self._apply_rayleigh_damping_method(kernel_op, replica_id,
                                                  replicas, states,
                                                  additional_states)
+    elif self._ib_params.WhichOneof('type') == 'feedback_force_1d_interp':
+      return self._apply_feedback_force_1d_interp(
+          kernel_op, states, additional_states
+      )
     else:
-      raise ValueError('{} is not a valid IB type.'.format(
-          self._ib_params.WhichOneof('type')))
+      raise ValueError(
+          '{} is not a valid IB type.'.format(
+              self._ib_params.WhichOneof('type')
+          )
+      )
 
   def update_forcing(
       self,
@@ -725,6 +848,137 @@ class ImmersedBoundaryMethod(object):
         })
 
     return rhs_updated
+
+  def _apply_feedback_force_1d_interp(
+      self,
+      kernel_op: get_kernel_fn.ApplyKernelOp,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
+  ) -> FlowFieldMap:
+    R"""Computes the feedback force due to IB with 1 dimensional interpolation.
+
+    Here we make the following assumptions:
+    1. The immersed boundary can be expressed as a function of the horizontal
+       coordinates.
+    2. The immersed boundary will be interpolated only along the selected axis,
+       i.e., it only has values on the edges of each computational cell.
+       Refined representation of the immersed boundary inside computational
+       cells are not considered, e.g. a cave is not allowed.
+
+    Reference:
+    [1] Zhang, N., and Z. C. Zheng. 2007. “An Improved Direct-Forcing
+       Immersed-Boundary Method for Finite Difference Applications.” Journal of
+       Computational Physics 221 (1): 250–68.
+    [2] Saiki, E. M., & Biringen, S. (1996). Numerical Simulation of a Cylinder
+        in Uniform Flow: Application of a Virtual Boundary Method. Journal of
+        Computational Physics, 123(2), 450–465.
+
+    Args:
+      kernel_op: An ApplyKernelOp instance to use in computing the update.
+      states: Field variables to which the immersed boundary method are applied.
+      additional_states: Helper states that are required to compute the new
+        right hand side function. Must contain 'ib_boundary', which stores the
+        interpolation weights above and below the immersed boundary.
+
+    Returns:
+      A dictionary of force terms with names `src_\w+` for variables that
+      requires the IB closure.
+
+    Raises:
+      AssertionError: If 'ib_boundary' is not in `additional_states`.
+    """
+    assert (
+        'ib_boundary' in additional_states
+    ), '`ib_boundary` is required for to apply the feedback force method.'
+
+    kernel_op.add_kernel({'shift_dn': ([0.0, 0.0, 1.0], 1)})
+
+    dim = self._ib_params.feedback_force_1d_interp.dim
+
+    sum_op = (
+        lambda u: kernel_op.apply_kernel_op_x(u, 'ksx'),
+        lambda u: kernel_op.apply_kernel_op_y(u, 'ksy'),
+        lambda u: kernel_op.apply_kernel_op_z(u, 'ksz', 'kszsh'),
+    )[dim]
+
+    shift_op = (
+        lambda u: kernel_op.apply_kernel_op_x(u, 'shift_dnx'),
+        lambda u: kernel_op.apply_kernel_op_y(u, 'shift_dny'),
+        lambda u: kernel_op.apply_kernel_op_z(u, 'shift_dnz', 'shift_dnzsh'),
+    )[dim]
+
+    def get_feedback_force(
+        u: types.FlowFieldVal,
+        u_target: float,
+        damping_coeff: float,
+    ) -> types.FlowFieldVal:
+      """Computes the feedback force term for variable `u`."""
+      # Get the values on the 2 end points enclosing the immersed boundary, and
+      # multiply them by the weights for interpolation.
+      u_interp = tf.nest.map_structure(
+          tf.math.multiply, u, additional_states['ib_boundary']
+      )
+
+      # Interpolate values on the immersed boundary, and save it at the larger
+      # mesh index. For example, if the immersed boundary that falls between
+      # k - 1 and k, its value will be saved at k.
+      u_ib = sum_op(u_interp)
+
+      # Remove values that are not on the immersed boundary. Here we mask the
+      # immersed boundary with non-zero interpolation weights with 1, and set 0
+      # elsewhere. A 1-step sum of the mask following the same procedure will
+      # make the value of the higher indexed grid point 2, and less than 2
+      # everywhere else. Values that corresponds to indices with value 2 are
+      # the actual interpolated value of `u` on the immersed boundary.
+      ib_mask = tf.nest.map_structure(
+          lambda v: tf.where(  # pylint: disable=g-long-lambda
+              tf.greater(v, 0.0), tf.ones_like(v), tf.zeros_like(v)
+          ),
+          additional_states['ib_boundary'],
+      )
+      ib_mask = sum_op(ib_mask)
+      u_ib = tf.nest.map_structure(
+          lambda v, m: tf.where(tf.greater(m, 1.5), v, tf.zeros_like(v)),
+          u_ib,
+          ib_mask,
+      )
+
+      # Compute the force required to drive the interpolated value on the
+      # immersed boundary to the target value.
+      beta = np.power(damping_coeff * self._params.dt, -1)
+      f_ib = tf.nest.map_structure(lambda u: -beta * (u - u_target), u_ib)
+
+      # Extrapolate the force back to the grid with the same weights. Because
+      # the force term is saved at the index that corresponds to the higher end
+      # of the interval only, we need to replicate it to the lower index.
+      f_ib = tf.nest.map_structure(tf.math.add, f_ib, shift_op(f_ib))
+
+      return tf.nest.map_structure(
+          tf.math.multiply, f_ib, additional_states['ib_boundary']
+      )
+
+    var_dict = {
+        variable.name: variable
+        for variable in self._ib_params.feedback_force_1d_interp.variables
+    }
+
+    ib_force = {}
+
+    for key, value in states.items():
+      if key not in var_dict.keys():
+        continue
+
+      damping_coeff = (
+          var_dict[key].damping_coeff
+          if var_dict[key].HasField('damping_coeff')
+          else self._ib_params.feedback_force_1d_interp.damping_coeff
+      )
+
+      ib_force[f'src_{key}'] = get_feedback_force(
+          value, var_dict[key].value, damping_coeff
+      )
+
+    return ib_force
 
 
 def immersed_boundary_method_factory(

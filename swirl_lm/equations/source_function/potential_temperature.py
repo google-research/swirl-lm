@@ -93,7 +93,7 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
         microphysics_model_name = (
             self._scalar_params.potential_temperature.WhichOneof('microphysics')
         )
-        self._microphysics, self._microphysics_lib = (
+        self._microphysics = (
             microphysics_utils.select_microphysics(
                 microphysics_model_name, self._params, self._thermodynamics
             )
@@ -368,7 +368,7 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
           ' potential temperature equation.'
       )
 
-      cond = self._microphysics.condensation_bf2002(
+      cond = self._microphysics.condensation(
           states['rho_thermal'],
           thermo_states['T'],
           thermo_states['q_v'],
@@ -386,9 +386,8 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
           'A microphysics model is required to consider precipitation in the'
           ' potential temperature equation.'
       )
-      precip = self._microphysics_lib.potential_temperature_source_fn(
+      precip = self._microphysics.potential_temperature_source_fn(
           self._scalar_name,
-          self._microphysics,
           states,
           additional_states,
           thermo_states,

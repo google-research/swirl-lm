@@ -180,9 +180,38 @@ def diffusion_scalar(
             params.halo_width if flux_info.face == 0 else
             (params.nx, params.ny, params.nz)[flux_info.dim] -
             params.halo_width)
+        if flux_info.WhichOneof('flux') == 'value':
+          flux = flux_info.value
+        else:
+          flux = helper_variables[flux_info.varname]
+          assert isinstance(flux, tf.Tensor), (
+              f'The diffusive flux {flux_info.varname} for {scalar_name} in'
+              f' {flux_info.dim} has to be a tf.Tensor, but {type(flux)} is'
+              ' provided.'
+          )
+          # The 2D flux tensor needs prepared as a 3D tensor with its size being
+          # 1 along the flux dimension. If it's provided as a 2D tensor, we need
+          # to add a dummy dimension along the flux dimension.
+          axis = int((flux_info.dim + 1) % 3)
+          if len(flux.shape) == 3:
+            assert flux.shape[axis] == 1, (
+                f'The diffusive flux of {scalar_name} in dim {flux_info.dim} is'
+                f' specified by a 3D tensor {flux_info.varname}, but its size'
+                f' in dim {flux_info.dim} is {flux.shape[axis]} instead of 1.'
+            )
+          else:
+            flux = tf.expand_dims(flux, axis)
+          # If 3D tensors are represented as List[tf.Tensor], we need to convert
+          # the flux variable that is a 2D tf.Tensor to a List[tf.Tensor].
+          # Specifically, if the dimension of the flux is 0, the flux tensor
+          # has to be reshaped as nz x [(1, ny)]; if the dimension is 1, the
+          # shape is nz x [(nx, 1)]; and if the dimension is 2, the shape is
+          # 1 x [(nx, ny)].
+          if not isinstance(f_diff, tf.Tensor):
+            flux = tf.unstack(flux)
         f_diff[flux_info.dim] = common_ops.tensor_scatter_1d_update_global(
             replica_id, replicas, f_diff[flux_info.dim], flux_info.dim,
-            core_index, plane_index, flux_info.value)
+            core_index, plane_index, flux)
 
     return [[
         d_f_diff / grid_spacing[i] for d_f_diff in grad_forward_fn[i](f_diff[i])

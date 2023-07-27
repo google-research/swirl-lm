@@ -91,7 +91,7 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
       microphysics_model_name = self._scalar_params.total_energy.WhichOneof(
           'microphysics'
       )
-      self._microphysics, self._microphysics_lib = (
+      self._microphysics = (
           microphysics_utils.select_microphysics(
               microphysics_model_name, self._params, self._thermodynamics
           )
@@ -372,8 +372,8 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
       source = tf.nest.map_structure(tf.math.add, source, src_subsidence)
 
     if self._include_precipitation:
-      src_precipitation = self._microphysics_lib.total_energy_source_fn(
-          self._microphysics, states, additional_states, thermo_states
+      src_precipitation = self._microphysics.total_energy_source_fn(
+          states, additional_states, thermo_states
       )
       source = tf.nest.map_structure(tf.math.add, source, src_precipitation)
 

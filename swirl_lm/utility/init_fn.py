@@ -341,11 +341,11 @@ def logarithmic_boundary_layer(
     return u_ref * kappa / tf.math.log(
         tf.maximum(lz - elevation, zero) / z_0)
 
-  def log_wind_profile(z: tf.Tensor, u_s: tf.Tensor, dz: float) -> tf.Tensor:
+  def log_wind_profile(z: tf.Tensor, u_s: tf.Tensor, dz: tf.Tensor
+                       ) -> tf.Tensor:
     """Generates the log-wind profile as a function of height."""
-    dz = tf.constant(dz, dtype=_TF_DTYPE)
 
-    # Round elevation down to it's nearest integer multiple of dz to account for
+    # Round elevation down to its nearest integer multiple of dz to account for
     # the mesh resolution.
     elevation_corrected = (elevation // dz) * dz
 
@@ -370,8 +370,7 @@ def logarithmic_boundary_layer(
 
     u_s = friction_velocity(u_inf, lz)
 
-    _, _, nz = zz.get_shape().as_list()
-    dz = lz / float(nz - 1)
+    dz = zz[0, 0, 1] - zz[0, 0, 0]
 
     return log_wind_profile(zz, u_s, dz)
 
@@ -389,8 +388,7 @@ def logarithmic_boundary_layer(
 
     u_s = friction_velocity(v_inf, lz)
 
-    _, _, nz = zz.get_shape().as_list()
-    dz = lz / float(nz - 1)
+    dz = zz[0, 0, 1] - zz[0, 0, 0]
 
     return log_wind_profile(zz, u_s, dz)
 

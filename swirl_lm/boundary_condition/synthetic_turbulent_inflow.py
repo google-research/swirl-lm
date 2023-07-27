@@ -300,9 +300,9 @@ class SyntheticTurbulentInflow(object):
     def halo_exchange_2d(value: tf.Tensor) -> tf.Tensor:
       """Performs halo exchange dimension by dimension."""
 
-      # First transpose the first inflow plane dimension to be spliited into
+      # First transpose the first inflow plane dimension to be split into
       # z-list and perform the exchange for the `z-list` elements. After that,
-      # transpose the second inflow plane dimension to be splitted into z-list,
+      # transpose the second inflow plane dimension to be split into z-list,
       # and similarly perform halo exchange. This reduces the size of the graph
       # greatly and improves the compilation time significantly, from ~ 3000 sec
       # to ~ 100 sec. This change also seems to improve the run time

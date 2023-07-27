@@ -93,13 +93,30 @@ message DirectForcingMethod {
   optional float damping_coeff = 2 [default = 1.0];
 }
 
+// Parameters required by the feedback force (with 1D interpolation) method.
+// With this method, a force term with constant damping coefficient is applied
+// at the interface between the solid and fluid for all variables listed. Values
+// inside the solid body remain untouched.
+// Note that, to use this method, the user needs to provide a tensor that stores
+// the correct interpolation weights of the immersed boundary.
+message FeedbackForce1DInterp {
+  // Variables for which the feedback force method is applied.
+  repeated IBVariableInfo variables = 1;
+  // The dimension along which the immersed boundary is cutting through and
+  // interpolated. Should be one of 0, 1, and 2.
+  optional int32 dim = 2;
+  // The value of the damping coefficient.
+  optional float damping_coeff = 3 [default = 1.0];
+}
+
 // Parameters required by the immersed boundary method.
-// Next id: 5
+// Next id: 6
 message ImmersedBoundaryMethod {
   oneof type {
     CartesianGridMethod cartesian_grid = 1;
     MarkerAndCellMethod mac = 2;
     RayleighDampingMethod sponge = 3;
     DirectForcingMethod direct_forcing = 4;
+    FeedbackForce1DInterp feedback_force_1d_interp = 5;
   }
 }

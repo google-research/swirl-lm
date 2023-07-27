@@ -204,7 +204,7 @@ message SubGridScaleModel {
 }
 
 // Stores the parameters required by an incompressible Navier-Stokes simulation.
-// Next id: 35
+// Next id: 36
 message SwirlLMParameters {
   // Defines the type of the simulation procedure to be used in the solver.
   enum SolverProcedureType {
@@ -256,6 +256,10 @@ message SwirlLMParameters {
   // The scheme used to discretize the convection term.
   optional ConvectionScheme convection_scheme = 2
       [default = CONVECTION_SCHEME_UNKNOWN];
+  // The numerical flux for the convection term. Setting default to upwinding
+  // for backward compatibility.
+  optional NumericalFlux numerical_flux = 35
+      [default = NUMERICAL_FLUX_UPWINDING];
   // The scheme used to discretize the diffusion term.
   optional DiffusionScheme diffusion_scheme = 25
       [default = DIFFUSION_SCHEME_CENTRAL_5];

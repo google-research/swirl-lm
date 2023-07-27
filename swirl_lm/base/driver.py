@@ -32,20 +32,26 @@ import tensorflow as tf
 
 flags.DEFINE_integer(
     'min_steps_for_output', 1, 'Total number of steps before '
-    'the output start to be generated.')
+    'the output start to be generated.', allow_override=True)
 flags.DEFINE_string(
     'data_dump_prefix', '/tmp/data', 'The output `ser` or `h5` '
     'files prefix. This will be suffixed with the field '
-    'components and step count.')
+    'components and step count.', allow_override=True)
 flags.DEFINE_string(
     'data_load_prefix', '/tmp/data', 'The input `ser` or `h5` '
     'files prefix. This will be suffixed with the field '
-    'components and step count.')
+    'components and step count.', allow_override=True)
 flags.DEFINE_bool(
     'apply_data_load_filter', False,
     'If True, only variables with names provided in field `variable_from_file` '
     'in the config file will be loaded from files (at step specified by flag '
-    '`loading_step`.')
+    '`loading_step`.', allow_override=True)
+RESTART_DUMP_CYCLE = flags.DEFINE_integer(
+    'restart_dump_cycle',
+    1,
+    'The number of cycles between which full variables may be dumped to file.',
+    allow_override=True,
+)
 
 FLAGS = flags.FLAGS
 
@@ -64,6 +70,13 @@ def _stateless_update_if_present(mapping: Dict[T, S],
   mapping = mapping.copy()
   mapping.update({key: val for key, val in updates.items() if key in mapping})
   return mapping
+
+
+def _local_state(
+    strategy: tf.distribute.Strategy,
+    distributed_state: tf.distribute.DistributedValues,
+) -> Tuple[Structure]:
+  return strategy.experimental_local_results(distributed_state)
 
 
 def get_checkpoint_manager(
@@ -87,20 +100,6 @@ def get_checkpoint_manager(
       output_dir, CKPT_DIR_FORMAT.format(filename_prefix=filename_prefix))
   return tf.train.CheckpointManager(
       checkpoint, directory=checkpoint_dir, max_to_keep=3)
-
-
-def _local_state(
-    strategy: tf.distribute.Strategy,
-    distributed_state: tf.distribute.DistributedValues,
-) -> Tuple[Structure]:
-  """Retrieves the local results from a `tf.distribute.DistributedValues`."""
-  # In the single replica case, the state returned by strategy.run is a
-  # dictionary of Tensors instead of PerReplica object. Since
-  # `distributed_write_state` expects a tuple of length `num_replicas`, we
-  # convert the state to a single element tuple.
-  if strategy.num_replicas_in_sync == 1:
-    return (distributed_state,)
-  return strategy.experimental_local_results(distributed_state)
 
 
 def _get_state_keys(params):
@@ -200,12 +199,27 @@ def _one_cycle(
   Returns:
     The final state at the end of the cycle.
   """
+  logging.info('Tracing and compiling of _one_cycle starts. '
+               'This can take up to 30 min.')
   essential_keys, additional_keys, helper_var_keys = _get_state_keys(params)
   computation_shape = np.array([params.cx, params.cy, params.cz])
   logical_replicas = np.arange(
       strategy.num_replicas_in_sync, dtype=np.int32).reshape(computation_shape)
 
-  kernel_op = get_kernel_fn.ApplyKernelConvOp(params.kernel_size)
+  if (params.kernel_op_type ==
+      parameters_lib.KernelOpType.KERNEL_OP_CONV):
+    kernel_op = get_kernel_fn.ApplyKernelConvOp(params.kernel_size)
+  elif (params.kernel_op_type ==
+        parameters_lib.KernelOpType.KERNEL_OP_SLICE):
+    kernel_op = get_kernel_fn.ApplyKernelSliceOp()
+  elif (params.kernel_op_type ==
+        parameters_lib.KernelOpType.KERNEL_OP_MATMUL):
+    kernel_op = get_kernel_fn.ApplyKernelMulOp(params.nx,
+                                               params.ny)
+  else:
+    raise ValueError('Unknown kernel operator {}'.format(
+        params.kernel_op_type))
+
   model = _get_model(kernel_op, params)
 
   def step_fn(state):
@@ -310,6 +324,7 @@ def solver(
   Returns:
     A tuple of the final state on each replica.
   """
+
   # Obtain params either from the provided input or the flags.
   params = params_input
   if params is None:
@@ -317,88 +332,154 @@ def solver(
   params.save_to_file(FLAGS.data_dump_prefix)
 
   # Initialize the TPU.
+  logging.info('Entering solver.')
   computation_shape = np.array([params.cx, params.cy, params.cz])
+  logging.info('Computation_shape is %s', str(computation_shape))
   strategy = driver_tpu.initialize_tpu(
       tpu_address=FLAGS.target, computation_shape=computation_shape)
+  logging.info('TPU is initialized.')
   logical_coordinates = tpu_util.grid_coordinates(computation_shape).tolist()
-
   # In order to save and restore from the filesystem, we use tf.train.Checkpoint
   # on the step id. The `step_id` Variable should be placed on the TPU device so
   # that we don't block TPU execution when writing the state to filenames
   # formatted dynamically with the step id.
   with strategy.scope():
     step_id = tf.Variable(params.start_step, dtype=tf.int32)
-
   output_dir, filename_prefix = os.path.split(FLAGS.data_dump_prefix)
+
+  logging.info('Getting checkpoint_manager.')
   ckpt_manager = get_checkpoint_manager(
       step_id=step_id, output_dir=output_dir, filename_prefix=filename_prefix)
+
+  # Check if only part of the data will be dumped.
+  data_dump_filter = params.states_to_file if params.states_to_file else None
+  checkpoint_interval = RESTART_DUMP_CYCLE.value * params.num_steps
+  logging.info('Got checkpoint_manager.')
+
+  # Use this to access step_id, instead of directly using tf.Variable, which
+  # will trigger the need for synchronization and will slow down/dead-lock for
+  # multi-devices I/O.
+  def step_id_value():
+    return tf.constant(step_id.numpy(), tf.int32)
+
   write_state = functools.partial(
       driver_tpu.distributed_write_state,
       strategy,
       logical_coordinates=logical_coordinates,
       output_dir=output_dir,
-      filename_prefix=filename_prefix,
-      step_id=step_id)
+      filename_prefix=filename_prefix)
+  logging.info('write_state function created.')
+
   read_state = functools.partial(
       driver_tpu.distributed_read_state,
       strategy,
       logical_coordinates=logical_coordinates,
       output_dir=output_dir,
-      filename_prefix=filename_prefix,
-      step_id=step_id)
+      filename_prefix=filename_prefix)
+  logging.info('read_state function created.')
+  t_start = time.time()
 
-  # Prepare the initial state in each replica.
+  # Wrapping `init_fn` with tf.function so it is not retraced unnecessarily for
+  # every core/device.
   state = driver_tpu.distribute_values(
-      strategy, value_fn=init_fn, logical_coordinates=logical_coordinates)
-  # In the single core case, strategy.run returns a Tensor instead of a
-  # PerReplica object. Using the Tensor as the state ensures that the structure
-  # remains the same in the TF while loops.
-  if strategy.num_replicas_in_sync == 1:
-    state, = strategy.experimental_local_results(state)
+      strategy, value_fn=tf.function(init_fn),
+      logical_coordinates=logical_coordinates)
+
+  # Accessing the values in state to synchornize the client so the main thread
+  # will wait here until the `state` is initialized and all remote operations
+  # are done.
+  replica_values = state['replica_id'].values
+  logging.info('State initialized. Replicas are : %s', str(replica_values))
+  t_post_init = time.time()
+  logging.info('Initialization stage done. Took %f secs.',
+               t_post_init - t_start)
 
   # Restore from an existing checkpoint if present.
   if ckpt_manager.latest_checkpoint:
     # The checkpoint restore updates the `step_id` variable; which is then used
     # to read in the state.
+    logging.info('Detected checkpoint. Starting `restore_or_initialize`.')
     ckpt_manager.restore_or_initialize()
-    state = read_state(_local_state(strategy, state))
+    state = read_state(state=_local_state(strategy, state),
+                       step_id=step_id_value())
+    # This is to use to sync the client code to the worker execution.
+    replica_id_values = state['replica_id'].values
+    logging.info(
+        '`restoring-checkpoint-if-necessary` stage '
+        'done with reading checkpoint. Replicas are: %s',
+        str(replica_id_values))
   else:
     # In case we're not restoring from a checkpoint, write the initial state.
-    write_state(_local_state(strategy, state))
+    logging.info('No checkpoint detected. Starting `write_state`.')
+    write_status = write_state(state=_local_state(strategy, state),
+                               step_id=step_id_value())
+    # This is used to sync the client code to the remote workers asynchronous
+    # executions.
+    replica_id_values = write_status[0]['replica_id'].numpy()
+    logging.info(
+        '`restoring-checkpoint-if-necessary` stage '
+        'done with writing initial steps. Replicas are: %s',
+        str(replica_id_values))
+  t_post_restore = time.time()
+  logging.info('restore-if-necessary or write. Took %f secs.',
+               t_post_restore - t_post_init)
 
-  # Run the solver for multiple cycles and save the state after each cycle.
-  if (step_id - params.start_step) % params.num_steps != 0:
+  if params.num_steps < 0:
+    raise ValueError('`num_steps` should not be negative but it was set to ' +
+                     f'{params.num_steps}.')
+  if (params.num_steps > 0 and
+      (step_id_value() - params.start_step) % params.num_steps != 0):
     raise ValueError('Incompatible step_id detected. `step_id` is expected '
                      'to be `start_step` + N * `num_steps` but (step_id: {}, '
                      'start_step: {}, num_steps: {}) is detected. Maybe the '
                      'checkpoint step is inconsistent?'.format(
-                         step_id, params.start_step, params.num_steps))
+                         step_id_value(), params.start_step, params.num_steps))
   logging.info(
       'Simulation iteration starts. Total %d steps, starting from %d, '
       'with %d steps per cycle.', params.num_steps * params.num_cycles,
-      step_id.numpy(), params.num_steps)
-  while step_id < params.start_step + params.num_steps * params.num_cycles:
-    cycle = (step_id - params.start_step) // params.num_steps
-    logging.info('Step %d (cycle %d) is starting.', step_id.numpy(), cycle)
+      step_id_value(), params.num_steps)
+
+  while step_id_value() < (params.start_step +
+                           params.num_steps * params.num_cycles):
+    cycle = (step_id_value() - params.start_step) // params.num_steps
+    logging.info('Step %d (cycle %d) is starting.', step_id_value(), cycle)
     t0 = time.time()
     state = _one_cycle(
         strategy=strategy,
         init_state=state,
-        init_step_id=step_id,
+        init_step_id=step_id_value(),
         num_steps=params.num_steps,
         params=params)
-    # Make sure we first increment `step_id`, write the state, and then save
-    # a checkpoint. `write_state` should have automatic control dependencies
-    # on `step_id` since it uses the `step_id` for the filename; but we need to
-    # add the latter dependency explicitly.
+
     step_id.assign_add(params.num_steps)
+    replica_id_values = _local_state(strategy, state)[0]['replica_id'].numpy()
+    logging.info('One cycle computation is done. Replicas are: %s',
+                 str(replica_id_values))
     t1 = time.time()
     logging.info('Completed total %d steps (%d cycles) so far. Took %f secs '
                  'for the last cycle (%d steps).',
-                 step_id.numpy(), cycle + 1, t1 - t0, params.num_steps)
-    with tf.control_dependencies([write_state(_local_state(strategy, state))]):
+                 step_id_value(), cycle + 1, t1 - t0, params.num_steps)
+
+    # Save checkpoint if the current step, from the start of the simulation,
+    # is a multiple of the checkpoint interval, else just record, a possibly
+    # shortened version of the current state.
+    if (step_id_value() - params.start_step) % checkpoint_interval == 0:
+      write_status = write_state(_local_state(strategy, state),
+                                 step_id=step_id_value())
+      replica_id_values = write_status[0]['replica_id'].numpy()
+      logging.info('`Post cycle writing full state done. '
+                   'Replicas are: %s', str(replica_id_values))
       ckpt_manager.save()
+    else:
+      # Note, the first time this is called retracing will occur for the
+      # subgraphs in `distribted_write_state` if data_dump_filter is not `None`.
+      write_status = write_state(_local_state(strategy, state),
+                                 step_id=step_id_value(),
+                                 data_dump_filter=data_dump_filter)
+      replica_id_values = write_status[0]['replica_id'].numpy()
+      logging.info('`Post cycle writing filtered state done. '
+                   'Replicas are: %s', str(replica_id_values))
     t2 = time.time()
-    logging.info('Writing output took %f secs.', t2 - t1)
+    logging.info('Writing output & checkpoint took %f secs.', t2 - t1)
 
   return strategy.experimental_local_results(state)

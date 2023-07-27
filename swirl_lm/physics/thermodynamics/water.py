@@ -65,9 +65,17 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     """Initializes parameters for the water thermodynamics."""
     super(Water, self).__init__(params)
 
+    model_params = params.thermodynamics
+    assert model_params is not None, 'Thermodynamics model is not defined.'
+
+    model_type = model_params.WhichOneof('thermodynamics_type')
+    assert model_type == 'water', (
+        '`Water` requires the thermodynamics model to be of type `water` but '
+        f' {model_type} is provided.'
+    )
+
     self._solver_mode = params.solver_mode
 
-    model_params = params.thermodynamics
     self._r_v = model_params.water.r_v
     self._t_0 = model_params.water.t_0
     self._t_min = model_params.water.t_min

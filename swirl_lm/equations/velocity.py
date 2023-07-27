@@ -325,19 +325,7 @@ class Velocity(object):
         # Computes the convection term.
         g_corr = None if np.abs(
             self._gravity_vec[dim]) < _G_THRESHOLD else gravity
-        if self._params.convection_scheme not in (
-            _ConvectionScheme.CONVECTION_SCHEME_WENO_3,
-            _ConvectionScheme.CONVECTION_SCHEME_WENO_5,
-        ):
-          # Pressure is used for the Rhie-Chow correction in schemes other than
-          # WENO.
-          p_corr = [p,] * 3
-        else:
-          # The pressure gradient term is included in the convection term when
-          # the WENO scheme is used. This eliminates the need for the Rhie-Chow
-          # correction.
-          p_corr = [tf.nest.map_structure(tf.zeros_like, p) for _ in range(3)]
-          p_corr[dim] = p
+        p_corr = [p,] * 3
         conv = [
             convection.convection_term(  # pylint: disable=g-complex-comprehension
                 self._kernel_op,
@@ -349,10 +337,11 @@ class Velocity(object):
                 h[i],
                 dt,
                 i,
-                tuple(self._params.bc_type[i]),
-                _KEYS_MOMENTUM[i],
-                self._params.halo_width,
-                self._params.convection_scheme,
+                bc_types=tuple(self._params.bc_type[i]),
+                varname=_KEYS_MOMENTUM[i],
+                halo_width=self._params.halo_width,
+                scheme=self._params.convection_scheme,
+                flux_scheme=self._params.numerical_flux,
                 src=g_corr,
                 apply_correction=self._params.enable_rhie_chow_correction)
             for i in range(3)
@@ -362,24 +351,21 @@ class Velocity(object):
         diff = diff_all[_KEYS_VELOCITY[dim]]
 
         # Computes the pressure gradient.
-        if self._params.convection_scheme in (
-            _ConvectionScheme.CONVECTION_SCHEME_WENO_3,
-            _ConvectionScheme.CONVECTION_SCHEME_WENO_5
+        if (
+            self._thermodynamics.solver_mode
+            == thermodynamics_pb2.Thermodynamics.ANELASTIC
         ):
-          # The pressure contribution is considered with the convection when
-          # WENO scheme is used to eliminate the need for Rhie-Chow correction.
-          dp_dh = tf.nest.map_structure(tf.zeros_like, p)
-        elif (self._thermodynamics.solver_mode ==
-              thermodynamics_pb2.Thermodynamics.ANELASTIC):
           alpha = tf.nest.map_structure(tf.math.reciprocal, rho_ref)
           a_p = tf.nest.map_structure(tf.math.multiply, alpha, p)
-          d_ap_dh = tf.nest.map_structure(lambda d_ap: d_ap / (2.0 * h[dim]),
-                                          self.grad_central[dim](a_p))
+          d_ap_dh = tf.nest.map_structure(
+              lambda d_ap: d_ap / (2.0 * h[dim]), self.grad_central[dim](a_p)
+          )
           # Modified pressure gradient term.
           dp_dh = tf.nest.map_structure(tf.math.multiply, rho_ref, d_ap_dh)
         else:
-          dp_dh = tf.nest.map_structure(lambda dp_: dp_ / (2.0 * h[dim]),
-                                        self.grad_central[dim](p))
+          dp_dh = tf.nest.map_structure(
+              lambda dp_: dp_ / (2.0 * h[dim]), self.grad_central[dim](p)
+          )
 
         # Computes external forcing terms.
         force = forces[dim] if forces[dim] else [

@@ -18,6 +18,16 @@ package research.simulation;
 
 option java_multiple_files = true;
 
+// Defines the types of numerical fluxes.
+enum NumericalFlux {
+  // The default option where no flux is used. Should results in an error.
+  NUMERICAL_FLUX_UNKNOWN = 0;
+  // The upwinding flux.
+  NUMERICAL_FLUX_UPWINDING = 1;
+  // The Lax-Friedrich flux.
+  NUMERICAL_FLUX_LF = 2;
+}
+
 // Defines the types of convection schemes.
 enum ConvectionScheme {
   // The default option where no scheme is used. Should results in an error.
@@ -30,6 +40,8 @@ enum ConvectionScheme {
   CONVECTION_SCHEME_WENO_5 = 5;
   // The third order WENO scheme.
   CONVECTION_SCHEME_WENO_3 = 6;
+  // The third order WENO scheme based on pre-trained neural network.
+  CONVECTION_SCHEME_WENO_3_NN = 7;
   // The second order central differencing shceme.
   CONVECTION_SCHEME_CENTRAL_2 = 3;
   // The fourth order central differencing shceme.

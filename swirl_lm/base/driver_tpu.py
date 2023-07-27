@@ -27,16 +27,28 @@
 # limitations under the License.
 """A module providing common TF2 tf.distribute-related utility functions."""
 
+import collections
 import os
-import time
-from typing import Any, Callable, List, Tuple
+from typing import Any, Callable, List, Optional, Sequence, Tuple
 
+from absl import flags
 from absl import logging
 from swirl_lm.utility import tpu_util
 import tensorflow as tf
 
+_WORKER_JOB_PREFIX = flags.DEFINE_string(
+    'worker_job_prefix', '',
+    'The prefix for worker job. This is for the explicit device placement '
+    'used in TPU driver. If left empty the default behavior from '
+    'canonicalization will be used. For borg jobs, this usually should be '
+    'set to `/job:worker/replica:0`.')
 
-FILENAME_FORMAT = '{prefix}-field-{fieldname}-xyz-{rx}-{ry}-{rz}-step-{{}}.ser'
+FLAGS = flags.FLAGS
+
+# Template to generate filename path. Used for both read and write files.
+# The format is:
+# {prefix}-field-{fieldname}-xyz-{x_core}-{y_core}-{z_core}-step-{step_id}.ser
+FILENAME_FORMAT = '{}-field-{}-xyz-{}-{}-{}-step-{}.ser'
 
 Array = Any  # An array convertible to TF tensors or numpy arrays.
 # A structure with atoms convertible to tf.Tensors.
@@ -47,11 +59,44 @@ PerReplica = Any  # A tf.distribute PerReplica (not part of the public API yet.)
 ValueFn = Callable[[Array, Array], Structure]
 
 
+def replica_groups_by_host(strategy: tf.distribute.TPUStrategy):
+  """Groups all device ids by their host."""
+  replica_groups = collections.defaultdict(list)
+  for replica_id in range(strategy.num_replicas_in_sync):
+    # pylint: disable=protected-access
+    host_device = strategy.extended._device_assignment.host_device(
+        replica=replica_id)
+    # pylint: enable=protected-access
+    replica_groups[host_device].append(replica_id)
+
+  return replica_groups
+
+
+#  For the underlying functionality this simply calls the
+# `experimental_distribute_values_from_function` that `pins` the values from
+# `per_replica_states` to the corresponding TPU device. `tf.device` is added
+# to also enforce the assignment ops are done on the corresponding host device.
+def _distribute_values(
+    strategy: tf.distribute.TPUStrategy,
+    per_replica_states: List[Structure]):
+  """Distributes values to the corresponding devices."""
+  def distribute(ctx):
+    replica_id = ctx.replica_id_in_sync_group
+    # pylint: disable=protected-access
+    host_device = strategy.extended._device_assignment.host_device(
+        replica=replica_id)
+    # pylint: enable=protected-access
+    device_name = _WORKER_JOB_PREFIX.value + host_device
+    logging.info('distribute: replica id: %d will be executed on %s',
+                 replica_id, device_name)
+    with tf.device(device_name):
+      return per_replica_states[replica_id]
+  return strategy.experimental_distribute_values_from_function(distribute)
+
+
 def initialize_tpu(
     tpu_address: str,
     computation_shape: Array,
-    num_attempts: int = 180,
-    back_off_time_sec: int = 60,
 ) -> tf.distribute.TPUStrategy:
   """Initializes the TPU with the logical coordinates and returns a TPUStrategy.
 
@@ -59,46 +104,42 @@ def initialize_tpu(
     tpu_address: The address of the TPU cluster to connect to.
     computation_shape: An array of three positive integers denoting the logical
       shape of the TPU mesh.
-    num_attempts: The max number of times to attempt to connect to the TPU
-      workers. In `headless` launch configuration, the worker jobs might not be
-      ready right away and we might need to attempt a few times.
-    back_off_time_sec: The time in secs between the attempts to connect to the
-      TPU workers.
 
   Returns:
     A TPUStrategy which can run computations on the initialized TPU cluster.
   """
-  attempt = 0
-  success = False
-  while attempt < num_attempts and not success:
-    try:
-      # Note: all three actions below have to be retried together if any of
-      # them is unsuccessful.
-      resolver = tf.distribute.cluster_resolver.TPUClusterResolver(
-          tpu=tpu_address)
-      tf.config.experimental_connect_to_cluster(resolver)
-      topology = tf.tpu.experimental.initialize_tpu_system(resolver)
-    except Exception as e:  # pylint: disable=broad-except
-      success = False
-      logging.info(
-          'Attempt #%d to initialize the TPU workers was not successful. Error '
-          ': %s. TPU workers might still be starting up. Backing off for %d '
-          'secs before trying to connect again.',
-          attempt, str(e), back_off_time_sec)
-      attempt += 1
-      time.sleep(back_off_time_sec)
-    else:
-      success = True
-      logging.info('TPU Workers initialization successful at attempt #%d.',
-                   attempt)
+  logging.info('Starting to acquire cluster_resolver at address %s',
+               tpu_address)
+  resolver = tf.distribute.cluster_resolver.TPUClusterResolver(
+      tpu=tpu_address)
+  logging.info('Resolver obtained at address %s', tpu_address)
+  tf.config.experimental_connect_to_cluster(resolver)
+  topology = tf.tpu.experimental.initialize_tpu_system(resolver)
   device_assignment, _ = tpu_util.tpu_device_assignment(
       computation_shape=computation_shape, tpu_topology=topology)
   return tf.distribute.TPUStrategy(
       resolver, experimental_device_assignment=device_assignment)
 
 
-def distribute_values(strategy: tf.distribute.TPUStrategy, value_fn: ValueFn,
-                      logical_coordinates: Array) -> PerReplica:
+@tf.function
+def _inner_wrapped_value_fn(
+    replica_ids: Array,
+    value_fn: ValueFn,
+    logical_coordinates: Array):
+  """Calculates the initial values for all devices with the same host."""
+  logging.info('_inner_wrapped_value_fn tracing starts.')
+  result = []
+  for replica_id, coordinate in zip(replica_ids, logical_coordinates):
+    result.append(value_fn(replica_id, coordinate))
+  logging.info('_inner_wrapped_value_fn traced.')
+  return result
+
+
+def distribute_values(
+    strategy: tf.distribute.TPUStrategy,
+    value_fn: ValueFn,
+    logical_coordinates: Array,
+) -> PerReplica:
   """Populates a PerReplica object containing values specified by `value_fn`.
 
   Args:
@@ -113,88 +154,224 @@ def distribute_values(strategy: tf.distribute.TPUStrategy, value_fn: ValueFn,
   Returns:
     A PerReplica object containing the Structure created on each device.
   """
+  logging.info('Entering `distribute_values`')
 
-  def _wrapped_value_fn(replica_context):
-    replica_id = replica_context.replica_id_in_sync_group
+  num_replicas = strategy.num_replicas_in_sync
+  per_replica_states = [None] * num_replicas
 
-    # Places the initialization on the corresponding host for each replica.
-    # Without this, all the initialization is done through worker 0 and then
-    # dispatched to the corresponding TPU replicas, which requires a large peak
-    # memory on worker 0 and puts a bottleneck on the size of the grid we can
-    # squeeze in. With this placement, in one example, the peak memory on the
-    # hosts is reduced from 220G to ~ 20G and it is clearly seen from the
-    # profiling and the memory usage that all worker hosts are now involved in
-    # the initialization.
-    worker_device = strategy.extended._device_assignment.tpu_device(  # pylint: disable=protected-access
-        replica=replica_id)
-    with tf.device(worker_device):
-      values = value_fn(
-          tf.constant(replica_id, tf.int32), logical_coordinates[replica_id])
-    return values
+  def _wrapped_value_fn(host_device, replica_ids):
+    device_name = _WORKER_JOB_PREFIX.value + host_device
+    logging.info('`distribute_values`, replica_ids %s to be placed on %s',
+                 str(replica_ids), device_name)
+    with tf.device(device_name):
+      replica_id_tensors = [tf.constant(i, tf.int32) for i in replica_ids]
+      logical_coordinate_tensors = [tf.convert_to_tensor(
+          logical_coordinates[i], tf.int32) for i in replica_ids]
+      result = _inner_wrapped_value_fn(replica_id_tensors,
+                                       value_fn, logical_coordinate_tensors)
+      for i, replica_id in enumerate(replica_ids):
+        per_replica_states[replica_id] = result[i]
 
-  return strategy.experimental_distribute_values_from_function(
-      _wrapped_value_fn)
+  replica_groups = replica_groups_by_host(strategy)
+  logging.info('For init value, replica_groups: %s', str(replica_groups))
+
+  for host_device, replica_ids in replica_groups.items():
+    _wrapped_value_fn(host_device, replica_ids)
+
+  logging.info('Exiting `distribute_values`.')
+  return _distribute_values(strategy, per_replica_states)
 
 
 @tf.function
+def _read_input_at_step(
+    state: Structure,
+    rx: Array,
+    ry: Array,
+    rz: Array,
+    output_dir: str,
+    filename_prefix: str,
+    step_id: Array
+) -> Structure:
+  """Reads files for a single device."""
+  logging.info('_read_input_at_step tracing starts.')
+  read_state = {}
+  for fieldname, initial_tensor in state.items():
+    filepath_template = FILENAME_FORMAT.format(
+        filename_prefix, fieldname, '{}', '{}', '{}', '{}')
+    filepath_template = os.path.join(
+        output_dir, '{}', filepath_template)
+    filepath = tf.strings.format(filepath_template,
+                                 (step_id, rx, ry, rz, step_id))
+    read_state[fieldname] = tf.io.parse_tensor(
+        tf.io.read_file(filepath), out_type=initial_tensor.dtype)
+  logging.info('_read_input_at_step traced.')
+  return read_state
+
+
+@tf.function
+def _inner_read_step_fn(
+    state: Tuple[Structure],
+    logical_coordinates: Array,
+    output_dir: str,
+    filename_prefix: str,
+    step_id: Array,
+) -> List[Structure]:
+  """Reads files for all devices with the same host."""
+  logging.info('_inner_read_step_fn tracing starts.')
+  result = []
+  for i, coordinate in enumerate(logical_coordinates):
+    replica_state = state[i]
+    result.append(_read_input_at_step(
+        replica_state,
+        coordinate[0],
+        coordinate[1],
+        coordinate[2],
+        output_dir, filename_prefix, step_id))
+  logging.info('_inner_read_step_fn traced.')
+  return result
+
+
 def distributed_read_state(
     strategy: tf.distribute.TPUStrategy,
-    local_state: Tuple[Structure],
+    state: Tuple[Structure],
     logical_coordinates: List[Tuple[int, int, int]],
     output_dir: str,
     filename_prefix: str,
     step_id: Array,
-) -> tf.distribute.DistributedValues:
+) -> PerReplica:
   """Read a DistributedValues structure from the filesystem.
 
   Args:
     strategy: The strategy from which to obtain the `state`.
-    local_state: A tuple of length `strategy.num_replicas_in_sync` containing a
-      Structure on each replica. Only the keys and dtypes are used from this to
+    state: A Tuple where each Structure within the Tuple represents the local
+      state for each device. Only the keys and dtypes are used from this to
       parse the read state.
-    logical_coordinates: The `logical_coordinates` is a list whose `i`th entry
-      contains the 3D logical mesh coordinates of the `i`th replica of the TPU
-      cluster. These coordinates are added to the filenames using the string
-      template `FILENAME_FORMAT`.
+    logical_coordinates: The `logical_coordinates` is 2D Tensor whose `i`th
+      row contains the 3D logical mesh coordinates of the `i`th replica of the
+      TPU cluster. These coordinates are added to the filenames.
     output_dir: The output directory to read the files from.
-    filename_prefix: A prefix added to the filenames. See `FILENAME_FORMAT`.
-    step_id: An integer denoting the current step. This is added to the filename
-      according to `FILENAME_FORMAT`.
+    filename_prefix: A prefix added to the filenames. See
+      `FILENAME_FORMAT`.
+    step_id: An integer scalar tf.Tensor denoting the current step. This is
+      added to the filename.
 
   Returns:
-    The parsed state, a dictionary of Tensors on each replica.
+    The parsed state as a PerReplica object.
   """
-  per_replica_states = []
-  for replica_id, (rx, ry, rz) in enumerate(logical_coordinates):
-    worker_device = strategy.extended._device_assignment.host_device(  # pylint: disable=protected-access
-        replica=replica_id)
-    with tf.device(worker_device):
-      # Place the current replica's value on the appropriate device.
-      state = {}
-      for fieldname, initial_tensor in local_state[replica_id].items():
-        filename_template = FILENAME_FORMAT.format(
-            prefix=filename_prefix, fieldname=fieldname, rx=rx, ry=ry, rz=rz)
-        filepath_template = os.path.join(output_dir, '{}', filename_template)
-        filepath = tf.strings.format(filepath_template, (step_id, step_id))
-        state[fieldname] = tf.io.parse_tensor(
-            tf.io.read_file(filepath), out_type=initial_tensor.dtype)
-      # Append the current state to be distributed
-      per_replica_states.append(state)
 
-  # Wrap the per-replica states into a `tf.distribute.DistributedValues`.
-  return strategy.experimental_distribute_values_from_function(
-      lambda ctx: per_replica_states[ctx.replica_id_in_sync_group])
+  logging.info('Entering `distributed_read_state`')
+
+  # In case global distributed step_id tf.Variable is used, this decouples what
+  # is passed into the subgraph from it and improves the performance by
+  # preventing the unnecessary synchronization/locking between cores.
+  step_id = tf.constant(step_id.numpy(), tf.int32)
+
+  num_replicas = strategy.num_replicas_in_sync
+  per_replica_states = [None] * num_replicas
+
+  def _read_step_fn(state, host_device, replica_ids, step_id):
+    device_name = _WORKER_JOB_PREFIX.value + host_device
+    logging.info('`distributed_read_state`, replica_ids %s to be placed on %s',
+                 str(replica_ids), device_name)
+    with tf.device(device_name):
+      # We do this so the unrelated replicas' inputs won't be included into
+      # the _inner_read_step_fn, reducing the redundant operations.
+      partial_state = [state[i] for i in replica_ids]
+
+      # This makes everything goes into _inner_read_step_fn tensor, so no
+      # retracing will happen for different devices.
+      partial_coordinates = [
+          tf.constant(logical_coordinates[i], tf.int32) for i in replica_ids]
+      result = _inner_read_step_fn(
+          partial_state, partial_coordinates, output_dir, filename_prefix,
+          step_id)
+      for i, replica_id in enumerate(replica_ids):
+        per_replica_states[replica_id] = result[i]
+
+  replica_groups = replica_groups_by_host(strategy)
+  logging.info('For read value, replica_groups: %s', str(replica_groups))
+
+  for host_device, replica_ids in replica_groups.items():
+    _read_step_fn(state, host_device, replica_ids, step_id)
+
+  logging.info('Exiting `distributed_read_state`')
+  return _distribute_values(strategy, per_replica_states)
 
 
 @tf.function
+def _write_output_at_step(
+    state: Structure,
+    rx: Array,
+    ry: Array,
+    rz: Array,
+    output_dir: str,
+    filename_prefix: str,
+    step_id: Array,
+    data_dump_filter: Optional[Sequence[str]] = None,
+) -> Structure:
+  """Writes output for one single device."""
+  logging.info('_write_output_at_step tracing starts.')
+  write_status = {}
+  for fieldname, tensor in state.items():
+    if data_dump_filter is not None and fieldname not in data_dump_filter:
+      # We still want to fill the return status for all the fields.
+      write_status[fieldname] = True
+      continue
+    if tensor.dtype.is_floating:
+      any_nan_inf = tf.math.logical_or(tf.reduce_any(tf.math.is_nan(tensor)),
+                                       tf.reduce_any(tf.math.is_inf(tensor)))
+    else:
+      any_nan_inf = False
+
+    filepath_template = FILENAME_FORMAT.format(
+        filename_prefix, fieldname, '{}', '{}', '{}', '{}')
+    filepath_template = os.path.join(output_dir, '{}', filepath_template)
+    filepath = tf.strings.format(filepath_template,
+                                 (step_id, rx, ry, rz, step_id))
+
+    check_op = (tf.debugging.assert_equal(
+        any_nan_inf, False,
+        f'Unexpected non-finite value in variable `{fieldname}`'))
+    with tf.control_dependencies([check_op]):
+      tf.io.write_file(filepath, tf.io.serialize_tensor(tensor))
+      write_status[fieldname] = True
+  logging.info('_write_output_at_step traced.')
+  return write_status
+
+
+@tf.function
+def _inner_write_step_fn(
+    state: Tuple[Structure],
+    logical_coordinates: Array,
+    output_dir: str,
+    filename_prefix: str,
+    step_id: Array,
+    data_dump_filter: Optional[Sequence[str]] = None,
+) -> List[Structure]:
+  """Writes output for all devices with the same host."""
+  logging.info('_inner_write_step_fn tracing starts.')
+  output = []
+  for i, coordinate in enumerate(logical_coordinates):
+    replica_state = state[i]
+    output.append(_write_output_at_step(
+        replica_state, coordinate[0],
+        coordinate[1],
+        coordinate[2],
+        output_dir, filename_prefix, step_id,
+        data_dump_filter))
+  logging.info('_inner_write_step_fn traced.')
+  return output
+
+
 def distributed_write_state(
     strategy: tf.distribute.TPUStrategy,
-    local_state: Tuple[Structure],
+    state: Tuple[Structure],
     logical_coordinates: List[Tuple[int, int, int]],
     output_dir: str,
     filename_prefix: str,
     step_id: Array,
-) -> None:
+    data_dump_filter: Optional[Sequence[str]] = None,
+) -> List[Structure]:
   """Write a PerReplica structure to the filesystem.
 
   This also verifies that the content written is all valid and does not contain
@@ -202,35 +379,58 @@ def distributed_write_state(
 
   Args:
     strategy: The strategy from which to obtain the `state`.
-    local_state: A tuple of length `strategy.num_replicas_in_sync` containing a
-      Structure on each replica.
-    logical_coordinates: The `logical_coordinates` is a list whose `i`th entry
-      contains the 3D logical mesh coordinates of the `i`th replica of the TPU
-      cluster. These coordinates are added to the filenames using the string
-      template `FILENAME_FORMAT`.
+    state: A Tuple where each Structure within the Tuple represents the local
+      state for each device.
+    logical_coordinates: The `logical_coordinates` is a 2D Tensor whose `i`th
+      row contains the 3D logical mesh coordinates of the `i`th replica of the
+      TPU cluster. These coordinates are added to the filenames.
     output_dir: The output directory to write the files to.
-    filename_prefix: A prefix added to the filenames. See `FILENAME_FORMAT`.
-    step_id: An integer denoting the current step. This is added to the filename
-      according to `FILENAME_FORMAT`.
+    filename_prefix: A prefix added to the filenames. See
+      `FILENAME_FORMAT`.
+    step_id: An integer scalar tf.tensor denoting the current step. This is
+      added to the filename.
+    data_dump_filter: List of fields that should be written to files when set.
+      If this is not provided (None), then all fields will be written.
+
+  Returns:
+    A distributed status_state with one boolean per field per replica. This is
+    used for the client code to synchronize with the remote write operations.
   """
-  for replica_id, (rx, ry, rz) in enumerate(logical_coordinates):
-    worker_device = strategy.extended._device_assignment.host_device(  # pylint: disable=protected-access
-        replica=replica_id)
-    with tf.device(worker_device):
-      for fieldname, tensor in local_state[replica_id].items():
-        filename_template = FILENAME_FORMAT.format(
-            prefix=filename_prefix, fieldname=fieldname, rx=rx, ry=ry, rz=rz)
-        filepath_template = os.path.join(output_dir, '{}', filename_template)
-        filepath = tf.strings.format(filepath_template, (step_id, step_id))
-        if tensor.dtype.is_floating:
-          check_op = (
-              tf.debugging.assert_equal(
-                  tf.math.logical_or(
-                      tf.reduce_any(tf.math.is_nan(tensor)),
-                      tf.reduce_any(tf.math.is_inf(tensor))), False,
-                  f'Unexpected non-finite value in variable `{fieldname}`'))
-        else:
-          check_op = tf.no_op()
-        with tf.control_dependencies([check_op]):
-          tf.compat.v1.get_default_graph().experimental_acd_manager.run_independently(  # pylint: disable=line-too-long
-              tf.io.write_file(filepath, tf.io.serialize_tensor(tensor)))
+
+  logging.info('Entering `distributed_write_state`')
+
+  # In case global distributed step_id tf.Variable is used, this decouples what
+  # is passed into the subgraph from it and improves the performance by
+  # preventing the unnecessary synchronization/locking between cores.
+  step_id = tf.constant(step_id.numpy(), tf.int32)
+
+  num_replicas = strategy.num_replicas_in_sync
+  per_replica_status = [None] * num_replicas
+
+  def _write_step_fn(state, step_id, host_device, replica_ids):
+    device_name = _WORKER_JOB_PREFIX.value + host_device
+    logging.info('`distributed_write_state`, replica_ids %s to be placed on %s',
+                 str(replica_ids), device_name)
+    with tf.device(device_name):
+      # We do this so the unrelated replicas' inputs won't be included into
+      # the _inner_write_step_fn, reducing the redundant execution.
+      partial_state = [state[i] for i in replica_ids]
+
+      # This makes everything goes into _inner_write_step_fn as tensor, so no
+      # retracing will happen for different devices.
+      partial_coordinates = [
+          tf.constant(logical_coordinates[i], tf.int32) for i in replica_ids]
+      write_status = _inner_write_step_fn(
+          partial_state, partial_coordinates, output_dir, filename_prefix,
+          step_id, data_dump_filter)
+      for i, replica_id in enumerate(replica_ids):
+        per_replica_status[replica_id] = write_status[i]
+
+  replica_groups = replica_groups_by_host(strategy)
+  logging.info('For write_output, replica_groups: %s', str(replica_groups))
+
+  for host_device, replica_ids in replica_groups.items():
+    _write_step_fn(state, step_id, host_device, replica_ids)
+
+  logging.info('Exiting `distributed_write_state`')
+  return per_replica_status

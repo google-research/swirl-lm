@@ -15,7 +15,7 @@
 """A library for the interpolation schemes."""
 
 import functools
-from typing import Tuple, Dict, Sequence, Union, Any
+from typing import Sequence, Tuple
 
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import types
@@ -72,6 +72,7 @@ def _get_weno_kernel_op(
         'b1_1': ([1.0, 0.0, -1.0], 1),
         'b2_1': ([1.0, -4.0, 3.0], 2),
     })
+
   kernel_op = get_kernel_fn.ApplyKernelConvOp(4, kernel_lib)
   return kernel_op
 
@@ -81,8 +82,7 @@ def _calculate_weno_weights(
     kernel_op: get_kernel_fn.ApplyKernelConvOp,
     dim: str,
     k: int = 3,
-) -> Tuple[Dict[int, Union[Sequence[tf.Tensor], tf.Tensor]], Dict[int, Union[
-    Sequence[tf.Tensor], tf.Tensor]]]:
+) -> Tuple[Sequence[types.FlowFieldVal], Sequence[types.FlowFieldVal]]:
   """Calculates the weights for WENO interpolation from cell centered values.
 
   Args:
@@ -102,8 +102,8 @@ def _calculate_weno_weights(
 
   # Linear coefficients for the interpolation using upwind
   d = {
-      2: {0: 2.0 / 3.0, 1: 1.0 / 3.0},  # WENO-3
-      3: {0: 0.3, 1: 0.6, 2: 0.1},  # WENO-5
+      2: [2.0 / 3.0, 1.0 / 3.0],  # WENO-3
+      3: [0.3, 0.6, 0.1],  # WENO-5
   }
 
   kernel_fn = {
@@ -119,38 +119,34 @@ def _calculate_weno_weights(
   # Compute the smoothness measurement.
   if k == 2:  # WENO-3
     beta_fn = lambda f0: f0**2
-    beta = {
-        r: tf.nest.map_structure(beta_fn, kernel_fn(v, f'b{r}_0'))
+    beta = [
+        tf.nest.map_structure(beta_fn, kernel_fn(v, f'b{r}_0'))
         for r in range(k)
-    }
+    ]
   elif k == 3:  # WENO-5
     beta_fn = lambda f0, f1: 13.0 / 12.0 * f0**2 + 0.25 * f1**2
-    beta = {
-        r: tf.nest.map_structure(
+    beta = [
+        tf.nest.map_structure(
             beta_fn, kernel_fn(v, f'b{r}_0'), kernel_fn(v, f'b{r}_1')
         )
         for r in range(k)
-    }
+    ]
 
   # Compute the WENO weights.
-  w_neg = {}
-  w_pos = {}
   w_neg_sum = tf.nest.map_structure(tf.zeros_like, beta[0])
   w_pos_sum = tf.nest.map_structure(tf.zeros_like, beta[0])
 
-  alpha_fn = lambda beta, dr: dr / (eps + beta)**2
-
+  alpha_fn = lambda beta, dr: dr / (eps + beta) ** 2
+  w_neg = [
+      tf.nest.map_structure(functools.partial(alpha_fn, dr=d[k][r]), beta[r])
+      for r in range(k)
+  ]
+  w_pos = [
+      tf.nest.map_structure(
+          functools.partial(alpha_fn, dr=d[k][k - 1 - r]), beta[r]
+      ) for r in range(k)
+  ]
   for r in range(k):
-    w_neg.update({
-        r:
-            tf.nest.map_structure(
-                functools.partial(alpha_fn, dr=d[k][r]), beta[r])
-    })
-    w_pos.update({
-        r:
-            tf.nest.map_structure(
-                functools.partial(alpha_fn, dr=d[k][k - 1 - r]), beta[r])
-    })
     w_neg_sum = tf.nest.map_structure(tf.math.add, w_neg_sum, w_neg[r])
     w_pos_sum = tf.nest.map_structure(tf.math.add, w_pos_sum, w_pos[r])
 
@@ -166,8 +162,7 @@ def _reconstruct_weno_face_values(
     kernel_op: get_kernel_fn.ApplyKernelConvOp,
     dim: str,
     k: int = 3,
-) -> Tuple[Dict[int, Union[Sequence[tf.Tensor], tf.Tensor]], Dict[int, Union[
-    Sequence[tf.Tensor], tf.Tensor]]]:
+) -> Tuple[Sequence[types.FlowFieldVal], Sequence[types.FlowFieldVal]]:
   """Computes the reconstructed face values from cell centered values.
 
   Args:
@@ -192,21 +187,18 @@ def _reconstruct_weno_face_values(
   }[dim]
 
   # Compute the reconstructed values on faces.
-  vr_neg = {}
-  vr_pos = {}
-  for r in range(k):
-    vr_neg.update({r: kernel_fn(v, f'c{r}')})
-    vr_pos.update({r: kernel_fn(v, f'cr{r}')})
+  vr_neg = [kernel_fn(v, f'c{r}') for r in range(k)]
+  vr_pos = [kernel_fn(v, f'cr{r}') for r in range(k)]
 
   return vr_neg, vr_pos
 
 
 def _interpolate_with_weno_weights(
     v: types.FlowFieldVal,
-    w_neg: Dict[int, Union[Sequence[tf.Tensor], tf.Tensor]],
-    w_pos: Dict[int, Union[Sequence[tf.Tensor], tf.Tensor]],
-    vr_neg: Dict[int, Union[Sequence[tf.Tensor], tf.Tensor]],
-    vr_pos: Dict[int, Union[Sequence[tf.Tensor], tf.Tensor]],
+    w_neg: Sequence[types.FlowFieldVal],
+    w_pos: Sequence[types.FlowFieldVal],
+    vr_neg: Sequence[types.FlowFieldVal],
+    vr_pos: Sequence[types.FlowFieldVal],
     dim: str,
     k: int = 3,
 ) -> Tuple[types.FlowFieldVal, types.FlowFieldVal]:
@@ -214,13 +206,13 @@ def _interpolate_with_weno_weights(
 
   Args:
     v: A 3D tensor to which the interpolation is performed.
-    w_neg: A dictionary of 1D tensors with weights for negative side of WENO
+    w_neg: A sequence of FlowFieldVal with weights for negative side of WENO
       interpolation.
-    w_pos: A dictionary of 1D tensors with weights for negative side of WENO
+    w_pos: A sequence of FlowFieldVal with weights for negative side of WENO
       interpolation.
-    vr_neg: A dictionary of 1D tensors with reconstructed face values for
+    vr_neg: A sequence of FlowFieldVal with reconstructed face values for
       negative side of WENO interpolation.
-    vr_pos: A dictionary of 1D tensors with reconstructed face values for
+    vr_pos: A sequence of FlowFieldVal with reconstructed face values for
       positive side of WENO interpolation.
     dim: The dimension along with the interpolation is performed.
     k: The order/stencil width of the interpolation.
@@ -239,21 +231,26 @@ def _interpolate_with_weno_weights(
     v_neg = tf.nest.map_structure(prod_sum_fn, v_neg, w_neg[r], vr_neg[r])
     v_pos = tf.nest.map_structure(prod_sum_fn, v_pos, w_pos[r], vr_pos[r])
 
-  # Shift the positive face flux on the i - 1/2 face that stored at i to i - 1.
-  # With this shift, both the positive and negative face flux at i + 1/2 will
-  # be stored at location i. Values on the higher end of the postive flux Tensor
-  # will be set to be the same as v in the last cell along `dim`.
+  # Shift the negative face flux on the i - 1/2 face that stored at i - 1 to i.
+  # With this shift, both the positive and negative face flux at i - 1/2 will
+  # be stored at location i. Values on the lower end of the negative flux Tensor
+  # will be set to be the same as v in the first cell along `dim`.
   if dim == 'x':
-    v_pos = tf.nest.map_structure(
-        lambda u, v: tf.concat([u[1:, :], v[-1:, :]], 0), v_pos, v)
+    if isinstance(v, tf.Tensor):
+      v_neg = tf.concat([v[:, :1, :], v_neg[:, :-1, :]], 1)
+    else:  # v and v_neg are lists.
+      v_neg = tf.nest.map_structure(
+          lambda u, v: tf.concat([v[:1, :], u[:-1, :]], 0), v_neg, v
+      )
   elif dim == 'y':
-    v_pos = tf.nest.map_structure(
-        lambda u, v: tf.concat([u[:, 1:], v[:, -1:]], 1), v_pos, v)
+    v_neg = tf.nest.map_structure(
+        lambda u, v: tf.concat([v[..., :1], u[..., :-1]], -1), v_neg, v
+    )
   else:  # dim == 'z':
     if isinstance(v, tf.Tensor):
-      v_pos = tf.concat([v_pos[1:, ...], v[-1:, ...]], 0)
-    else:  # v and v_pos are lists.
-      v_pos = v_pos[1:] + [v[-1]]
+      v_neg = tf.concat([v[:1, ...], v_neg[:-1, ...]], 0)
+    else:  # v and v_neg are lists.
+      v_neg = [v[0]] + v_neg[:-1]
 
   return v_neg, v_pos
 
@@ -272,7 +269,7 @@ def weno(
 
   Returns:
     A tuple of the interpolated values on the faces, with the first and second
-    elements being the negative and postive fluxes at face i + 1/2,
+    elements being the negative and postive fluxes at face i - 1/2,
     respectively.
   """
   kernel_op = _get_weno_kernel_op(k)
@@ -283,54 +280,3 @@ def weno(
 
   return v_neg, v_pos
 
-
-def _mlp_nn_forward_prop(
-    x: tf.Tensor, mlp_network: Dict[str, Any]
-) -> tf.Tensor:
-  """Forward propagation of mlp_nn to estimate WENO-weights from Delta values.
-
-  Reference [1]: Bezgin, D. A., Schmidt, S. J., & Adams, N. A. (2022). WENO3-NN:
-  A maximum-order three-point data-driven weighted essentially non-oscillatory
-  scheme. Journal of Computational Physics, 452, 110920.
-  mlp_nn denotes Multi-Layer Perceptron Neural Network.
-  Delta layer includes normalized amplitudes of first and second-order
-  derivatives of the local input field (equations 14 and 15 of [1]).
-
-  Args:
-    x: A 2D tensor of shape (mlp_network['n_features'], nx) where, nx is the
-      number of samples. This includes the Delta and a bias layer.
-    mlp_network: Dictionary containing the weights and hyper-parameters of the
-      multilayer perceptron neural network. It has following key-value pairs:
-      'n_features': Number of features of network including bias layer. It takes
-        a value of 5 for WENO-3 (4 values of Delta and a bias layer)
-      'n_outputs': Number of outputs of network. It takes a value of 1 for
-        WENO-3. Second weight of WENO-3 is obtained by subtracting first weight
-        from unity.
-      'n_hidden_units': A 1D tensor listing number of neurons for each hidden
-        layer. Size is number of hidden layers.
-      'weights': A list of 2D tensors consisting of weights of each hidden
-        layer. Weights include the bias term. Size of this list is one higher
-        than number of hidden layers.
-
-  Returns:
-    Output of the neural network is a 2D tensor. It represents the
-      WENO-weights. For WENO-3, it should have a single column. Second weight
-      of WENO-3 is obtained by subtracting first weight from unity.
-  """
-
-  n_hid = len(mlp_network['n_hidden_units'])
-  hidden_out = tf.Variable(x)
-  for i in range(n_hid):
-    hidden_act = tf.matmul(
-        mlp_network['weights'][i], hidden_out, transpose_a=True
-    )
-    hidden_out = tf.nn.swish(hidden_act)
-    hidden_out = tf.concat(
-        [hidden_out, tf.ones([1, hidden_out.shape[1]], dtype=types.TF_DTYPE)],
-        axis=0,
-    )
-
-  output_act = tf.matmul(
-      mlp_network['weights'][n_hid], hidden_out, transpose_a=True
-  )
-  return tf.nn.sigmoid(output_act)

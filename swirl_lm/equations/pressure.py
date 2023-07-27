@@ -654,19 +654,11 @@ class Pressure(object):
 
     # Mean removal is only applied when no Dirichlet boundary conditions are
     # specified, in which case there will be infinite number of solutions.
-    mean_removal = True
-    for dim in range(3):
-      if self._params.periodic_dims[dim]:
-        continue
-
-      for face in range(2):
-        if self._bc['p'][dim][face][0] == halo_exchange.BCType.DIRICHLET:
-          mean_removal = False
-          break
-      else:
-        continue
-
-      break
+    has_dirichlet_bc = any(
+        not self._params.periodic_dims[dim] and  # pylint: disable=g-complex-comprehension
+        self._bc['p'][dim][face][0] == halo_exchange.BCType.DIRICHLET
+        for dim in range(3) for face in range(2))
+    mean_removal = not has_dirichlet_bc
 
     b, monitor_params = build_rhs()
 

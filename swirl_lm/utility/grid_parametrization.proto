@@ -18,7 +18,7 @@ package swirl_lm;
 
 // Defines the type of boundary condition to be used for each variable in a
 // specific boundary.
-// Next id: 5
+// Next id: 6.
 enum BoundaryConditionType {
   // The default option where no boundary condition is set. Results in an error
   // if that direction is not periodic.
@@ -28,6 +28,8 @@ enum BoundaryConditionType {
   BC_TYPE_DIRICHLET = 1;
   // The Neumann boundary condition.
   BC_TYPE_NEUMANN = 2;
+  // The Neumann boundary condition estimated with 2nd order scheme.
+  BC_TYPE_NEUMANN_2 = 5;
   // Maintains the current value for the specified boundary.
   BC_TYPE_NO_TOUCH = 3;
   // The periodic boundary condition.

@@ -27,8 +27,6 @@
 # limitations under the License.
 """A library of helper functions for the microphysics models."""
 
-from typing import Any, Tuple
-
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.physics.atmosphere import microphysics_generic
 from swirl_lm.physics.atmosphere import microphysics_kw1978
@@ -41,24 +39,18 @@ def select_microphysics(
     model_name: str,
     params: parameters_lib.SwirlLMParameters,
     thermodynamics: thermodynamics_manager.ThermodynamicsManager,
-) -> Tuple[microphysics_generic.Microphysics, Any]:
+) -> microphysics_generic.MicrophysicsAdapter:
   """Selects the microphysics model by `model_name`."""
+  assert isinstance(thermodynamics.model, water.Water), (
+      '`water` is required as the thermodynamics model to use'
+      f' microphysics models, but {thermodynamics.model} is provided.'
+  )
   if model_name == 'kessler':
-    assert isinstance(thermodynamics.model, water.Water), (
-        '`water` is required as the thermodynamics model to use the Kessler'
-        f' microphysics, but {thermodynamics.model} is provided.'
-    )
-    microphysics = microphysics_kw1978.MicrophysicsKW1978(
-        params, thermodynamics.model
-    )
-    microphysics_lib = microphysics_kw1978
+    return microphysics_kw1978.Adapter(params, thermodynamics.model)
   elif model_name == 'one_moment':
-    microphysics = microphysics_one_moment.OneMoment(params)
-    microphysics_lib = microphysics_one_moment
+    return microphysics_one_moment.Adapter(params, thermodynamics.model)
   else:
     raise NotImplementedError(
         f'{model_name} is not a valid microphysics model.'
         ' Available options are `kessler`, `one_moment`.'
     )
-
-  return microphysics, microphysics_lib

@@ -506,12 +506,25 @@ def _add_customized_kernel(
       kernel_name = kernel_name_general + 'z'
       shift_name = kernel_name_general + 'zsh'
 
-      if kernel_name in kernel_dict or shift_name in kernel_dict:
-        raise ValueError(
-            'Kernel {} already defined in the standard dict.'.format(
-                kernel_name_general))
-
       shift = list(range(-stencil[1], len(stencil[0]) - stencil[1], 1))
+
+      if kernel_name in kernel_dict or shift_name in kernel_dict:
+        assert set((kernel_name, shift_name)).issubset(
+            kernel_dict
+        ), f'{kernel_name} and {shift_name} are not provided at the same time.'
+        assert kernel_dict[kernel_name] == stencil[0], (
+            f'Kernel {kernel_name} already defined with values'
+            f' {kernel_dict[kernel_name]}. Redefining it with {stencil[0]} is'
+            ' not allowed.'
+        )
+        assert kernel_dict[shift_name] == shift, (
+            f'Kernel {shift_name} already defined with values'
+            f' {kernel_dict[shift_name]}. Redefining it with {shift} is not'
+            ' allowed.'
+        )
+
+        return kernel_dict
+
       kernel_dict.update({
           kernel_name: stencil[0],
           shift_name: shift,
@@ -520,10 +533,19 @@ def _add_customized_kernel(
     for kernel_name, stencil in custom_kernel_lib.items():
       kernel_name_directional = kernel_name + axis
 
-      if kernel_name_directional in kernel_dict.keys():
-        raise ValueError(
-            'Kernel {} already defined in the standard dict.'.format(
-                kernel_name))
+      if kernel_name_directional in kernel_dict:
+        assert kernel_dict[kernel_name_directional] == stencil[0], (
+            f'Kernel {kernel_name_directional} already defined with values'
+            f' {kernel_dict[kernel_name_directional]}. Redefining it with'
+            f' {stencil[0]} is not allowed.'
+        )
+
+        return kernel_dict
+
+      assert kernel_generation_fn is not None, (
+          '`kernel_generation_fn` is required to define operators in the x and'
+          ' y direction, but None is provided.'
+      )
 
       kernel_dict.update({
           kernel_name_directional:

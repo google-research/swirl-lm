@@ -90,7 +90,7 @@ class Humidity(scalar_generic.ScalarGeneric):
       microphysics_model_name = self._scalar_params.humidity.WhichOneof(
           'microphysics'
       )
-      self._microphysics, self._microphysics_lib = (
+      self._microphysics = (
           microphysics_utils.select_microphysics(
               microphysics_model_name, self._params, self._thermodynamics
           )
@@ -269,9 +269,8 @@ class Humidity(scalar_generic.ScalarGeneric):
           f'Terminal velocity for {self._scalar_name} requires a microphysics'
           ' model but is undefined.'
       )
-      rain_water_terminal_velocity = self._microphysics_lib.terminal_velocity(
+      rain_water_terminal_velocity = self._microphysics.terminal_velocity(
           self._scalar_name,
-          self._microphysics,
           {'rho_thermal': states['rho_thermal'], self._scalar_name: phi},
           additional_states,
       )
@@ -321,9 +320,8 @@ class Humidity(scalar_generic.ScalarGeneric):
 
     # Compute vapor to rain water conversion term if needed.
     if self._include_precipitation:
-      cloud_liquid_to_water_source = self._microphysics_lib.humidity_source_fn(
+      cloud_liquid_to_water_source = self._microphysics.humidity_source_fn(
           self._scalar_name,
-          self._microphysics,
           states,
           additional_states,
           thermo_states,
@@ -355,7 +353,7 @@ class Humidity(scalar_generic.ScalarGeneric):
           'A microphysics model is required to consider condensation in the'
           ' humidity equation.'
       )
-      cond = self._microphysics.condensation_bf2002(
+      cond = self._microphysics.condensation(
           states['rho_thermal'],
           thermo_states['T'],
           thermo_states['q_v'],

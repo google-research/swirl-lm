@@ -57,8 +57,18 @@ message Scalar {
     // suggests the flux is on the lower end of `dim`, and 1 is on the higher
     // end of `dim`.
     optional int32 face = 3;
-    // The value of the diffusive flux.
-    optional float value = 2;
+    // Specifies the value of the flux, or a variable name that stores the flux.
+    oneof flux {
+      // The value of the diffusive flux. This value will be applied on the
+      // entire boundary.
+      float value = 2;
+      // The name of the variable in `additional_states` that specifies the
+      // flux. It is required that the flux specified this way has to be a
+      // plane that conforms with the dimension and representation of 3D flow
+      // field variables. For example, for a face in dim 0, the flux variable
+      // has to have a shape of (nz, 1, ny) or (nz, ny).
+      string varname = 4;
+    }
   }
 
   // The diffusive flux to be applied at specific boundaries.

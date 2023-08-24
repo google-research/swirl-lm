@@ -190,12 +190,17 @@ def _read_input_at_step(
     rz: Array,
     output_dir: str,
     filename_prefix: str,
-    step_id: Array
+    step_id: Array,
+    states_from_file: Optional[Sequence[str]] = None,
 ) -> Structure:
   """Reads files for a single device."""
   logging.info('_read_input_at_step tracing starts.')
   read_state = {}
   for fieldname, initial_tensor in state.items():
+    if states_from_file is not None and fieldname not in states_from_file:
+      read_state[fieldname] = initial_tensor
+      continue
+
     filepath_template = FILENAME_FORMAT.format(
         filename_prefix, fieldname, '{}', '{}', '{}', '{}')
     filepath_template = os.path.join(
@@ -215,18 +220,25 @@ def _inner_read_step_fn(
     output_dir: str,
     filename_prefix: str,
     step_id: Array,
+    states_from_file: Optional[Sequence[str]] = None,
 ) -> List[Structure]:
   """Reads files for all devices with the same host."""
   logging.info('_inner_read_step_fn tracing starts.')
   result = []
   for i, coordinate in enumerate(logical_coordinates):
     replica_state = state[i]
-    result.append(_read_input_at_step(
-        replica_state,
-        coordinate[0],
-        coordinate[1],
-        coordinate[2],
-        output_dir, filename_prefix, step_id))
+    result.append(
+        _read_input_at_step(
+            replica_state,
+            coordinate[0],
+            coordinate[1],
+            coordinate[2],
+            output_dir,
+            filename_prefix,
+            step_id,
+            states_from_file=states_from_file,
+        )
+    )
   logging.info('_inner_read_step_fn traced.')
   return result
 
@@ -238,6 +250,7 @@ def distributed_read_state(
     output_dir: str,
     filename_prefix: str,
     step_id: Array,
+    states_from_file: Optional[Sequence[str]] = None,
 ) -> PerReplica:
   """Read a DistributedValues structure from the filesystem.
 
@@ -254,6 +267,9 @@ def distributed_read_state(
       `FILENAME_FORMAT`.
     step_id: An integer scalar tf.Tensor denoting the current step. This is
       added to the filename.
+    states_from_file: A sequence of strings that specifies the names of
+      variables to be loaded from checkpoint files. If not provided, all
+      variables in `state` will be loaded from files.
 
   Returns:
     The parsed state as a PerReplica object.
@@ -283,8 +299,13 @@ def distributed_read_state(
       partial_coordinates = [
           tf.constant(logical_coordinates[i], tf.int32) for i in replica_ids]
       result = _inner_read_step_fn(
-          partial_state, partial_coordinates, output_dir, filename_prefix,
-          step_id)
+          partial_state,
+          partial_coordinates,
+          output_dir,
+          filename_prefix,
+          step_id,
+          states_from_file=states_from_file,
+      )
       for i, replica_id in enumerate(replica_ids):
         per_replica_states[replica_id] = result[i]
 

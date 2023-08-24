@@ -28,7 +28,7 @@ import "swirl_lm/physics/combustion/turbulent_kinetic_energy.proto";
 //     Coupled Atmosphere–fire Model: Basic Fire Behavior and Dependence on Wind
 //     Speed.” Journal of Geophysical Research 110 (D13): 287.
 //
-// Next id: 17
+// Next id: 18
 message Wood {
   // The B scale of the fuel elements, in units of m.
   optional float s_b = 1;
@@ -53,7 +53,13 @@ message Wood {
   optional bool include_radiation = 9 [default = false];
   // The ambient air temperature in K. This is only used when
   // `include_radiation` is true.
-  optional float t_ambient = 10;
+  oneof t_far_field {
+    // Far-field temperature as a constant.
+    float t_ambient = 10;
+    // Far-field temperature from a flow field variable. This variable provides
+    // the name of this varialbe.
+    string t_variable = 17;
+  }
   // The efficiency factor that combines the effect of sub-grid scale
   // temperature and emissivity. Default value set to 1 based one reference [1].
   optional float efficiency = 11 [default = 1.0];

@@ -92,10 +92,15 @@ def ib_info_map(
     return flatten_ib_info(ib_info.sponge.variables)
   elif ib_type == 'direct_forcing':
     return flatten_ib_info(ib_info.direct_forcing.variables)
+  elif ib_type == 'direct_forcing_1d_interp':
+    return flatten_ib_info(ib_info.direct_forcing_1d_interp.variables)
+  elif ib_type == 'feedback_force_1d_interp':
+    return flatten_ib_info(ib_info.feedback_force_1d_interp.variables)
   else:
     raise NotImplementedError(
         f'{ib_type} is not a valid IB type. Available options are:'
-        ' "cartesian_grid", "mac", "sponge", "direct_forcing".'
+        ' "cartesian_grid", "mac", "sponge", "direct_forcing", '
+        '"direct_forcing_1d_interp", "feedback_force_1d_interp".'
     )
 
 
@@ -364,6 +369,11 @@ class ImmersedBoundaryMethod(object):
     self._params = params
     self._ib_params = self._params.boundary_models.ib
 
+  @property
+  def type(self):
+    """Provides the type of immersed boundary method for this instance."""
+    return self._ib_params.WhichOneof('type')
+
   def update_states(
       self,
       kernel_op: get_kernel_fn.ApplyKernelOp,
@@ -374,20 +384,23 @@ class ImmersedBoundaryMethod(object):
       boundary_conditions: Dict[Text, halo_exchange.BoundaryConditionsSpec],
   ) -> FlowFieldMap:
     """Updates `states` in the immersed boundary at each sub-iteration."""
-    if self._ib_params.WhichOneof('type') == 'cartesian_grid':
+    if self.type == 'cartesian_grid':
       return self._apply_cartesian_grid_method(kernel_op, replica_id, replicas,
                                                states, additional_states,
                                                boundary_conditions)
-    elif self._ib_params.WhichOneof('type') == 'mac':
+    elif self.type == 'mac':
       return self._apply_marker_and_cell_method(replica_id, replicas, states,
                                                 additional_states,
                                                 boundary_conditions)
-    elif (self._ib_params.WhichOneof('type') == 'sponge' or
-          self._ib_params.WhichOneof('type') == 'direct_forcing'):
+    elif self.type in (
+        'sponge',
+        'direct_forcing',
+        'feedback_force_1d_interp',
+        'direct_forcing_1d_interp',
+    ):
       return states
     else:
-      raise ValueError('{} is not a valid IB type.'.format(
-          self._ib_params.WhichOneof('type')))
+      raise ValueError(f'{self.type} is not a valid IB type.')
 
   def update_additional_states(
       self,
@@ -398,24 +411,23 @@ class ImmersedBoundaryMethod(object):
       additional_states: FlowFieldMap,
   ) -> FlowFieldMap:
     """Updates `additional_states` at the beginning of each time step."""
-    if (self._ib_params.WhichOneof('type') == 'cartesian_grid' or
-        self._ib_params.WhichOneof('type') == 'mac' or
-        self._ib_params.WhichOneof('type') == 'direct_forcing'):
+    if self.type in (
+        'cartesian_grid',
+        'mac',
+        'direct_forcing',
+        'direct_forcing_1d_interp',
+    ):
       return additional_states
-    elif self._ib_params.WhichOneof('type') == 'sponge':
+    elif self.type == 'sponge':
       return self._apply_rayleigh_damping_method(kernel_op, replica_id,
                                                  replicas, states,
                                                  additional_states)
-    elif self._ib_params.WhichOneof('type') == 'feedback_force_1d_interp':
+    elif self.type == 'feedback_force_1d_interp':
       return self._apply_feedback_force_1d_interp(
           kernel_op, states, additional_states
       )
     else:
-      raise ValueError(
-          '{} is not a valid IB type.'.format(
-              self._ib_params.WhichOneof('type')
-          )
-      )
+      raise ValueError(f'{self.type} is not a valid IB type.')
 
   def update_forcing(
       self,
@@ -426,17 +438,23 @@ class ImmersedBoundaryMethod(object):
       additional_states: FlowFieldMap,
   ) -> FlowFieldMap:
     """Updates `additional_states` during each subiteration."""
-    del kernel_op, replica_id, replicas
+    del replica_id, replicas
 
-    if (self._ib_params.WhichOneof('type') == 'cartesian_grid' or
-        self._ib_params.WhichOneof('type') == 'mac' or
-        self._ib_params.WhichOneof('type') == 'sponge'):
+    if self.type in (
+        'cartesian_grid',
+        'mac',
+        'sponge',
+        'feedback_force_1d_interp',
+    ):
       return additional_states
-    elif self._ib_params.WhichOneof('type') == 'direct_forcing':
+    elif self.type == 'direct_forcing':
       return self._apply_direct_forcing_method(states, additional_states)
+    elif self.type == 'direct_forcing_1d_interp':
+      return self._apply_direct_forcing_1d_interp(
+          kernel_op, states, additional_states
+      )
     else:
-      raise ValueError('{} is not a valid IB type.'.format(
-          self._ib_params.WhichOneof('type')))
+      raise ValueError(f'{self.type} is not a valid IB type.')
 
   def generate_initial_states(
       self,
@@ -493,8 +511,7 @@ class ImmersedBoundaryMethod(object):
       return tf.zeros_like(xx, dtype=xx.dtype)
 
     output = {'ib_interior_mask': states_init(ib_flow_field_mask_fn)}
-    ib_type = self._ib_params.WhichOneof('type')
-    if ib_type == 'sponge':
+    if self.type == 'sponge':
       ib_boundary_included = False
 
       for variable in self._ib_params.sponge.variables:
@@ -511,9 +528,15 @@ class ImmersedBoundaryMethod(object):
               if ib_boundary_mask_fn is not None else init_fn_zeros)
           output.update({'ib_boundary': states_init(ib_boundary_fn)})
           ib_boundary_included = True
+    elif self.type == 'feedback_force_1d_interp':
+      output['ib_boundary'] = states_init(ib_boundary_mask_fn)
 
-    elif ib_type in ('cartesian_grid', 'mac'):
-      output.update({'ib_boundary': states_init(ib_boundary_mask_fn)})
+      for variable in self._ib_params.sponge.variables:
+        force_name = self.ib_force_name(variable.name)
+        output.update({force_name: states_init(init_fn_zeros)})
+    elif self.type in ('cartesian_grid', 'mac'):
+      output['ib_boundary'] = states_init(ib_boundary_mask_fn)
+
     return output
 
   def _exchange_halos(self, f, replica_id, replicas, boundary_conditions):
@@ -849,6 +872,181 @@ class ImmersedBoundaryMethod(object):
 
     return rhs_updated
 
+  def _ib_1d_interp_force_fn(
+      self,
+      kernel_op: get_kernel_fn.ApplyKernelOp,
+      interp_weights: FlowFieldVal,
+      dim: int,
+  ) -> Callable[[FlowFieldVal, float, float], FlowFieldVal]:
+    """Generates a function that computes the IB force with 1D interpolation.
+
+    Args:
+      kernel_op: An instance of the kernel operation library that performs
+        numerical operations.
+      interp_weights: A 3D tensor that stores the interpolation weights for the
+        immersed boundary.
+      dim: The dimension along which the interpolation is performed along.
+
+    Returns:
+      A function that takes a flow field variable, its target value on the IB,
+      and a damping coefficient that scales the forcing term as input, and
+      returns the force term due to the IB.
+    """
+    kernel_op.add_kernel({'shift_dn': ([0.0, 0.0, 1.0], 1)})
+
+    sum_op = (
+        lambda u: kernel_op.apply_kernel_op_x(u, 'ksx'),
+        lambda u: kernel_op.apply_kernel_op_y(u, 'ksy'),
+        lambda u: kernel_op.apply_kernel_op_z(u, 'ksz', 'kszsh'),
+    )[dim]
+
+    shift_op = (
+        lambda u: kernel_op.apply_kernel_op_x(u, 'shift_dnx'),
+        lambda u: kernel_op.apply_kernel_op_y(u, 'shift_dny'),
+        lambda u: kernel_op.apply_kernel_op_z(u, 'shift_dnz', 'shift_dnzsh'),
+    )[dim]
+
+    def get_ib_force(
+        u: FlowFieldVal, u_target: float, damping_coeff: float
+    ) -> FlowFieldVal:
+      """Computes the IB force term for variable `u`."""
+      # Get the values on the 2 end points enclosing the immersed boundary, and
+      # multiply them by the weights for interpolation.
+      u_interp = tf.nest.map_structure(tf.math.multiply, u, interp_weights)
+
+      # Interpolate values on the immersed boundary, and save it at the larger
+      # mesh index. For example, if the immersed boundary that falls between
+      # k - 1 and k, its value will be saved at k.
+      u_ib = sum_op(u_interp)
+
+      # Remove values that are not on the immersed boundary. Here we mask the
+      # immersed boundary with non-zero interpolation weights with 1, and set 0
+      # elsewhere. A 1-step sum of the mask following the same procedure will
+      # make the value of the higher indexed grid point 2, and less than 2
+      # everywhere else. Values that corresponds to indices with value 2 are
+      # the actual interpolated value of `u` on the immersed boundary.
+      ib_mask = tf.nest.map_structure(
+          lambda v: tf.where(  # pylint: disable=g-long-lambda
+              tf.greater(v, 0.0), tf.ones_like(v), tf.zeros_like(v)
+          ),
+          interp_weights,
+      )
+      ib_mask = sum_op(ib_mask)
+      u_ib = tf.nest.map_structure(
+          lambda v, m: tf.where(tf.greater(m, 1.5), v, tf.zeros_like(v)),
+          u_ib,
+          ib_mask,
+      )
+
+      # Compute the force required to drive the interpolated value on the
+      # immersed boundary to the target value.
+      beta = np.power(damping_coeff * self._params.dt, -1)
+      f_ib = tf.nest.map_structure(lambda u: -beta * (u - u_target), u_ib)
+
+      # Extrapolate the force back to the grid with the same weights. Because
+      # the force term is saved at the index that corresponds to the higher end
+      # of the interval only, we need to replicate it to the lower index.
+      f_ib = tf.nest.map_structure(tf.math.add, f_ib, shift_op(f_ib))
+
+      return tf.nest.map_structure(
+          tf.math.multiply, f_ib, interp_weights
+      )
+
+    return get_ib_force
+
+  def _apply_direct_forcing_1d_interp(
+      self,
+      kernel_op: get_kernel_fn.ApplyKernelOp,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
+  ) -> FlowFieldMap:
+    R"""Updates the RHS with the direct forcing 1D interpolation method.
+
+    Reference:
+    [1] Zhang, N., and Z. C. Zheng. 2007. “An Improved Direct-Forcing
+       Immersed-Boundary Method for Finite Difference Applications.” Journal of
+       Computational Physics 221 (1): 250–68.
+
+    Args:
+      kernel_op: An instance of the kernel operation library that performs
+        numerical operations.
+      states: Field variables to which the immersed boundary method are applied.
+      additional_states: Helper states that are required to compute the new
+        right hand side function. Must contain 'ib_boundary' and 'rhs_\w+',
+        where 'w+' is the name of the state that this right hand side function
+        belongs to.
+
+    Returns:
+      A dictionary of right hand side functions updated by the direct forcing
+      immersed boundary method.
+
+    Raises:
+      AssertionError: If 'ib_boundary' is not in
+      `additional_states`, or no 'rhs_\w+' variable found for that variable.
+    """
+    assert 'ib_boundary' in additional_states, (
+        '"ib_boundary" is required by the direct forcing IB method with 1D'
+        ' interpolation, but is not found in `additional_states`.'
+    )
+
+    mask_internal_layer = tf.nest.map_structure(
+        lambda w: tf.where(  # pylint: disable=g-long-lambda
+            tf.greater(w, 0.0), tf.ones_like(w), tf.zeros_like(w)
+        ),
+        additional_states['ib_boundary'],
+    )
+
+    ib_force_fn = self._ib_1d_interp_force_fn(
+        kernel_op,
+        additional_states['ib_boundary'],
+        self._ib_params.direct_forcing_1d_interp.dim,
+    )
+
+    def update_rhs(
+        value: FlowFieldVal,
+        target_value: float,
+        rhs: FlowFieldVal,
+    ) -> FlowFieldVal:
+      """Updates the right hand side function with direct forcing."""
+      ib_force = ib_force_fn(value, target_value, 1.0 / self._params.dt)
+
+      return tf.nest.map_structure(
+          lambda m, r, f: (1.0 - m) * r + m * f,
+          mask_internal_layer,
+          rhs,
+          ib_force,
+      )
+
+    var_dict = {
+        variable.name: variable
+        for variable in self._ib_params.direct_forcing_1d_interp.variables
+    }
+
+    rhs_updated = {}
+
+    for key, value in states.items():
+      rhs_name = self.ib_rhs_name(key)
+      assert rhs_name in additional_states, (
+          f'RHS for {key} is required by the direct forcing IB method with 1D'
+          ' interpolation, but is not provided.'
+      )
+
+      if key not in var_dict:
+        # Use a warning here instead failing the function because we always
+        # go through the IB step for all variables, but applying IB doesn't
+        # have to be applied to all of them.
+        logging.warn(
+            'States information for  %s is not provided in the IB. Available '
+            'states are: %r. Right hand side for %s is not updated and IB not '
+            'applied.', key, var_dict.keys(), key)
+        rhs_updated[rhs_name] = additional_states[rhs_name]
+      else:
+        rhs_updated[rhs_name] = update_rhs(
+            value, var_dict[key].value, additional_states[rhs_name]
+        )
+
+    return rhs_updated
+
   def _apply_feedback_force_1d_interp(
       self,
       kernel_op: get_kernel_fn.ApplyKernelOp,
@@ -891,71 +1089,11 @@ class ImmersedBoundaryMethod(object):
         'ib_boundary' in additional_states
     ), '`ib_boundary` is required for to apply the feedback force method.'
 
-    kernel_op.add_kernel({'shift_dn': ([0.0, 0.0, 1.0], 1)})
-
-    dim = self._ib_params.feedback_force_1d_interp.dim
-
-    sum_op = (
-        lambda u: kernel_op.apply_kernel_op_x(u, 'ksx'),
-        lambda u: kernel_op.apply_kernel_op_y(u, 'ksy'),
-        lambda u: kernel_op.apply_kernel_op_z(u, 'ksz', 'kszsh'),
-    )[dim]
-
-    shift_op = (
-        lambda u: kernel_op.apply_kernel_op_x(u, 'shift_dnx'),
-        lambda u: kernel_op.apply_kernel_op_y(u, 'shift_dny'),
-        lambda u: kernel_op.apply_kernel_op_z(u, 'shift_dnz', 'shift_dnzsh'),
-    )[dim]
-
-    def get_feedback_force(
-        u: types.FlowFieldVal,
-        u_target: float,
-        damping_coeff: float,
-    ) -> types.FlowFieldVal:
-      """Computes the feedback force term for variable `u`."""
-      # Get the values on the 2 end points enclosing the immersed boundary, and
-      # multiply them by the weights for interpolation.
-      u_interp = tf.nest.map_structure(
-          tf.math.multiply, u, additional_states['ib_boundary']
-      )
-
-      # Interpolate values on the immersed boundary, and save it at the larger
-      # mesh index. For example, if the immersed boundary that falls between
-      # k - 1 and k, its value will be saved at k.
-      u_ib = sum_op(u_interp)
-
-      # Remove values that are not on the immersed boundary. Here we mask the
-      # immersed boundary with non-zero interpolation weights with 1, and set 0
-      # elsewhere. A 1-step sum of the mask following the same procedure will
-      # make the value of the higher indexed grid point 2, and less than 2
-      # everywhere else. Values that corresponds to indices with value 2 are
-      # the actual interpolated value of `u` on the immersed boundary.
-      ib_mask = tf.nest.map_structure(
-          lambda v: tf.where(  # pylint: disable=g-long-lambda
-              tf.greater(v, 0.0), tf.ones_like(v), tf.zeros_like(v)
-          ),
-          additional_states['ib_boundary'],
-      )
-      ib_mask = sum_op(ib_mask)
-      u_ib = tf.nest.map_structure(
-          lambda v, m: tf.where(tf.greater(m, 1.5), v, tf.zeros_like(v)),
-          u_ib,
-          ib_mask,
-      )
-
-      # Compute the force required to drive the interpolated value on the
-      # immersed boundary to the target value.
-      beta = np.power(damping_coeff * self._params.dt, -1)
-      f_ib = tf.nest.map_structure(lambda u: -beta * (u - u_target), u_ib)
-
-      # Extrapolate the force back to the grid with the same weights. Because
-      # the force term is saved at the index that corresponds to the higher end
-      # of the interval only, we need to replicate it to the lower index.
-      f_ib = tf.nest.map_structure(tf.math.add, f_ib, shift_op(f_ib))
-
-      return tf.nest.map_structure(
-          tf.math.multiply, f_ib, additional_states['ib_boundary']
-      )
+    ib_force_fn = self._ib_1d_interp_force_fn(
+        kernel_op,
+        additional_states['ib_boundary'],
+        self._ib_params.feedback_force_1d_interp.dim,
+    )
 
     var_dict = {
         variable.name: variable
@@ -974,7 +1112,7 @@ class ImmersedBoundaryMethod(object):
           else self._ib_params.feedback_force_1d_interp.damping_coeff
       )
 
-      ib_force[f'src_{key}'] = get_feedback_force(
+      ib_force[f'src_{key}'] = ib_force_fn(
           value, var_dict[key].value, damping_coeff
       )
 

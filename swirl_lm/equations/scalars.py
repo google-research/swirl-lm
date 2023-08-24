@@ -258,10 +258,13 @@ class Scalars(object):
       if self._ib is not None:
         rho_sc_name = 'rho_{}'.format(scalar_name)
         rhs_name = self._ib.ib_rhs_name(rho_sc_name)
-        helper_states = {
-            rhs_name: rhs,
-            'ib_interior_mask': additional_states['ib_interior_mask'],
-        }
+        helper_states = {rhs_name: rhs}
+        for helper_var_name in ('ib_interior_mask', 'ib_boundary'):
+          if helper_var_name in additional_states:
+            helper_states[helper_var_name] = additional_states[
+                helper_var_name
+            ]
+
         rhs_ib_updated = self._ib.update_forcing(
             self._kernel_op, replica_id, replicas, {
                 rho_sc_name:

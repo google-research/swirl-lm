@@ -1268,6 +1268,8 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       )
       target_freeze_fn = lambda t: self.potential_temperatures(  # pylint: disable=g-long-lambda
           t, q_tot, rho, zz, additional_states)[target_var_name]
+    elif target_var_name == 'T':
+      return target_var
     else:
       raise ValueError(
           f'{target_var_name} is not a valid variable for saturation '
@@ -1353,16 +1355,17 @@ class Water(thermodynamics_generic.ThermodynamicModel):
           prognostic_var, u, v, w, zz)
     elif prognostic_var_name in (PotentialTemperature.THETA.value,
                                  PotentialTemperature.THETA_V.value,
-                                 PotentialTemperature.THETA_LI.value):
+                                 PotentialTemperature.THETA_LI.value,
+                                 'T'):
       target_var_name = prognostic_var_name
       target_var = prognostic_var
     else:
       raise ValueError(
-          f'{target_var_name} is not a valid variable for saturation '
+          f'{prognostic_var_name} is not a valid variable for saturation '
           f'temperature computation. Available options are: "e_int", '
           f'"{PotentialTemperature.THETA.value}", '
           f'"{PotentialTemperature.THETA_V.value}", '
-          f'"{PotentialTemperature.THETA_LI.value}".')
+          f'"{PotentialTemperature.THETA_LI.value}", and "T".')
 
     p = (
         self.p_ref(zz, additional_states)  # pylint: disable=g-long-ternary
@@ -1594,22 +1597,20 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     zz = additional_states.get('zz', None)
 
     # Get the prognostic variable.
-    if 'e_t' in states:
-      prognostic_var_name = 'e_t'
-    elif PotentialTemperature.THETA.value in states:
-      prognostic_var_name = PotentialTemperature.THETA.value
-    elif PotentialTemperature.THETA_V.value in states:
-      prognostic_var_name = PotentialTemperature.THETA_V.value
-    elif PotentialTemperature.THETA_LI.value in states:
-      prognostic_var_name = PotentialTemperature.THETA_LI.value
-    else:
-      raise ValueError(
-          f'No prognostic variable for energy is found. Supported options are'
-          f'"e_t" (the total energy), "{PotentialTemperature.THETA.value}" '
-          f'(the potential temperature of the air mixture), '
-          f'"{PotentialTemperature.THETA_V.value}" (the virtual potential '
-          f'temperature), or "{PotentialTemperature.THETA_LI.value}" (the '
-          f'liquid-ice potential temperature).')
+    allowed_energy_var_names = set((
+        'e_t',
+        PotentialTemperature.THETA.value,
+        PotentialTemperature.THETA_V.value,
+        PotentialTemperature.THETA_LI.value,
+        'T',
+    ))
+    energy_var_found = allowed_energy_var_names & set(states.keys())
+    assert len(energy_var_found) == 1, (
+        f'One and only one energy variable (one of {allowed_energy_var_names})'
+        ' is allowed to update the density with the water thermodynamics, but'
+        f' {energy_var_found} are provided.'
+    )
+    prognostic_var_name = energy_var_found.pop()
 
     q_t = states['q_t'] if 'q_t' in states else (
         tf.nest.map_structure(tf.math.add, states['q_c'], states['q_v']))

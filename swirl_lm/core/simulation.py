@@ -244,8 +244,10 @@ class Simulation:
 
     # Step 1: store the variables at the previous time step with boundary
     # conditions updated.
-    states_0 = self._update_initial_states(replica_id, replicas, states,
-                                           additional_states)
+    with tf.name_scope('init_states_update'):
+      init_states = self._update_initial_states(replica_id, replicas, states,
+                                                additional_states)
+    states_0 = init_states
 
     def update_step(i, states_k):
       """Defines a predictor-corrector iteration."""
@@ -268,72 +270,80 @@ class Simulation:
       # Step 2: Update all scalars in conservative form. Boundary conditions are
       # not enforced for the conservative scalars, but they are enforced for the
       # temporary primitive scalars.
-      states_k.update(
-          self.scalars.prediction_step(replica_id, replicas, states_k, states_0,
-                                       additional_states))
+      with tf.name_scope('scalar_prediction_step'):
+        scalar_prediction_states = self.scalars.prediction_step(
+            replica_id, replicas, states_k, states_0, additional_states)
+      states_k.update(scalar_prediction_states)
 
       # Step 3: Update the density with the temporary primitive scalars. NB:
       # Because the boundary conditions are enforced for the temporary primitive
       # variables, the density at the boundary is valid.
       if self._params.solver_mode == thermodynamics_pb2.Thermodynamics.LOW_MACH:
-        rho, drho = self.thermodynamics.update_density(self._kernel_op,
-                                                       replica_id, replicas,
-                                                       states_k,
-                                                       additional_states,
-                                                       states_0)
+        with tf.name_scope('density_update_low_mach'):
+          rho, drho = self.thermodynamics.update_density(self._kernel_op,
+                                                         replica_id, replicas,
+                                                         states_k,
+                                                         additional_states,
+                                                         states_0)
+          rho_thermal = self.thermodynamics.update_thermal_density(
+              states_k, additional_states)
         states_k.update({
             'rho': rho,
-            'rho_thermal':
-                self.thermodynamics.update_thermal_density(
-                    states_k, additional_states),
+            'rho_thermal': rho_thermal,
             'drho': drho,
         })
       else:
+        with tf.name_scope('density_update_anelastic'):
+          rho_thermal = self.thermodynamics.update_thermal_density(
+              states_k, additional_states)
         states_k.update({
-            'rho_thermal':
-                self.thermodynamics.update_thermal_density(
-                    states_k, additional_states),
+            'rho_thermal': rho_thermal,
         })
 
-      states_k.update(
-          self.pressure.update_pressure_halos(
-              replica_id, replicas, {
-                  'rho_u': states_k['rho_u'],
-                  'rho_v': states_k['rho_v'],
-                  'rho_w': states_k['rho_w'],
-                  'u': states_k['u'],
-                  'v': states_k['v'],
-                  'w': states_k['w'],
-                  'rho': rho_mid,
-                  'rho_thermal': states_k['rho_thermal'],
-                  'p': states_k['p'],
-              }, additional_states))
+      with tf.name_scope('pressure_halo_update'):
+        pressure_update_halo_states = self.pressure.update_pressure_halos(
+            replica_id, replicas, {
+                'rho_u': states_k['rho_u'],
+                'rho_v': states_k['rho_v'],
+                'rho_w': states_k['rho_w'],
+                'u': states_k['u'],
+                'v': states_k['v'],
+                'w': states_k['w'],
+                'rho': rho_mid,
+                'rho_thermal': states_k['rho_thermal'],
+                'p': states_k['p'],
+            }, additional_states)
+      states_k.update(pressure_update_halo_states)
 
       # Step 4: Update all primitive scalars with the latest density. Boundary
       # conditions are enforced for these scalars.
       if (self._params.enable_scalar_recorrection and self._params.solver_mode
           != thermodynamics_pb2.Thermodynamics.ANELASTIC):
-        states_k.update(
-            self.scalars.correction_step(replica_id, replicas, states_k,
-                                         states_0, additional_states))
+        with tf.name_scope('scalar_correction'):
+          scalar_correction_states = self.scalars.correction_step(
+              replica_id, replicas, states_k, states_0, additional_states)
+        states_k.update(scalar_correction_states)
 
       # Step 5: Time advance the momentum equations to yield provisional
       # estimates for the velocity components. Boundary conditions are enforced
       # for velocity components only.
-      states_k.update(
-          self.velocity.prediction_step(replica_id, replicas, states_k,
-                                        states_0, additional_states))
+      with tf.name_scope('velocity_prediction'):
+        velocity_prediction_states = self.velocity.prediction_step(
+            replica_id, replicas, states_k, states_0, additional_states)
+      states_k.update(velocity_prediction_states)
 
       # Step 6: Get the pressure correction. NB: the boundary condition for
       # density is set to be Neumann everywhere.
-      states_k.update(
-          self.pressure.step(replica_id, replicas, states_k, states_0,
-                             additional_states, i))
+      with tf.name_scope('pressure_step'):
+        pressure_step_states = self.pressure.step(
+            replica_id, replicas, states_k, states_0, additional_states, i)
+      states_k.update(pressure_step_states)
 
       # Step 7: Update the velocity and pressure.
-      states_k.update(
-          self.velocity.correction_step(replica_id, replicas, states_k,
-                                        states_0, additional_states))
+      with tf.name_scope('velocity_correction'):
+        velocity_correction_states = self.velocity.correction_step(
+            replica_id, replicas, states_k, states_0, additional_states)
+      states_k.update(velocity_correction_states)
 
       return (i + 1, states_k)
 

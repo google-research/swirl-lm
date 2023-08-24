@@ -34,11 +34,12 @@ in a distributed setting.
 """
 
 import functools
-from typing import Any, Callable, Mapping, Optional, Sequence, Text
+from typing import Any, Callable, List, Mapping, Optional, Sequence, Text
 
 import numpy as np
 import scipy as sp
 import scipy.sparse  # pylint: disable=unused-import
+from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.communication import halo_exchange
 from swirl_lm.linalg import base_poisson_solver
 from swirl_lm.linalg import conjugate_gradient_solver
@@ -676,3 +677,59 @@ def poisson_solver_factory(
     return Multigrid(params, kernel_op, solver_option)
 
   raise ValueError('Unknown Poisson solver option {}.'.format(solver_option))
+
+
+def poisson_solver_helper_variable_keys(
+    params: parameters_lib.SwirlLMParameters,
+) -> List[str]:
+  """Determines the required helper variable keys for the Poisson solver.
+
+  Args:
+    params: An instance of the `SwirlLMParameters` specifying a simulation
+      configuration.
+
+  Returns:
+    A sequence of strings representing helper variables that are required by
+    the selected type of Poisson solver.
+  """
+  if params.pressure is None:
+    return []
+
+  solver_type = params.pressure.solver.WhichOneof('solver')
+  if solver_type == 'multigrid':
+    return list(multigrid_utils.HELPER_VARIABLES)
+  else:
+    return []
+
+
+def poisson_solver_helper_variable_init_fn(
+    params: parameters_lib.SwirlLMParameters,
+) -> Optional[types.InitFn]:
+  """Generates a `InitFn` for helper variables required by the Poisson solver.
+
+  Args:
+    params: An instance of the `SwirlLMParameters` specifying a simulation
+      configuration.
+
+  Returns:
+    A function that initializes the helper variables that are required by the
+    Poisson solver.
+  """
+  if params.pressure is None:
+    return None
+
+  solver_type = params.pressure.solver.WhichOneof('solver')
+  if solver_type == 'multigrid':
+    ps_rs_init_fn = multigrid_utils.get_ps_rs_init_fn(params)
+
+    def multigrid_helper_var_init_fn(
+        replica_id: tf.Tensor,
+        coordinates: types.ReplicaCoordinates,
+    ) -> types.FlowFieldMap:
+      """Fits the `ps_rs_init_fn` to the `init_fn` signature."""
+      del replica_id
+      return ps_rs_init_fn(coordinates)
+
+    return multigrid_helper_var_init_fn
+  else:
+    return None

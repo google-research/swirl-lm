@@ -66,6 +66,8 @@ SmootherTypeFn = Callable[[TensorOrArray, TensorOrArray], TensorOrArray]
 InitFn = types.InitFn
 FlowFieldVal = types.FlowFieldVal
 
+HELPER_VARIABLES = ('ps', 'rs')
+
 _NP_DTYPE = types.NP_DTYPE
 
 

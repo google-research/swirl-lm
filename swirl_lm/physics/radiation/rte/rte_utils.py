@@ -78,7 +78,7 @@ class RTEUtils:
     self.grid_size = (params.nx, params.ny, params.nz)
     self.halos = params.halo_width
 
-  def _slice(
+  def slice(
       self,
       f: types.FlowFieldVal,
       dim: int,
@@ -184,13 +184,13 @@ class RTEUtils:
 
     for i in range(n):
       prev_layer_idx = i - 1
-      prev_x = x0 if i == 0 else self._slice(x, dim, prev_layer_idx, face)
-      w_plane = self._slice(w, dim, i, face)
-      b_plane = self._slice(b, dim, i, face)
+      prev_x = x0 if i == 0 else self.slice(x, dim, prev_layer_idx, face)
+      w_plane = self.slice(w, dim, i, face)
+      b_plane = self.slice(b, dim, i, face)
       next_layer = tf.nest.map_structure(affine_fn, w_plane, b_plane, prev_x)
       x = next_layer if i == 0 else self._append(x, next_layer, dim, forward)
 
-    last_local_layer = self._slice(x, dim, n - 1, face)
+    last_local_layer = self.slice(x, dim, n - 1, face)
 
     return x, last_local_layer
 
@@ -478,7 +478,7 @@ class RTEUtils:
     )
 
     local_w_cumprod = self.cum_prod(w, dim, forward)
-    local_w_prod = self._slice(local_w_cumprod, dim, n - 1, face)
+    local_w_prod = self.slice(local_w_cumprod, dim, n - 1, face)
 
     group_assignment = common_ops.group_replicas(replicas, dim)
 
@@ -500,7 +500,7 @@ class RTEUtils:
     )
 
     global_x0 = tf.nest.map_structure(
-        tf.zeros_like, self._slice(global_b, dim, 0, face)
+        tf.zeros_like, self.slice(global_b, dim, 0, face)
     )
 
     # Run the cumulative recurrent affine operation again, this time on the
@@ -515,7 +515,7 @@ class RTEUtils:
     prev_x = tf.cond(
         pred=tf.equal(core_idx, first_core_idx),
         true_fn=lambda: global_x0,  # Zero.
-        false_fn=lambda: self._slice(global_x, dim, prev_core_idx, face=0),
+        false_fn=lambda: self.slice(global_x, dim, prev_core_idx, face=0),
     )
 
     if not field_is_tensor and dim == 2:

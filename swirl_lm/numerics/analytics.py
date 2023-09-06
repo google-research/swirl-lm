@@ -172,7 +172,7 @@ def pair_distance_with_tol(
     rtol: Relative difference for comparison, could use `rhs` or together with
       `lhs` as reference if symmetric.
     replicas: A numpy array that maps a replica's grid coordinate to its
-      replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 2.
+      replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 1.
     halo_width: Width of the halo.
     symmetric: Whether to use the `lhs` as reference as well. If enabled will
       use both `lhs` and `rhs` as reference and get the maximum of these two

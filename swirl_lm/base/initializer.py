@@ -270,9 +270,20 @@ def gen_forcing(params, coordinate, alpha_max=0.05, perm=DEFAULT_PERMUTATION):
   return partial_mesh_for_core(params, coordinate, gen_forcing_fn, perm)
 
 
-def subgrid_slice(subgrid_size: int,
-                  coordinate: int,
-                  halo_width: Optional[int] = 1) -> slice:
+def subgrid_slice_indices(
+    subgrid_size: int,
+    coordinate: int,
+    halo_width: int = 1,
+) -> Tuple[int, int]:
+  """Determines the start and end indices for slicing."""
+  core_subgrid_size = subgrid_size - 2 * halo_width
+  start = coordinate * core_subgrid_size
+  return start, start + subgrid_size
+
+
+def subgrid_slice(
+    subgrid_size: int, coordinate: int, halo_width: Optional[int] = 1
+) -> slice:
   """Returns the slice of a field corresponding to `coordinate`.
 
   Args:
@@ -284,9 +295,9 @@ def subgrid_slice(subgrid_size: int,
     The subgrid slice corresponding to the given subgrid coordinate (including
     halo).
   """
-  core_subgrid_size = subgrid_size - 2 * halo_width
-  start = coordinate * core_subgrid_size
-  return slice(start, start + subgrid_size)
+  start, end = subgrid_slice_indices(subgrid_size, coordinate, halo_width)
+
+  return slice(start, end)
 
 
 def three_d_subgrid_slices(

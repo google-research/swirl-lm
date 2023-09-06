@@ -1003,7 +1003,7 @@ def compute_norm(
     v: The vector to compute norm, a tensor or a list of tensor.
     norm_types: The norm types to be used for computation.
     replicas: A numpy array that maps a replica's grid coordinate to its
-      replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 2.
+      replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 1.
 
   Returns:
     A dict of norms, with the key being the enum name for norm_type and the

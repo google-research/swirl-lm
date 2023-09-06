@@ -469,11 +469,11 @@ class Pressure(object):
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      states,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
       rho_info: DensityInfo,
       subiter: tf.Tensor = None,
   ) -> Tuple[FlowFieldVal, monitor.MonitorDataType]:  # pytype: disable=annotation-type-mismatch
-    # pylint: disable=line-too-long
     """Updates the pressure correction.
 
     This method follows the approach introduced in:
@@ -493,9 +493,11 @@ class Pressure(object):
     Args:
       replica_id: The ID number of the replica.
       replicas: A numpy array that maps a replica's grid coordinate to its
-        replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 2.
+        replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 1.
       states: A dictionary that holds flow field variables from the latest
         prediction.
+      additional_states: A dictionary that holds helper variables required by
+        the Poisson solver.
       rho_info: The density information required the pressure solver. For
         constant density, `rho_info` is an instance of `ConstantDensityInfo`
         which contains the value of the density as a float. For variable
@@ -613,8 +615,10 @@ class Pressure(object):
         })
 
       else:
-        raise ValueError('`rho_info` has to be either `ConstantDensityInfo` or '
-                         '`VariableDensityInfo`.')
+        raise ValueError(
+            '`rho_info` has to be either `ConstantDensityInfo` or '
+            f'`VariableDensityInfo`, but {rho_info} is provided.'
+        )
 
       # pylint: disable=g-complex-comprehension
       return [(div_i + drho_dt_i - src_rho_i)
@@ -664,11 +668,10 @@ class Pressure(object):
 
     dp0 = [tf.zeros_like(b_i) for b_i in b]
 
+    helper_vars = dict(additional_states)
     if (self._thermodynamics.solver_mode ==
         thermodynamics_pb2.Thermodynamics.ANELASTIC):
-      helper_vars = {poisson_solver.VARIABLE_COEFF: states['rho']}
-    else:
-      helper_vars = None
+      helper_vars[poisson_solver.VARIABLE_COEFF] = states['rho']
 
     # Note that the solution that is denoted as `dp` from the Poisson solver has
     # different meanings under different modes of thermodynamics. In the low
@@ -917,8 +920,7 @@ class Pressure(object):
     Returns:
       A dictionary with the updated pressure and pressure corrector.
     """
-    del additional_states
-
+    drho_dt = tf.nest.map_structure(tf.zeros_like, states['rho'])
     if (self._thermodynamics.solver_mode ==
         thermodynamics_pb2.Thermodynamics.LOW_MACH):
       exchange_halos = functools.partial(
@@ -957,13 +959,13 @@ class Pressure(object):
       drho_dt = [drho_i / self._params.dt for drho_i in drho]
     elif (self._thermodynamics.solver_mode ==
           thermodynamics_pb2.Thermodynamics.ANELASTIC):
-      drho_dt = [tf.zeros_like(rho_i) for rho_i in states['rho']]
+      drho_dt = tf.nest.map_structure(tf.zeros_like, states['rho'])
 
     rho_info = VariableDensityInfo(drho_dt)
 
-    dp, monitor_vars = self._pressure_corrector_update(replica_id, replicas,
-                                                       states, rho_info,
-                                                       subiter)
+    dp, monitor_vars = self._pressure_corrector_update(
+        replica_id, replicas, states, additional_states, rho_info, subiter
+    )
 
     states_updated = {
         'p': tf.nest.map_structure(lambda p_, dp_: p_ + dp_, states['p'], dp),

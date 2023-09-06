@@ -163,7 +163,7 @@ def mg_cycle(
       W-cycle.
     replica_id: The replica id.
     replicas: A numpy array that maps a replica's grid coordinate to its
-      replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 2.
+      replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 1.
     coordinates: The coordinates of this replica (as a tensor or array).
     num_cycles: The number of multigrid cycles to perform.
 
@@ -329,7 +329,7 @@ def poisson_mg_cycle_fn(  # pytype: disable=annotation-type-mismatch  # numpy-sc
       exactly.
     replica_id: The replica id.
     replicas: A numpy array that maps a replica's grid coordinate to its
-      replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 2.
+      replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 1.
     coordinates: The coordinates of this replica (as a tensor or array).
     num_cycles: The number of cycles.
     dtype: The dtype.

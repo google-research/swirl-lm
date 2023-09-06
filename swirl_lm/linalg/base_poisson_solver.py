@@ -77,7 +77,7 @@ def _halo_update_homogeneous_neumann(
   Args:
     replica_id: The index of the current TPU core.
     replicas: A numpy array that maps a replica's grid coordinate to its
-      replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 2.
+      replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 1.
     halo_width: The width of the halo layer.
 
   Returns:
@@ -192,7 +192,7 @@ class PoissonSolver(object):
     Args:
       replica_id: The ID of the replica.
       replicas: A numpy array that maps a replica's grid coordinate to its
-        replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 2.
+        replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 1.
       f: The solution to the Poisson equation given `rhs`.
       rhs: A 3D field stored in a list of `tf.Tensor` that represents the right
         hand side tensor `b` in the Poisson equation.
@@ -264,7 +264,7 @@ class PoissonSolver(object):
     Args:
       replica_id: The ID of the replica.
       replicas: A numpy array that maps a replica's grid coordinate to its
-        replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 2.
+        replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 1.
       rhs: A 3D field stored in a list of `tf.Tensor` that represents the right
         hand side tensor `b` in the Poisson equation.
       p0: A 3D field stored in a list of `tf.Tensor` that provides initial guess

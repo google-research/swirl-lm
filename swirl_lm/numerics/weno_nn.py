@@ -109,7 +109,7 @@ class WenoNN:
     )
 
     n_hid = len(self._mlp_network['n_hidden_units'])
-    hidden_out = tf.constant(delta)
+    hidden_out = tf.identity(delta)
     for i in range(n_hid):
       hidden_act = tf.einsum(
           '...ji,...kj->...ki', self._mlp_network['weights'][i], hidden_out
@@ -244,6 +244,7 @@ class WenoNN:
       delta_neg: types.FlowFieldVal,
       delta_pos: types.FlowFieldVal,
       c_eno: types.TF_DTYPE = 2E-4,
+      apply_eno_layer: bool = True,
   ) -> Tuple[Sequence[types.FlowFieldVal], Sequence[types.FlowFieldVal]]:
     """Calculates the weights for WENO interpolation using the neural network.
 
@@ -258,6 +259,8 @@ class WenoNN:
       delta_pos: Positive side of the delta layer [1]. Details of shape and
         contents are same as delta_neg.
       c_eno: A cutoff threshold to ensure zero weights near discontinuities [1].
+      apply_eno_layer: ENO layer is applied if this is set true (inference
+        mode). ENO layer is not used in the training mode [1].
 
     Returns:
       A tuple of the weights for WENO interpolated values on the faces between
@@ -276,27 +279,30 @@ class WenoNN:
     weno_wt_neg[0] = tf.nest.map_structure(calc_second_wt, weno_wt_neg[1])
     weno_wt_pos[1] = tf.nest.map_structure(calc_second_wt, weno_wt_pos[0])
 
-    # ENO layer: equation (16) of reference [1]:
-    def apply_eno_layer(weno_wt):
-      zero_cutoff = lambda wt: tf.where(wt < c_eno, tf.zeros_like(wt), wt)
-      weno_wt = [
-          tf.nest.map_structure(zero_cutoff, weno_wt_i) for weno_wt_i in weno_wt
-      ]
-      weno_wt_sum = tf.nest.map_structure(tf.math.add, weno_wt[0], weno_wt[1])
-      weno_wt = [
-          tf.nest.map_structure(tf.math.divide, weno_wt_i, weno_wt_sum)
-          for weno_wt_i in weno_wt
-      ]
-      return weno_wt
+    if apply_eno_layer:
+      # ENO layer: equation (16) of reference [1]:
+      def eno_layer(weno_wt):
+        zero_cutoff = lambda wt: tf.where(wt < c_eno, tf.zeros_like(wt), wt)
+        weno_wt = [
+            tf.nest.map_structure(zero_cutoff, weno_wt_i)
+            for weno_wt_i in weno_wt
+        ]
+        weno_wt_sum = tf.nest.map_structure(tf.math.add, weno_wt[0], weno_wt[1])
+        weno_wt = [
+            tf.nest.map_structure(tf.math.divide, weno_wt_i, weno_wt_sum)
+            for weno_wt_i in weno_wt
+        ]
+        return weno_wt
 
-    weno_wt_neg = apply_eno_layer(weno_wt_neg)
-    weno_wt_pos = apply_eno_layer(weno_wt_pos)
+      weno_wt_neg = eno_layer(weno_wt_neg)
+      weno_wt_pos = eno_layer(weno_wt_pos)
     return weno_wt_neg, weno_wt_pos
 
   def weno_nn(
       self,
       v: types.FlowFieldVal,
       dim: str,
+      apply_eno_layer: bool = True,
   ) -> Tuple[types.FlowFieldVal, types.FlowFieldVal]:
     """Performs WENO interpolation with weights estimated using a neural network.
 
@@ -304,6 +310,8 @@ class WenoNN:
       v: A tensor or a list of tensor representing a cell-averaged flow field
         to which the interpolation is performed.
       dim: The dimension along with the interpolation is performed.
+      apply_eno_layer: ENO layer is applied if this is set true (inference
+        mode). ENO layer is not used in the training mode [1].
 
     Returns:
       A tuple of the interpolated values on the faces, with the first and second
@@ -312,7 +320,7 @@ class WenoNN:
     """
     delta_neg, delta_pos = self._calculate_weno_nn_delta_layer(v, dim)
     weno_wt_neg, weno_wt_pos = self._calculate_weno_nn_weights(
-        delta_neg, delta_pos,
+        delta_neg, delta_pos, apply_eno_layer=apply_eno_layer
     )
     vr_neg, vr_pos = interpolation._reconstruct_weno_face_values(  # pylint: disable=protected-access
         v, self._kernel_op, dim=dim, k=self._k

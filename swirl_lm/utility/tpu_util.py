@@ -131,7 +131,7 @@ def combine_subgrids(subgrids: Sequence[TensorOrArray],
     subgrids: A sequence of subgrids (3D tensors or numpy arrays), one for each
       replica.
     replicas: A numpy array that maps a replica's grid coordinate to its
-        replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 2.
+        replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 1.
     halo_width: The width of the halo.
   Returns:
     The combined tensor or numpy array.

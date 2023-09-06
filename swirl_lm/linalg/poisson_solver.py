@@ -173,7 +173,7 @@ class FastDiagonalization(PoissonSolver):
     Args:
       replica_id: The ID of the replica.
       replicas: A numpy array that maps a replica's grid coordinate to its
-        replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 2.
+        replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 1.
       rhs: A 3D field stored in a list of `tf.Tensor` that represents the right
         hand side tensor `b` in the Poisson equation.
       p0: A 3D field stored in a list of `tf.Tensor` that provides initial guess
@@ -280,7 +280,7 @@ class ConjugateGradient(PoissonSolver):
     Args:
       replica_id: The ID of the replica.
       replicas: A numpy array that maps a replica's grid coordinate to its
-        replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 2.
+        replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 1.
       rhs: A 3D field stored in a list of `tf.Tensor` that represents the right
         hand side tensor `b` in the Poisson equation.
       p0: A 3D field stored in a list of `tf.Tensor` that provides initial guess
@@ -578,7 +578,7 @@ class Multigrid(PoissonSolver):
     Args:
       replica_id: The ID of the replica.
       replicas: A numpy array that maps a replica's grid coordinate to its
-        replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 2.
+        replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 1.
       rhs: A 3D field stored in a list of `tf.Tensor` that represents the right
         hand side tensor `b` in the Poisson equation.
       p: The 3D candidate solution stored in a list of `tf.Tensor`.
@@ -593,9 +593,17 @@ class Multigrid(PoissonSolver):
         'x': A 3D tensor of the same shape as `rhs` that stores the updated
            candidate solution to the Poisson equation.
     """
+    assert additional_states is not None, (
+        'Prolongation and restriction matrices are required from '
+        '`additional_states` by the multigrid solver, but it is not provided.'
+    )
+
     coordinates = tf.stack(common_ops.get_core_coordinate(replicas, replica_id))
-    prs = multigrid_utils.convert_ps_rs_dict_to_tuple(additional_states['ps'],
-                                                      additional_states['rs'])
+
+    ps = multigrid_utils.remove_prefix_in_dict(additional_states, 'ps')
+    rs = multigrid_utils.remove_prefix_in_dict(additional_states, 'rs')
+
+    prs = multigrid_utils.convert_ps_rs_dict_to_tuple(ps, rs)
     mg_cycle = self._mg_cycle_step_fn(prs, replica_id, replicas, coordinates)
 
     # TODO(b/262934073): This is a quick workaround, striping down the halo to
@@ -697,7 +705,7 @@ def poisson_solver_helper_variable_keys(
 
   solver_type = params.pressure.solver.WhichOneof('solver')
   if solver_type == 'multigrid':
-    return list(multigrid_utils.HELPER_VARIABLES)
+    return multigrid_utils.get_multigrid_helper_var_keys(params)
   else:
     return []
 
@@ -720,16 +728,6 @@ def poisson_solver_helper_variable_init_fn(
 
   solver_type = params.pressure.solver.WhichOneof('solver')
   if solver_type == 'multigrid':
-    ps_rs_init_fn = multigrid_utils.get_ps_rs_init_fn(params)
-
-    def multigrid_helper_var_init_fn(
-        replica_id: tf.Tensor,
-        coordinates: types.ReplicaCoordinates,
-    ) -> types.FlowFieldMap:
-      """Fits the `ps_rs_init_fn` to the `init_fn` signature."""
-      del replica_id
-      return ps_rs_init_fn(coordinates)
-
-    return multigrid_helper_var_init_fn
+    return multigrid_utils.get_multigrid_helper_var_init_fn(params)
   else:
     return None

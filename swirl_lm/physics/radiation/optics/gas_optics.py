@@ -31,6 +31,7 @@ import collections
 from typing import Dict, Optional, Text
 
 from swirl_lm.physics.radiation.optics import lookup_gas_optics_base
+from swirl_lm.physics.radiation.optics import lookup_gas_optics_longwave
 from swirl_lm.physics.radiation.optics import lookup_gas_optics_shortwave
 from swirl_lm.physics.radiation.optics import lookup_volume_mixing_ratio
 from swirl_lm.physics.radiation.optics import optics_utils
@@ -41,6 +42,7 @@ IndexAndWeight = optics_utils.IndexAndWeight
 OrderedDict = collections.OrderedDict
 
 AbstractLookupGasOptics = lookup_gas_optics_base.AbstractLookupGasOptics
+LookupGasOpticsLongwave = lookup_gas_optics_longwave.LookupGasOpticsLongwave
 LookupGasOpticsShortwave = lookup_gas_optics_shortwave.LookupGasOpticsShortwave
 LookupVolumeMixingRatio = lookup_volume_mixing_ratio.LookupVolumeMixingRatio
 
@@ -71,25 +73,22 @@ def _mixing_fraction_interpolant(
 
 def get_vmr(
     lookup_gas_optics: AbstractLookupGasOptics,
-    vmr: LookupVolumeMixingRatio,
+    vmr_lib: LookupVolumeMixingRatio,
     species_idx: tf.Tensor,
-    pressure_idx: tf.Tensor,
-    vmr_water_vapor: Optional[tf.Tensor] = None,
+    vmr_fields: Optional[Dict[int, tf.Tensor]] = None,
 ) -> tf.Tensor:
   """Gets the volume mixing ratio, given major gas species index and pressure.
 
   Args:
     lookup_gas_optics: An `AbstractLookupGasOptics` object containing an index
       for the gas species.
-    vmr: A `LookupVolumeMixingRatio` object containing the volume mixing ratio
-      of all relevant atmospheric gases. Only ozone and water vapor are assumed
-      to have vertically variable mixing ratios.
+    vmr_lib: A `LookupVolumeMixingRatio` object containing the volume mixing
+      ratio of all relevant atmospheric gases.
     species_idx: A `tf.Tensor` containing indices of gas species whose VMR will
       be computed.
-    pressure_idx: A `tf.Tensor` holding indices of reference pressure values.
-    vmr_water_vapor: An optional `tf.Tensor` containing the water vapor
-      volume mixing ratio. If this is provided, the static values for water
-        vapor from the `LookupVolumeMixingRatio` data object are ignored.
+    vmr_fields: An optional dictionary containing precomputed volume mixing
+      ratio fields, keyed by gas index, that will overwrite the global means for
+      those gases that have a vmr field already available.
 
   Returns:
     A `tf.Tensor` of the same shape as `species_idx` or `pressure_idx`
@@ -99,37 +98,43 @@ def get_vmr(
   idx_gases = lookup_gas_optics.idx_gases
   # Indices of background gases for which a global mean VMR is available.
   vmr_gm = [0.0] * len(idx_gases)
-  # Map the gas names in `vmr.vmr_gm` dict to indices consistent with the RRTMGP
-  # `key_species` table.
-  for k, v in vmr.vmr_gm.items():
+  # Map the gas names in `vmr_lib.vmr_gm` dict to indices consistent with the
+  # RRTMGP `key_species` table.
+  for k, v in vmr_lib.vmr_gm.items():
     vmr_gm[idx_gases[k]] = v
 
-  vmr_water_vapor = (
-      vmr_water_vapor
-      if vmr_water_vapor is not None
-      else optics_utils.lookup_values(vmr.vmr_h2o, (pressure_idx,))
-  )
+  vmr = optics_utils.lookup_values(tf.stack(vmr_gm), (species_idx,))
 
-  return tf.where(
-      condition=tf.equal(species_idx, lookup_gas_optics.idx_h2o),
-      x=vmr_water_vapor,
-      y=tf.where(
-          condition=tf.equal(species_idx, lookup_gas_optics.idx_o3),
-          x=optics_utils.lookup_values(vmr.vmr_o3, (pressure_idx,)),
-          y=optics_utils.lookup_values(tf.stack(vmr_gm), (species_idx,))
+  # Overwrite with available precomputed vmr.
+  if vmr_fields is not None:
+    for gas_idx, vmr_field in vmr_fields.items():
+      vmr = tf.where(
+          condition=tf.equal(species_idx, gas_idx),
+          x=vmr_field,
+          y=vmr,
       )
-  )
+
+  assert_vmr_below_one = tf.compat.v1.assert_equal(
+      tf.math.reduce_any(tf.math.greater(vmr, 1.0)),
+      False,
+      message='At least one volume mixing ratio (VMR) is above 1.')
+  assert_vmr_nonnegative = tf.compat.v1.assert_equal(
+      tf.math.reduce_any(tf.math.less(vmr, 0.0)),
+      False,
+      message='At least one volume mixing ratio (VMR) is negative.')
+
+  with tf.control_dependencies([assert_vmr_below_one, assert_vmr_nonnegative]):
+    return vmr
 
 
-def compute_relative_abundance_interpolant(
+def _compute_relative_abundance_interpolant(
     lookup_gas_optics: AbstractLookupGasOptics,
     vmr_lib: LookupVolumeMixingRatio,
     troposphere_idx: tf.Tensor,
     temperature_idx: tf.Tensor,
-    pressure_idx: tf.Tensor,
     ibnd: int,
     scale_by_mixture: bool,
-    vmr_water_vapor: Optional[tf.Tensor] = None,
+    vmr_fields: Optional[Dict[int, tf.Tensor]] = None,
 ) -> Interpolant:
   """Creates an `Interpolant` object for relative abundance of a major species.
 
@@ -137,19 +142,18 @@ def compute_relative_abundance_interpolant(
     lookup_gas_optics: An `AbstractLookupGasOptics` object containing a RRTMGP
       index for all relevant gas species.
     vmr_lib: A `LookupVolumeMixingRatio` object containing the volume mixing
-      ratio of all relevant atmospheric gases. Only ozone and water vapor are
-      assumed to have vertically variable profiles.
+      ratio of all relevant atmospheric gases.
     troposphere_idx: A `tf.Tensor` that is 1 where the corresponding pressure
       level is below the troposphere limit and 0 otherwise. This informs whether
       an offset should be added to the reference pressure indices when indexing
       into the `kmajor` table.
     temperature_idx: A `tf.Tensor` containing indices of reference temperature
       values.
-    pressure_idx: A `tf.Tensor` containing indices of reference pressure values.
     ibnd: The frequency band for which the relative abundance is computed.
     scale_by_mixture: Whether to scale the weights by the gas mixture.
-    vmr_water_vapor: An optional `tf.Tensor` containing the pointwise volume
-      mixing ratio of water vapor.
+    vmr_fields: An optional dictionary containing precomputed volume mixing
+      ratio fields, keyed by gas index, that will overwrite the global means for
+      those gases that have a vmr field already available.
 
   Returns:
     An `Interpolant` object for the relative abundance of the major gas species
@@ -169,8 +173,7 @@ def compute_relative_abundance_interpolant(
             lookup_gas_optics,
             vmr_lib,
             major_species_idx[i],
-            pressure_idx,
-            vmr_water_vapor,
+            vmr_fields,
         )
     )
     vmr_ref.append(
@@ -194,11 +197,11 @@ def compute_relative_abundance_interpolant(
 def compute_major_optical_depth(
     lookup_gas_optics: AbstractLookupGasOptics,
     vmr: LookupVolumeMixingRatio,
+    mols: tf.Tensor,
     temperature: tf.Tensor,
     p: tf.Tensor,
     igpt: int,
-    ibnd: int,
-    vmr_water_vapor: Optional[tf.Tensor] = None,
+    vmr_fields: Optional[Dict[int, tf.Tensor]] = None,
 ) -> tf.Tensor:
   """Computes the optical depth contributions from major gases.
 
@@ -206,15 +209,16 @@ def compute_major_optical_depth(
     lookup_gas_optics: An `AbstractLookupGasOptics` object containing a RRTMGP
       index for all major gas species.
     vmr: A `LookupVolumeMixingRatio` object containing the volume mixing ratio
-      of all relevant atmospheric gases. Only ozone and water vapor are assumed
-      to have vertically variable mixing ratios.
+      of all relevant atmospheric gases.
+    mols: The number of molecules in an atmospheric grid cell per area
+      [mols/m^2]
     temperature: A `tf.Tensor` containing temperature values (in K).
     p: A `tf.Tensor` containing pressure values (in Pa).
     igpt: The absorption variable index (g-point) for which the optical depth
       is computed.
-    ibnd: The frequency band for which the optical depth is computed.
-    vmr_water_vapor: An optional `tf.Tensor` containing the pointwise water
-      vapor volume mixing ratio.
+    vmr_fields: An optional dictionary containing precomputed volume mixing
+      ratio fields, keyed by gas index, that will overwrite the global means for
+      those gases that have a vmr field already available.
 
   Returns:
     A `tf.Tensor` with the pointwise optical depth contributions from the major
@@ -222,6 +226,8 @@ def compute_major_optical_depth(
   """
   # Take the troposphere limit into account when indexing into the major species
   # and absorption coefficients.
+  # The troposphere index is 1 for levels above the troposphere limit and 0
+  # otherwise.
   troposphere_idx = tf.where(
       condition=tf.less_equal(p, lookup_gas_optics.p_ref_tropo),
       x=tf.ones_like(p, dtype=tf.int32),
@@ -233,17 +239,19 @@ def compute_major_optical_depth(
   p_interp = _pressure_interpolant(
       p=p, p_ref=lookup_gas_optics.p_ref, troposphere_offset=troposphere_idx
   )
+  # The frequency band for which the optical depth is computed.
+  ibnd = lookup_gas_optics.g_point_to_bnd[igpt]
 
   def mix_interpolant_fn(dep: Dict[Text, IndexAndWeight]) -> Interpolant:
     """Relative abundance interpolant function that depends on `t` and `p`."""
-    return compute_relative_abundance_interpolant(
+    return _compute_relative_abundance_interpolant(
         lookup_gas_optics,
         vmr,
         troposphere_idx,
         dep['t'].idx,
-        dep['p'].idx,
         ibnd,
-        vmr_water_vapor,
+        scale_by_mixture=True,
+        vmr_fields=vmr_fields,
     )
 
   # Interpolant functions ordered according to the axes in `kmajor`.
@@ -252,7 +260,7 @@ def compute_major_optical_depth(
       ('p', lambda _: p_interp),
       ('m', mix_interpolant_fn),
   ))
-  return optics_utils.interpolate(
+  return mols * optics_utils.interpolate(
       lookup_gas_optics.kmajor[..., igpt], interpolant_fns=interpolant_fn_dict
   )
 
@@ -260,13 +268,12 @@ def compute_major_optical_depth(
 def compute_minor_optical_depth(
     lookup: AbstractLookupGasOptics,
     vmr_lib: LookupVolumeMixingRatio,
-    tropo_idx: tf.Tensor,
     mols: tf.Tensor,
     temperature: tf.Tensor,
-    p_idx: tf.Tensor,
+    p: tf.Tensor,
     igpt: int,
     is_lower_atmosphere: bool,
-    vmr_h2o: Optional[tf.Tensor] = None,
+    vmr_fields: Optional[Dict[int, tf.Tensor]] = None,
 ) -> tf.Tensor:
   """Computes the optical depth contributions from minor gases.
 
@@ -274,24 +281,29 @@ def compute_minor_optical_depth(
     lookup: An `AbstractLookupGasOptics` object containing a RRTMGP index for
       all relevant gases and a lookup table for minor absorption coefficients.
     vmr_lib: A `LookupVolumeMixingRatio` object containing the volume mixing
-      ratio of all relevant atmospheric gases. Only ozone and water vapor are
-      assumed to have vertically variable mixing ratios.
-    tropo_idx: A `tf.Tensor` that is 1 where the corresponding pressure level is
-      below the troposphere limit and 0 otherwise.
+      ratio of all relevant atmospheric gases.
     mols: The number of molecules in an atmospheric grid cell per area
       [mols/m^2]
     temperature: The temperature of the flow field [K].
-    p_idx: Index of reference pressure values.
+    p: The pressure field (in Pa).
     igpt: The absorption rank (g-point) index for which the optical depth
       will be computed.
     is_lower_atmosphere: A boolean indicating whether in the lower atmosphere.
-    vmr_h2o: An optional `tf.Tensor` containing the pointwise water vapor volume
-      mixing ratio.
+    vmr_fields: An optional dictionary containing precomputed volume mixing
+      ratio fields, keyed by gas index, that will overwrite the global means for
+      those gases that have a vmr field already available.
 
   Returns:
     A `tf.Tensor` with the pointwise optical depth contributions from the minor
     species.
   """
+  # The troposphere index is 1 for levels above the troposphere limit and 0
+  # otherwise.
+  tropo_idx = tf.where(
+      condition=tf.less_equal(p, lookup.p_ref_tropo),
+      x=tf.ones_like(p, dtype=tf.int32),
+      y=tf.zeros_like(p, dtype=tf.int32),
+  )
   minor_absorber_to_bnd = (
       lookup.minor_lower_bnd if is_lower_atmosphere else lookup.minor_upper_bnd
   )
@@ -338,17 +350,19 @@ def compute_minor_optical_depth(
   temperature_interpolant = optics_utils.create_linear_interpolant(
       temperature, lookup.t_ref
   )
-  p = optics_utils.lookup_values(lookup.p_ref, p_idx)
 
-  dry_factor = 1.0 / (1.0 + vmr_h2o) if vmr_h2o is not None else 1.0
+  if vmr_fields is not None and lookup.idx_h2o in vmr_fields:
+    dry_factor = 1.0 / (1.0 + vmr_fields[lookup.idx_h2o])
+  else:
+    dry_factor = 1.0
 
   tau_minor = tf.zeros_like(temperature)
 
   def mix_interpolant_fn(dep: Dict[Text, IndexAndWeight]) -> Interpolant:
     """Relative abundance interpolant that depends on `t`."""
     t_idx = dep['t'].idx
-    return compute_relative_abundance_interpolant(
-        lookup, vmr_lib, tropo_idx, t_idx, p_idx, ibnd, False, vmr_h2o
+    return _compute_relative_abundance_interpolant(
+        lookup, vmr_lib, tropo_idx, t_idx, ibnd, False, vmr_fields,
     )
 
   if ibnd not in minor_bnd_start:
@@ -362,16 +376,16 @@ def compute_minor_optical_depth(
       break
     # Map the minor contributor to the RRTMGP gas index.
     gas_idx = idx_gases_minor[i] * tf.ones_like(tropo_idx)
-    vmr_minor = get_vmr(lookup, vmr_lib, gas_idx, p_idx, vmr_h2o)
+    vmr_minor = get_vmr(lookup, vmr_lib, gas_idx, vmr_fields)
     scaling = vmr_minor * mols
     if minor_scales_with_density[i] == 1:
       scaling *= _PASCAL_TO_HPASCAL_FACTOR * p / temperature
       if i in idx_scaling_gas:
         sgas = idx_scaling_gas[i]
         sgas_idx = sgas * tf.ones_like(tropo_idx)
-        scaling_vmr = get_vmr(lookup, vmr_lib, sgas_idx, p_idx, vmr_h2o)
+        scaling_vmr = get_vmr(lookup, vmr_lib, sgas_idx, vmr_fields)
         if scale_by_complement[i] == 1:
-          scaling *= (1.0 - scaling_vmr) * dry_factor
+          scaling *= (1.0 - scaling_vmr * dry_factor)
         else:
           scaling *= scaling_vmr * dry_factor
     # Obtain the global contributor index needed to index into the `kminor`
@@ -394,12 +408,11 @@ def compute_minor_optical_depth(
 def compute_rayleigh_optical_depth(
     lkp: LookupGasOpticsShortwave,
     vmr_lib: LookupVolumeMixingRatio,
-    tropo_idx: tf.Tensor,
     mols: tf.Tensor,
     temperature: tf.Tensor,
-    p_idx: tf.Tensor,
+    p: tf.Tensor,
     igpt: int,
-    vmr_h2o: Optional[tf.Tensor] = None,
+    vmr_fields: Optional[Dict[int, tf.Tensor]] = None,
 ) -> tf.Tensor:
   """Computes the optical depth contribution from Rayleigh scattering.
 
@@ -408,23 +421,28 @@ def compute_rayleigh_optical_depth(
       index for all relevant gases and a lookup table for Rayleigh absorption
       coefficients.
     vmr_lib: A `LookupVolumeMixingRatio` object containing the volume mixing
-      ratio of all relevant atmospheric gases. Only ozone and water vapor are
-      assumed to have vertically variable mixing ratios.
-    tropo_idx: A `tf.Tensor` that is 1 where the corresponding pressure
-      level is below the troposphere limit and 0 otherwise.
+      ratio of all relevant atmospheric gases.
     mols: The number of molecules in an atmospheric grid cell per area
       [mols/m^2].
     temperature: Temperature variable (in K).
-    p_idx: Index of reference pressure values.
+    p: The pressure field (in Pa).
     igpt: The absorption variable index (g-point) for which the optical depth
       will be computed.
-    vmr_h2o: An optional `tf.Tensor` containing the pointwise water
-      vapor volume mixing ratio.
+    vmr_fields: An optional dictionary containing precomputed volume mixing
+      ratio fields, keyed by gas index, that will overwrite the global means for
+      those gases that have a vmr field already available.
 
   Returns:
     A `tf.Tensor` with the pointwise optical depth contributions from Rayleigh
       scattering.
   """
+  # The troposphere index is 1 for levels above the troposphere limit and 0
+  # otherwise.
+  tropo_idx = tf.where(
+      condition=tf.less_equal(p, lkp.p_ref_tropo),
+      x=tf.ones_like(p, dtype=tf.int32),
+      y=tf.zeros_like(p, dtype=tf.int32),
+  )
   temperature_interpolant = optics_utils.create_linear_interpolant(
       temperature, lkp.t_ref
   )
@@ -433,8 +451,8 @@ def compute_rayleigh_optical_depth(
   def mix_interpolant_fn(dep: Dict[Text, IndexAndWeight]) -> Interpolant:
     """Relative abundance interpolant function that depends on `t` and `p`."""
     t_idx = dep['t'].idx
-    return compute_relative_abundance_interpolant(
-        lkp, vmr_lib, tropo_idx, t_idx, p_idx, ibnd, False, vmr_h2o
+    return _compute_relative_abundance_interpolant(
+        lkp, vmr_lib, tropo_idx, t_idx, ibnd, False, vmr_fields,
     )
 
   interpolant_fns = OrderedDict(
@@ -446,7 +464,11 @@ def compute_rayleigh_optical_depth(
   rayl_tau_upper = optics_utils.interpolate(
       lkp.rayl_upper[..., igpt], interpolant_fns
   )
-  factor = 1.0 + vmr_h2o if vmr_h2o is not None else 1.0
+  if vmr_fields is not None and lkp.idx_h2o in vmr_fields:
+    factor = 1.0 + vmr_fields[lkp.idx_h2o]
+  else:
+    factor = 1.0
+
   return (
       factor
       * mols
@@ -456,3 +478,95 @@ def compute_rayleigh_optical_depth(
           y=rayl_tau_lower,
       )
   )
+
+
+def compute_planck_sources(
+    lookup: LookupGasOpticsLongwave,
+    vmr_lib: LookupVolumeMixingRatio,
+    p: tf.Tensor,
+    temperature: tf.Tensor,
+    temperature_top: tf.Tensor,
+    temperature_bottom: tf.Tensor,
+    igpt: int,
+    vmr_fields: Optional[Dict[int, tf.Tensor]] = None,
+) -> Dict[Text, tf.Tensor]:
+  """Computes the Planck source for the longwave problem.
+
+  Args:
+    lookup: An `LookupGasOpticsLongwave` object containing a RRTMGP index for
+      all relevant gases and a lookup table for the Planck source.
+    vmr_lib: A `LookupVolumeMixingRatio` object containing the volume mixing
+      ratio of all relevant atmospheric gases.
+    p: The pressure of the flow field [Pa].
+    temperature: The temperature of the flow field [K].
+    temperature_top: The temperature at the top face of the grid cell [K].
+    temperature_bottom: The temperature at the bottom face of the grid cell [K].
+      Note that if this is being stored in the first layer of the
+      model, then it corresponds to the surface temperature.
+    igpt: The absorption rank (g-point) index for which the optical depth will
+      be computed.
+    vmr_fields: An optional dictionary containing precomputed volume mixing
+      ratio fields, keyed by gas index, that will overwrite the global means for
+      those gases that have a vmr field already available.
+
+  Returns:
+    A dictionary of `tf.Tensor`s containing:
+      'planck_src': The Planck source at the grid cell center.
+      'planck_src_top': The Planck source at the top cell face.
+      'planck_src_bottom': The Planck source at the bottom cell face.
+  """
+  # The troposphere index is 1 for levels above the troposphere limit and 0
+  # otherwise.
+  tropo_idx = tf.where(
+      condition=tf.less_equal(p, lookup.p_ref_tropo),
+      x=tf.ones_like(p, dtype=tf.int32),
+      y=tf.zeros_like(p, dtype=tf.int32),
+  )
+  temperature_interpolant = optics_utils.create_linear_interpolant(
+      temperature, lookup.t_ref
+  )
+  pressure_interpolant = _pressure_interpolant(
+      p, lookup.p_ref, tropo_idx
+  )
+  ibnd = lookup.g_point_to_bnd[igpt]
+
+  def mix_interpolant_fn(dep: Dict[Text, IndexAndWeight]) -> Interpolant:
+    """Relative abundance interpolant function that depends on `t` and `p`."""
+    return _compute_relative_abundance_interpolant(
+        lookup,
+        vmr_lib,
+        tropo_idx,
+        dep['t'].idx,
+        ibnd,
+        True,
+        vmr_fields,
+    )
+
+  interpolants_fns = OrderedDict((
+      ('t', lambda _: temperature_interpolant),
+      ('p', lambda _: pressure_interpolant),
+      ('m', mix_interpolant_fn),
+  ))
+
+  # 3-D interpolation of the Planck fraction.
+  planck_fraction = optics_utils.interpolate(
+      lookup.planck_fraction[..., igpt], interpolants_fns
+  )
+
+  # 1-D interpolation of the Planck source.
+  temperature_level = {
+      'cell': temperature,
+      'top': temperature_top,
+      'bottom': temperature_bottom,
+    }
+  plank_src = {}
+  for key, val in temperature_level.items():
+    interpolant = optics_utils.create_linear_interpolant(
+        val, lookup.t_planck
+    )
+    src_key = f'planck_src_{key}' if key != 'cell' else 'planck_src'
+    plank_src[src_key] = planck_fraction * optics_utils.interpolate(
+        lookup.totplnk[ibnd, :],
+        OrderedDict({'t': lambda _: interpolant}),  # pylint: disable=cell-var-from-loop
+    )
+  return plank_src

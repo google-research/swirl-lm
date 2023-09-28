@@ -87,7 +87,7 @@ class RTEUtils:
   ) -> FlowFieldVal:
     """Slices a plane from `f` normal to `dim`."""
     face_slice = common_ops.get_face(f, dim, face, idx)
-    if not isinstance(f, tf.Tensor) and dim != 2:
+    if isinstance(f, tf.Tensor) or dim != 2:
       # Remove the outer list.
       return face_slice[0]
     return face_slice

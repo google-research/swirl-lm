@@ -355,10 +355,10 @@ class Scalars(object):
             self._params.diffusivity(sc_name) + diff_t_i for diff_t_i in diff_t
         ]
       else:
-        diffusivity = [
-            self._params.diffusivity(sc_name) * tf.ones_like(sc)
-            for sc in sc_mid
-        ]
+        diffusivity = tf.nest.map_structure(
+            lambda sc: self._params.diffusivity(sc_name) * tf.ones_like(sc),  # pylint: disable=cell-var-from-loop
+            sc_mid,
+        )
       helper_states = {'diffusivity': diffusivity}
       helper_states.update(additional_states)
       scalar_rhs_fn = self._scalar_update(replica_id, replicas, sc_name,

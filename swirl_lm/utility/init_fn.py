@@ -15,7 +15,7 @@
 # coding=utf-8
 """A library of functions that generates initial conditions for simulations.
 
-This library provides `inif_fn` that are possibly shared by different
+This library provides `init_fn` that are possibly shared by different
 simulations. The returned value of these functions provides a dictionary whose
 keys are the names variables to be initialized, and values are the `init_fn` of
 that variable.

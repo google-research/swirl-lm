@@ -565,6 +565,7 @@ class WildfireUtils():
       self.all_sponge_vars = rayleigh_damping_layer.sponge_info_map(
           self.config.sponge
       )
+      self.sponge_target_names = {}
 
     # Get the function for temperature initialization.
     if temperature_init_fn is None:

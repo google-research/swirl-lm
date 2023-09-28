@@ -368,9 +368,8 @@ class Velocity(object):
           )
 
         # Computes external forcing terms.
-        force = forces[dim] if forces[dim] else [
-            tf.zeros_like(f_i) for f_i in f
-        ]
+        force = forces[dim] if forces[dim] else (
+            tf.nest.map_structure(tf.zeros_like, f))
 
         source_fn = self._params.source_update_fn(_KEYS_VELOCITY[dim])
 
@@ -381,14 +380,14 @@ class Velocity(object):
                                  _KEYS_VELOCITY[dim])]
           force = tf.nest.map_structure(tf.math.add, force, source)
 
-        momentum_terms = zip(conv[0], conv[1], conv[2], diff[0], diff[1],
-                             diff[2], dp_dh, gravity, force)
+        momentum_terms = (conv[0], conv[1], conv[2], diff[0], diff[1], diff[2],
+                          dp_dh, gravity, force)
 
-        rhs = [
-            -c_x - c_y - c_z + d_x + d_y + d_z - dp_dh_i + gravity_i + force_i
-            for c_x, c_y, c_z, d_x, d_y, d_z, dp_dh_i, gravity_i, force_i in
-            momentum_terms
-        ]
+        def _rhs_fn(c_x, c_y, c_z, d_x, d_y, d_z, dp_dh_i, gravity_i, force_i):
+          return (
+              -c_x - c_y - c_z + d_x + d_y + d_z - dp_dh_i + gravity_i + force_i
+          )
+        rhs = tf.nest.map_structure(_rhs_fn, *momentum_terms)
 
         if self._ib is not None:
           var_name = _KEYS_MOMENTUM[dim]
@@ -426,7 +425,7 @@ class Velocity(object):
     fluid layer. For a velocity component to be 0 at this face, the first halo
     layer that is adjacent to the fluid is set to the opposite of the first
     fluid layer, so that the interpolated value on the face between them is 0.
-    Values in the ghost cells are extrapolated linear based on these 2 layres,
+    Values in the ghost cells are extrapolated linear based on these 2 layers,
     which provides a 0 flux at the face with the QUICK scheme.
 
     For non-slip walls, all velocity components at the wall are set to zero. So
@@ -569,7 +568,7 @@ class Velocity(object):
 
     This function is called before the beginning of each time step. It updates
     the boundary conditions of 'u', 'v', 'w', and the shear stresses if
-    required. It also updates the forcing term of each momentum components.
+    required. It also updates the forcing term of each momentum component.
     These information will be hold within this helper object.
 
     Args:
@@ -601,7 +600,7 @@ class Velocity(object):
 
   def _maybe_update_diagnostics(
       self, additional_states, states_0, template_state):
-    """Updaets diagnostics states if specified in the config."""
+    """Updates diagnostics states if specified in the config."""
     diagnostics = {}
     for i, buoyancy_key in enumerate(common.KEYS_DIAGNOSTICS_BUOYANCY):
       if buoyancy_key in additional_states.keys():
@@ -656,10 +655,12 @@ class Velocity(object):
           (u_mid, v_mid, w_mid),
           replicas=replicas,
           additional_states=additional_states)
-      mu = [(self._params.nu + nu_t_i) * rho_i
-            for nu_t_i, rho_i in zip(nu_t, states_0[_KEY_RHO])]
+      mu = tf.nest.map_structure(
+          lambda nu_t_i, rho_i: (self._params.nu + nu_t_i) * rho_i, nu_t,
+          states_0[_KEY_RHO])
     else:
-      mu = [self._params.nu * rho_i for rho_i in states_0[_KEY_RHO]]
+      mu = tf.nest.map_structure(lambda rho_i: self._params.nu * rho_i,
+                                 states_0[_KEY_RHO])
 
     forces = [self._source[_KEY_U], self._source[_KEY_V], self._source[_KEY_W]]
 

@@ -19,6 +19,17 @@ was named flat_surface.py. It has evolved to be more general and can now handle
 different types of terrains so we renamed it to fire.py. We also changed many of
 the names accordingly, but not some names (for example flags) still use the
 phrase "flat surface".
+
+Remarks:
+* The Rayleigh damping layer (sponge)
+In this simulation, sponge can be applied as the boundary treatment. Supported
+target values for the sponge are:
+(1) A constant;
+(2) `{variable_name}_init`, which uses the initial condition as the target;
+(3) `[uvw]_log`, which uses a log profile to represent the mean boundary layer
+of the flow.
+Note that the (2) and (3) option require additional variables to be specified
+as `additional_states` in the config.
 """
 
 import enum
@@ -87,6 +98,12 @@ _FLAT_SURFACE_MAX_HEIGHT = flags.DEFINE_float(
     'The maximum height of the flat surface. Terrain above this height is set '
     'to this constant.',
     allow_override=True)
+_FLAT_SURFACE_RAMP_START_POINT = flags.DEFINE_float(
+    'flat_surface_ramp_start_point',
+    0.0,
+    'The starting location of the ramp along the x axis.',
+    allow_override=True,
+)
 _FLAT_SURFACE_RAMP_LENGTH = flags.DEFINE_float(
     'flat_surface_ramp_length',
     1e4,
@@ -369,8 +386,10 @@ class Fire:
       x = tf.linspace(0.0, self.config.lx, self.config.fx)
 
       if _TERRAIN_TYPE.value == TerrainType.RAMP:
-        profile = self.h_0 + tf.minimum(
-            x, _FLAT_SURFACE_RAMP_LENGTH.value
+        profile = self.h_0 + tf.clip_by_value(
+            x - _FLAT_SURFACE_RAMP_START_POINT.value,
+            clip_value_min=0.0,
+            clip_value_max=_FLAT_SURFACE_RAMP_LENGTH.value,
         ) * tf.tan(self.slope * np.pi / 180.0)
       elif _TERRAIN_TYPE.value == TerrainType.BUMP:
         forward = self.h_0 + x * tf.tan(tf.abs(self.slope) * np.pi / 180.0)
@@ -464,6 +483,25 @@ class Fire:
     self.blasius_bl_distance = FLAGS.flat_surface_blasius_bl_distance
     self.blasius_bl_transition = FLAGS.flat_surface_blasius_bl_transition
     self.blasius_bl_fraction = FLAGS.flat_surface_blasius_bl_fraction
+
+    # Initializes parameters that handles the location of the fuel distribution
+    # in the domain.
+    self.fuel_start_x = 0.0
+    if (
+        self.fire_utils.ignition_option
+        == wildfire_utils.IgnitionKernelType.SLANT_LINE
+    ):
+      # Set the fuel layer starting location to be the trailing edge of ignition
+      # kernel if the ignition kernel is a SLANT_LINE perpendicular to the
+      # inflow direction.
+      if (
+          np.abs(self.fire_utils.ignition_line.angle - 90.0)
+          < np.finfo(np.float32).resolution
+      ):
+        self.fuel_start_x = (
+            self.fire_utils.ignition_line.center_x
+            - 0.5 * self.fire_utils.ignition_line.thickness
+        )
 
     self.dbg = components_debug.ComponentsDebug(self.config)
 
@@ -809,7 +847,9 @@ class Fire:
         # TODO(b/217254717): Move ad hoc functions like this to a wildfire
         # utility library.
         for varname in sponge_states.keys():
-          target_name = '{}_init'.format(varname)
+          if varname not in self.fire_utils.sponge_target_names:
+            continue
+          target_name = self.fire_utils.sponge_target_names[varname]
           if target_name in additional_states:
             sponge_additional_states.update(
                 {target_name: additional_states[target_name]}
@@ -929,7 +969,9 @@ class Fire:
             'src_w': [tf.zeros_like(w, dtype=w.dtype) for w in states['w']],
         }
         for varname in ('u', 'v', 'w'):
-          target_name = '{}_init'.format(varname)
+          if varname not in self.fire_utils.sponge_target_names:
+            continue
+          target_name = self.fire_utils.sponge_target_names[varname]
           if target_name in additional_states:
             helper_states.update({target_name: additional_states[target_name]})
         sponge_force = self.fire_utils.sponge_forcing_update_fn(
@@ -1060,7 +1102,7 @@ class Fire:
 
     def init_rho_f(xx, yy, zz, lx, ly, lz, coord):
       """Generates initial `rho_f` field."""
-      del xx, yy, lx, ly, lz, coord
+      del yy, lx, ly, lz, coord
       fuel_top_height = ground_elevation + self.fire_utils.fuel_bed_height
       rho_f_mid = tf.compat.v1.where(
           tf.math.logical_and(
@@ -1095,11 +1137,13 @@ class Fire:
           tf.zeros_like(zz),
       )
 
-      return tf.clip_by_value(
+      rho_f = tf.clip_by_value(
           rho_f_bc + rho_f_mid + rho_f_top,
           clip_value_min=0.0,
           clip_value_max=self.fire_utils.fuel_density,
       )
+
+      return tf.where(tf.less(xx, self.fuel_start_x), tf.zeros_like(xx), rho_f)
 
     def init_rho_m(xx, yy, zz, lx, ly, lz, coord):
       """Generates initial moisture `rho_m` field."""
@@ -1387,12 +1431,47 @@ class Fire:
         for variable in sponge.variable_info:
           # Add the target state if requested.
           if variable.WhichOneof('target') == 'target_state_name':
-            target_name = '{}_init'.format(variable.name)
+            target_name = variable.target_state_name
             if target_name not in self.config.additional_state_keys:
               raise ValueError(
-                  'Target state is requested for sponge {0} but {0}_init is '
-                  'not provided.'.format(variable.name))
-            output.update({target_name: output[variable.name]})
+                  f'Target state {target_name} is requested for sponge'
+                  f' {variable.name} but is not provided.'
+              )
+            if target_name == f'{variable.name}_init':
+              logging.info(
+                  'Enforcing the initial condition as sponge for %s.',
+                  variable.name,
+              )
+              output.update({target_name: output[variable.name]})
+            elif target_name == f'{variable.name}_log':
+              if variable.name not in ('u', 'v', 'w'):
+                raise NotImplementedError(
+                    'Log-profiled sponge is implemented for u, v, and w only.'
+                    f' {variable.name} is requested.'
+                )
+              logging.info(
+                  'Enforcing a terrain following log profile as sponge for %s.',
+                  variable.name,
+              )
+              z_0 = 0.15
+              sponge_fn = init_fn_lib.logarithmic_boundary_layer(
+                  self.fire_utils.u_mean,
+                  self.fire_utils.v_mean,
+                  z_0,
+                  self.map_utils.local_elevation_map(coordinates),
+              )[variable.name]
+              output.update(
+                  {
+                      target_name: self.fire_utils.states_init(
+                          coordinates, sponge_fn
+                      )
+                  }
+              )
+            else:
+              raise NotImplementedError(
+                  f'{target_name} is not a supported target sponge type.'
+              )
+            self.fire_utils.sponge_target_names[variable.name] = target_name
 
           if variable.name in ('u', 'v', 'w'):
             continue

@@ -138,7 +138,7 @@ class ThermodynamicsManager(object):
 
         rho = tf.nest.map_structure(tf.math.add, states_0['rho'], drho)
       else:
-        drho = [tf.zeros_like(rho_i) for rho_i in states['rho']]
+        drho = tf.nest.map_structure(tf.zeros_like, states['rho'])
 
       return rho, drho
 
@@ -147,12 +147,13 @@ class ThermodynamicsManager(object):
       # variables. The thermodynamic density is only coupled with the buoyancy
       # following the Boussinesq approximation.
       if 'zz' not in additional_states:
-        zz = [tf.zeros_like(rho_i) for rho_i in states['rho']]
+        zz = tf.nest.map_structure(tf.zeros_like, states['rho'])
       else:
         zz = additional_states['zz']
-      return self.model.rho_ref(zz, additional_states), [
-          tf.zeros_like(rho_i) for rho_i in states['rho']
-      ]
+      return (
+          self.model.rho_ref(zz, additional_states),
+          tf.nest.map_structure(tf.zeros_like, states['rho']),
+      )
     else:
       raise NotImplementedError(
           '{} is not a valid solver model for density update'.format(

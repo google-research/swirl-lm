@@ -1,0 +1,65 @@
+syntax = "proto2";
+
+package research.simulation;
+
+option java_multiple_files = true;
+
+// Stores the parameters required by the radiation optics library.
+// Next id: 6
+message RRTMOptics {
+  // Path of NetCDF file containing the longwave lookup tables.
+  optional string longwave_nc_filepath = 1;
+  // Path of NetCDF file containing the shortwave lookup tables.
+  optional string shortwave_nc_filepath = 2;
+}
+
+message GrayAtmosphereOptics {
+  // Reference surface pressure.
+  optional float p0 = 1 [default = 1e5];
+  // The ratio of the pressure scale height to the partial-pressure scale height
+  // of the infrared absorber.
+  optional float alpha = 2 [default = 3.5];
+  // Longwave optical depth of the entire gray atmosphere.
+  optional float d0_lw = 3;
+  // Shortwave optical depth of the entire gray atmosphere.
+  optional float d0_sw = 4;
+}
+
+message OpticsParameters {
+  oneof optics_scheme {
+    RRTMOptics rrtm_optics = 1;
+    GrayAtmosphereOptics gray_atmosphere_optics = 2;
+  }
+
+  // Order of accuracy of face value reconstruction for interpolating pressure
+  // or temperature at grid cell boundaries. At least 3-rd order is recommended.
+  optional int32 face_interp_scheme_order = 3 [default = 3];
+}
+
+message AtmosphericState {
+  // Path of NetCDF file containing the volume mixing ratio of relevant gases.
+  optional string atmospheric_state_nc_filepath = 1;
+
+  // The following are the Radiative Forcing Model Intercomparison Project
+  // (RFMIP) experiment identifiers for the atmosphere state and location from
+  // which boundary conditions and volume mixing ratio profiles will be drawn.
+  // RFMIP experiment label. Default experiment corresponds to the present-day
+  // atmosphere.
+  optional int32 rfmip_expt_label = 2 [default = 0];
+  // RFMIP column site index, which uniquely identifies a (latitude, longitude,
+  // time) triplet. Default site corresponds to coordinates 13.5 N, 298.5 E.
+  optional int32 rfmip_site = 3 [default = 9];
+
+  // Setting the following parameters will override those provided by the RFMIP
+  // state.
+  // Surface emissivity; the same for all bands.
+  optional float sfc_emis = 4;
+  // Surface albedo; the same for all bands.
+  optional float sfc_alb = 5;
+  // The solar zenith angle (in radians).
+  optional float zenith = 6;
+  // The total solar irradiance (in W/m²).
+  optional float irrad = 7;
+  // The longwave incident flux at the top of the atmosphere (in W/m²).
+  optional float toa_flux_lw = 8 [default = 0.0];
+}

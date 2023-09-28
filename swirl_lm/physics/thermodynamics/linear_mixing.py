@@ -19,6 +19,7 @@ from swirl_lm.physics.thermodynamics import thermodynamics_generic
 from swirl_lm.physics.thermodynamics import thermodynamics_utils
 import tensorflow as tf
 
+
 TF_DTYPE = thermodynamics_generic.TF_DTYPE
 
 FlowFieldVal = thermodynamics_generic.FlowFieldVal
@@ -68,12 +69,13 @@ class LinearMixing(thermodynamics_generic.ThermodynamicModel):
               for sc_i in list(states.values())[0]
           ]
       }
-
-    rho_mix = [tf.zeros_like(sc_i) for sc_i in list(sc_reg.values())[0]]
+    rho_mix = tf.nest.map_structure(tf.zeros_like, list(sc_reg.values())[0])
     for sc_name, sc_val in sc_reg.items():
-      rho_mix = [
-          rho_mix_i + sc_val_i * self._rho_sc[sc_name]
-          for rho_mix_i, sc_val_i in zip(rho_mix, sc_val)
-      ]
+      rho_mix = tf.nest.map_structure(
+          lambda rho_mix_i, sc_val_i: rho_mix_i  # pylint: disable=g-long-lambda
+          + sc_val_i * self._rho_sc[sc_name],  # pylint: disable=cell-var-from-loop
+          rho_mix,
+          sc_val,
+      )
 
     return rho_mix

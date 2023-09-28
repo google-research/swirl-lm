@@ -41,7 +41,7 @@ def outflow_boundary_condition() -> StatesUpdateFn:
   the variable density solver where `rho` is in `states`.
 
   Returns:
-    A function that updates the Dirichelt boundary condition for required
+    A function that updates the Dirichlet boundary condition for required
     variables in dimension 0 on face 1, i.e. all `additional_states` with key
     regular expression 'bc_(\w+)_0_1', with `\w+` being the variable name.
   """

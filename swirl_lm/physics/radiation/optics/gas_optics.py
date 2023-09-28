@@ -197,7 +197,7 @@ def _compute_relative_abundance_interpolant(
 def compute_major_optical_depth(
     lookup_gas_optics: AbstractLookupGasOptics,
     vmr: LookupVolumeMixingRatio,
-    mols: tf.Tensor,
+    molecules: tf.Tensor,
     temperature: tf.Tensor,
     p: tf.Tensor,
     igpt: int,
@@ -210,8 +210,8 @@ def compute_major_optical_depth(
       index for all major gas species.
     vmr: A `LookupVolumeMixingRatio` object containing the volume mixing ratio
       of all relevant atmospheric gases.
-    mols: The number of molecules in an atmospheric grid cell per area
-      [mols/m^2]
+    molecules: The number of molecules in an atmospheric grid cell per area
+      [molecules/m^2]
     temperature: A `tf.Tensor` containing temperature values (in K).
     p: A `tf.Tensor` containing pressure values (in Pa).
     igpt: The absorption variable index (g-point) for which the optical depth
@@ -260,30 +260,30 @@ def compute_major_optical_depth(
       ('p', lambda _: p_interp),
       ('m', mix_interpolant_fn),
   ))
-  return mols * optics_utils.interpolate(
+  return molecules * optics_utils.interpolate(
       lookup_gas_optics.kmajor[..., igpt], interpolant_fns=interpolant_fn_dict
   )
 
 
-def compute_minor_optical_depth(
+def _compute_minor_optical_depth(
     lookup: AbstractLookupGasOptics,
     vmr_lib: LookupVolumeMixingRatio,
-    mols: tf.Tensor,
+    molecules: tf.Tensor,
     temperature: tf.Tensor,
     p: tf.Tensor,
     igpt: int,
     is_lower_atmosphere: bool,
     vmr_fields: Optional[Dict[int, tf.Tensor]] = None,
 ) -> tf.Tensor:
-  """Computes the optical depth contributions from minor gases.
+  """Computes the optical depth from minor gases given atmosphere region.
 
   Args:
     lookup: An `AbstractLookupGasOptics` object containing a RRTMGP index for
       all relevant gases and a lookup table for minor absorption coefficients.
     vmr_lib: A `LookupVolumeMixingRatio` object containing the volume mixing
       ratio of all relevant atmospheric gases.
-    mols: The number of molecules in an atmospheric grid cell per area
-      [mols/m^2]
+    molecules: The number of molecules in an atmospheric grid cell per area
+      [molecules/m^2]
     temperature: The temperature of the flow field [K].
     p: The pressure field (in Pa).
     igpt: The absorption rank (g-point) index for which the optical depth
@@ -377,7 +377,7 @@ def compute_minor_optical_depth(
     # Map the minor contributor to the RRTMGP gas index.
     gas_idx = idx_gases_minor[i] * tf.ones_like(tropo_idx)
     vmr_minor = get_vmr(lookup, vmr_lib, gas_idx, vmr_fields)
-    scaling = vmr_minor * mols
+    scaling = vmr_minor * molecules
     if minor_scales_with_density[i] == 1:
       scaling *= _PASCAL_TO_HPASCAL_FACTOR * p / temperature
       if i in idx_scaling_gas:
@@ -405,10 +405,63 @@ def compute_minor_optical_depth(
   return tau_minor
 
 
+def compute_minor_optical_depth(
+    lookup: AbstractLookupGasOptics,
+    vmr_lib: LookupVolumeMixingRatio,
+    molecules: tf.Tensor,
+    temperature: tf.Tensor,
+    p: tf.Tensor,
+    igpt: int,
+    vmr_fields: Optional[Dict[int, tf.Tensor]] = None,
+) -> tf.Tensor:
+  """Computes the optical depth contributions from minor gases.
+
+  Args:
+    lookup: An instance of `AbstractLookupGasOptics` containing a RRTMGP index
+      for all relevant gases and a lookup table for minor absorption
+      coefficients.
+    vmr_lib: A `LookupVolumeMixingRatio` object containing the volume mixing
+      ratio of all relevant atmospheric gases.
+    molecules: The number of molecules in an atmospheric grid cell per area
+      [molecules/m^2]
+    temperature: The temperature of the flow field [K].
+    p: The pressure field (in Pa).
+    igpt: The absorption rank (g-point) index for which the optical depth
+      will be computed.
+    vmr_fields: An optional dictionary containing precomputed volume mixing
+      ratio fields, keyed by gas index, that will overwrite the global means for
+      those gases that have a vmr field already available.
+
+  Returns:
+    A `tf.Tensor` with the pointwise optical depth contributions from the minor
+    species.
+  """
+  # The troposphere index is 1 for levels above the troposphere limit and 0
+  # otherwise.
+  def minor_tau(is_lower_atmos: bool) -> tf.Tensor:
+    """Computes the minor optical depth assuming an atmosphere level."""
+    return _compute_minor_optical_depth(
+        lookup,
+        vmr_lib,
+        molecules,
+        temperature,
+        p,
+        igpt,
+        is_lower_atmos,
+        vmr_fields,
+    )
+
+  return tf.where(
+      condition=tf.greater(p, lookup.p_ref_tropo),
+      x=minor_tau(is_lower_atmos=True),
+      y=minor_tau(is_lower_atmos=False),
+  )
+
+
 def compute_rayleigh_optical_depth(
     lkp: LookupGasOpticsShortwave,
     vmr_lib: LookupVolumeMixingRatio,
-    mols: tf.Tensor,
+    molecules: tf.Tensor,
     temperature: tf.Tensor,
     p: tf.Tensor,
     igpt: int,
@@ -417,13 +470,13 @@ def compute_rayleigh_optical_depth(
   """Computes the optical depth contribution from Rayleigh scattering.
 
   Args:
-    lkp: An `AbstractLookupGasOptics` object containing a RRTMGP
-      index for all relevant gases and a lookup table for Rayleigh absorption
+    lkp: An instance of `AbstractLookupGasOptics` containing a RRTMGP index
+      for all relevant gases and a lookup table for Rayleigh absorption
       coefficients.
     vmr_lib: A `LookupVolumeMixingRatio` object containing the volume mixing
       ratio of all relevant atmospheric gases.
-    mols: The number of molecules in an atmospheric grid cell per area
-      [mols/m^2].
+    molecules: The number of molecules in an atmospheric grid cell per area
+      [molecules/m^2].
     temperature: Temperature variable (in K).
     p: The pressure field (in Pa).
     igpt: The absorption variable index (g-point) for which the optical depth
@@ -471,7 +524,7 @@ def compute_rayleigh_optical_depth(
 
   return (
       factor
-      * mols
+      * molecules
       * tf.where(
           condition=tf.equal(tropo_idx, 1),
           x=rayl_tau_upper,
@@ -531,7 +584,7 @@ def compute_planck_sources(
   ibnd = lookup.g_point_to_bnd[igpt]
 
   def mix_interpolant_fn(dep: Dict[Text, IndexAndWeight]) -> Interpolant:
-    """Relative abundance interpolant function that depends on `t` and `p`."""
+    """Relative abundance interpolant function that depends on `temperature`."""
     return _compute_relative_abundance_interpolant(
         lookup,
         vmr_lib,

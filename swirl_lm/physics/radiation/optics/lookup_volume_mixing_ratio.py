@@ -116,7 +116,7 @@ class LookupVolumeMixingRatio(loader.DataLoaderBase):
       site_coord: int,
       exp_label: int,
   ) -> 'LookupVolumeMixingRatio':
-    """Instantiates a `LookupVolumeMixingRatio` object from zipped netCDF file.
+    """Instantiates a `LookupVolumeMixingRatio` object from netCDF file.
 
     The compressed file should be netCDF parsable and contain the RRTMGP
     atmospheric state table with gas concentrations as well as data about the

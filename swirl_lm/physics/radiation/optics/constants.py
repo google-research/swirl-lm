@@ -19,3 +19,5 @@ DRY_AIR_KEY = 'dry_air'
 # Volume mixing ratio (VMR) of dry air is always 1 by definition, as VMR is
 # normalized by the number of moles of dry air.
 DRY_AIR_VMR = 1.0
+# Stefan-Boltzmann constant.
+STEFAN_BOLTZMANN = 5.67e-8

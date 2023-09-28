@@ -82,8 +82,10 @@ class AbstractLookupGasOptics(loader.DataLoaderBase, metaclass=abc.ABCMeta):
   t_ref_absrb: tf.Tensor
   # Reference pressure.
   p_ref_absrb: tf.Tensor
-  # Minimum pressure supported by RRTMGP lookup tables.
+  # Minimum pressure supported by RRTM lookup tables.
   p_ref_min: tf.Tensor
+  # Minimum temperature supported by RRTM lookup tables.
+  temperature_ref_min: tf.Tensor
   # Δt for reference temperature values (Δt is constant).
   dtemp: tf.Tensor
   # Δ for log of reference pressure values (Δlog(p) is constant).
@@ -257,6 +259,7 @@ class AbstractLookupGasOptics(loader.DataLoaderBase, metaclass=abc.ABCMeta):
     p_ref = tables['press_ref']
     t_ref = tables['temp_ref']
     p_ref_min = tf.math.reduce_min(p_ref)
+    temperature_ref_min = tf.math.reduce_min(t_ref)
     dtemp = t_ref[1] - t_ref[0]
     dln_p = tf.math.log(p_ref[0]) - tf.math.log(p_ref[1])
     gas_names_ds = ds['gas_names'][:].data
@@ -359,6 +362,7 @@ class AbstractLookupGasOptics(loader.DataLoaderBase, metaclass=abc.ABCMeta):
         p_ref=p_ref,
         t_ref=t_ref,
         p_ref_min=p_ref_min,
+        temperature_ref_min=temperature_ref_min,
         dtemp=dtemp,
         dln_p=dln_p,
         vmr_ref=tables['vmr_ref'],

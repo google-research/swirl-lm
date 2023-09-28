@@ -111,7 +111,8 @@ def central2(kernel_op: get_kernel_fn.ApplyKernelOp, f: FlowFieldVal,
       lambda f: kernel_op.apply_kernel_op_z(f, 'kDz', 'kDzsh'),
   ]
 
-  return [d_f / (2.0 * grid_spacing) for d_f in grad_fn[dim](f)]
+  return tf.nest.map_structure(lambda d_f: d_f / (2.0 * grid_spacing),
+                               grad_fn[dim](f))
 
 
 def central4(kernel_op: get_kernel_fn.ApplyKernelOp, f: FlowFieldVal,
@@ -238,13 +239,16 @@ def face_interpolation(
   interp = kernel_fn(state, *interp_type)
   correction = kernel_fn(pressure, *correction_type)
 
-  state_face = [0.5 * interp_i for interp_i in interp]
+  state_face = tf.nest.map_structure(lambda interp_i: 0.5 * interp_i, interp)
 
   if apply_correction:
-    state_face = [
-        state_face_i - dt / 4.0 / dx * correction_i
-        for state_face_i, correction_i in zip(state_face, correction)
-    ]
+    state_face = tf.nest.map_structure(
+        lambda state_face_i, correction_i: (  # pylint: disable=g-long-lambda
+            state_face_i - dt / 4.0 / dx * correction_i
+        ),
+        state_face,
+        correction,
+    )
 
     if src is not None:
       kernel_op.add_kernel(rc_weights)
@@ -450,6 +454,105 @@ def flux_lf(
   return tf.nest.map_structure(tf.math.add, f_neg, f_pos)
 
 
+def flux_roe(
+    kernel_op: get_kernel_fn.ApplyKernelOp,
+    replica_id: tf.Tensor,
+    replicas: np.ndarray,
+    state: FlowFieldVal,
+    rhou: FlowFieldVal,
+    pressure: FlowFieldVal,
+    interp_fn: Callable[[FlowFieldVal], Tuple[FlowFieldVal, FlowFieldVal]],
+    dx: float,
+    dt: float,
+    dim: int,
+    bc_types: Tuple[boundary_condition_utils.BoundaryType,
+                    boundary_condition_utils.BoundaryType] = (
+                        boundary_condition_utils.BoundaryType.UNKNOWN,
+                        boundary_condition_utils.BoundaryType.UNKNOWN),
+    varname: Optional[Text] = None,
+    halo_width: Optional[int] = None,
+    src: Optional[FlowFieldVal] = None,
+    apply_correction: bool = True,
+) -> FlowFieldVal:
+  """Computes the Roe flux [1].
+
+  Reference:
+  [1] Shu, C.-W. (1998). Essentially non-oscillatory and weighted essentially
+      non-oscillatory schemes for hyperbolic conservation laws. In Lecture Notes
+      in Mathematics (pp. 325–432). https://doi.org/10.1007/bfb0096355
+
+  Args:
+    kernel_op: An object holding a library of kernel operations.
+    replica_id: The index of the current TPU replica.
+    replicas: A numpy array that maps grid coordinates to replica id numbers.
+    state: A list of `tf.Tensor` representing a 3D volume of velocity (for
+      constant density) and momentum (for variable density).
+    rhou: The momentum in the direction of the flux.
+    pressure: A list of `tf.Tensor` representing a 3D volume of pressure.
+    interp_fn: A function that interpolates `state` from nodes to faces. The
+      first returned value is computed from the left stencil, and the second one
+      is computed from the right stencil.
+    dx: The grid spacing in dimension`dim`.
+    dt: The time step size that is used in the simulation.
+    dim: The dimension that is normal to the face where the interpolation is
+      performed.
+    bc_types: The type of the boundary conditions on the 2 ends along `dim`.
+    varname: The name of the variable.
+    halo_width: The number of points in the halo layer in the direction normal
+      to a boundary plane.
+    src: The source term needs to be included for the face-flux correction.
+    apply_correction: An option for whether the Rhie-Chow correction is applied
+      when interpolating velocity at faces.
+
+  Returns:
+    The Roe numerical flux.
+
+  Raises:
+    NotImplementedError: If Rhie-Chow correction is enabled.
+  """
+  # Explicitly deleting unused arguments here for the support of Rhie-Chow
+  # correction in the future.
+  del (
+      replica_id,
+      replicas,
+      pressure,
+      dx,
+      dt,
+      bc_types,
+      varname,
+      halo_width,
+      src,
+  )
+
+  if apply_correction:
+    raise NotImplementedError(
+        'The Rhie-Chow correction is not implemented with the Roe flux.'
+    )
+
+  if dim == 0:
+    diff_fn = lambda f: kernel_op.apply_kernel_op_x(f, 'kdx')
+  elif dim == 1:
+    diff_fn = lambda f: kernel_op.apply_kernel_op_y(f, 'kdy')
+  else:  # dim == 2
+    diff_fn = lambda f: kernel_op.apply_kernel_op_z(f, 'kdz', 'kdzsh')
+
+  flux = tf.nest.map_structure(tf.math.multiply, rhou, state)
+
+  # In case of `state` being a constant across a cell face, we set the Roe speed
+  # to 0. In this case the flux will be computed with the left stencil [1].
+  roe_speed = tf.nest.map_structure(
+      tf.math.divide_no_nan, diff_fn(flux), diff_fn(state)
+  )
+
+  f_neg, f_pos = interp_fn(flux)
+
+  def roe_flux_fn(a: tf.Tensor, f_n: tf.Tensor, f_p: tf.Tensor) -> tf.Tensor:
+    """Computes the Roe flux."""
+    return tf.where(tf.math.greater_equal(a, 0.0), f_n, f_p)
+
+  return tf.nest.map_structure(roe_flux_fn, roe_speed, f_neg, f_pos)
+
+
 def face_interp_fn_quick(
     dim: int,
 ) -> Callable[[FlowFieldVal], Tuple[FlowFieldVal, FlowFieldVal]]:
@@ -593,7 +696,7 @@ def convection_from_flux(
     src: Optional[FlowFieldVal] = None,
     apply_correction: bool = True,
 ) -> FlowFieldVal:
-  """Computes the convection term for convservative variables.
+  """Computes the convection term for conservative variables.
 
   Args:
     kernel_op: An object holding a library of kernel operations.
@@ -646,12 +749,15 @@ def convection_from_flux(
     flux_fn = flux_lf
   elif flux_scheme == numerics_pb2.NUMERICAL_FLUX_UPWINDING:
     flux_fn = flux_upwinding
+  elif flux_scheme == numerics_pb2.NUMERICAL_FLUX_ROE:
+    flux_fn = flux_roe
   else:
     raise NotImplementedError(
         'Unknown numerical flux'
         f' {NumericalFlux.Name(flux_scheme)}. Available options'
         ' are:'
         f' {NumericalFlux.Name(numerics_pb2.NUMERICAL_FLUX_UPWINDING)},'
+        f' {NumericalFlux.Name(numerics_pb2.NUMERICAL_FLUX_ROE)},'
         f' {NumericalFlux.Name(numerics_pb2.NUMERICAL_FLUX_LF)}.'
     )
 
@@ -692,7 +798,8 @@ def convection_from_flux(
       apply_correction,
   )
 
-  return [d_flux / dx for d_flux in kernel_fn(flux, *diff_op_type)]
+  return tf.nest.map_structure(lambda d_flux: d_flux / dx,
+                               kernel_fn(flux, *diff_op_type))
 
 
 def convection_upwinding_1(
@@ -756,9 +863,10 @@ def convection_upwinding_1(
                                  halo_width, src)
   sc_face = interp_fn[dim](state)
 
-  rho_u_f = [rhou_i * state_i for rhou_i, state_i in zip(rhou_face, sc_face)]
+  rho_u_f = tf.nest.map_structure(tf.multiply, rhou_face, sc_face)
 
-  return [d_rho_u_f / dx for d_rho_u_f in grad_fn[dim](rho_u_f)]
+  return tf.nest.map_structure(lambda d_rho_u_f: d_rho_u_f / dx,
+                               grad_fn[dim](rho_u_f))
 
 
 def convection_central_2(

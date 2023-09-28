@@ -104,7 +104,7 @@ def _get_full_grid(n: Optional[int], l: float) -> tf.Tensor:
   return tf.linspace(0.0, l, n_effective)
 
 
-def _get_pysical_full_grid_size(
+def _get_physical_full_grid_size(
     params: grid_parametrization_pb2.GridParametrization
 ) -> grid_parametrization_pb2.CoordinateInt:
   # Some simulations have a physical grid size mandated externally, and add
@@ -143,7 +143,9 @@ def params_from_flags() -> grid_parametrization_pb2.GridParametrization:
   params.num_output_splits = FLAGS.num_output_splits
   params.num_boundary_points = FLAGS.num_boundary_points
   if not params.HasField('physical_full_grid_size'):
-    params.physical_full_grid_size.CopyFrom(_get_pysical_full_grid_size(params))
+    params.physical_full_grid_size.CopyFrom(
+        _get_physical_full_grid_size(params)
+    )
   return params
 
 
@@ -160,7 +162,9 @@ def params_from_text_proto(
                         grid_parametrization_pb2.GridParametrization()))
   # Re-compute physical_full_grid_size if necessary.
   if not params.HasField('physical_full_grid_size'):
-    params.physical_full_grid_size.CopyFrom(_get_pysical_full_grid_size(params))
+    params.physical_full_grid_size.CopyFrom(
+        _get_physical_full_grid_size(params)
+    )
   return params
 
 

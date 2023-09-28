@@ -17,7 +17,9 @@
 from typing import List, Sequence
 
 from swirl_lm.numerics import numerics_pb2
+from swirl_lm.utility import common_ops
 from swirl_lm.utility import types
+import tensorflow as tf
 
 FlowFieldVal = types.FlowFieldVal
 
@@ -78,7 +80,7 @@ def _rk3(rhs, dt: float, var: Sequence[FlowFieldVal]) -> List[FlowFieldVal]:
   return var_3
 
 
-def _crank_nickolson_explicit_subiteration(
+def _crank_nicolson_explicit_subiteration(
     rhs, dt: float, var_0: Sequence[FlowFieldVal],
     var_n: Sequence[FlowFieldVal]) -> List[FlowFieldVal]:
   """Computes the time integration with the semi-implicit Crank-Nicolson method.
@@ -98,13 +100,10 @@ def _crank_nickolson_explicit_subiteration(
   Returns:
     The variable fields in the next time step.
   """
-
   var_m = []
   for i in range(len(var_0)):
-    var_m.append([
-        0.5 * (var_0_i_j + var_n_i_j)
-        for var_0_i_j, var_n_i_j in zip(var_0[i], var_n[i])
-    ])
+    var_m.append(tf.nest.map_structure(
+        common_ops.average, var_0[i], var_n[i]))
 
   rhs_m = rhs(*var_m)
   if len(var_0) == 1:
@@ -112,10 +111,9 @@ def _crank_nickolson_explicit_subiteration(
 
   var_next = []
   for i in range(len(var_0)):
-    var_next.append([
-        var_0_i_j + dt * rhs_m_i_j
-        for var_0_i_j, rhs_m_i_j in zip(var_0[i], rhs_m[i])
-    ])
+    var_next.append(tf.nest.map_structure(
+        lambda var_0_i_j, rhs_m_i_j: var_0_i_j + dt * rhs_m_i_j,
+        var_0[i], rhs_m[i]))
 
   return var_next
 
@@ -147,7 +145,7 @@ def time_advancement_explicit(
     # field values.
     return _rk3(rhs, dt, var_0)
   if scheme == (TimeIntegrationScheme.TIME_SCHEME_CN_EXPLICIT_ITERATION):
-    return _crank_nickolson_explicit_subiteration(rhs, dt, var_0, var_n)
+    return _crank_nicolson_explicit_subiteration(rhs, dt, var_0, var_n)
   else:
     raise NotImplementedError('Scheme {} is not implemented yet.'.format(
         TimeIntegrationScheme.Name(scheme)))

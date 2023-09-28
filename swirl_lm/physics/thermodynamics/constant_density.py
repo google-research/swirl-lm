@@ -40,7 +40,6 @@ class ConstantDensity(thermodynamics_generic.ThermodynamicModel):
   ) -> FlowFieldVal:
     """Updates the density with the ideal gas law."""
     del additional_states
-    return [
-        self.rho * tf.ones_like(rho_i, dtype=TF_DTYPE)
-        for rho_i in list(states.values())[0]
-    ]
+    return tf.nest.map_structure(
+        lambda x: self.rho * tf.ones_like(x, dtype=TF_DTYPE),
+        list(states.values())[0])

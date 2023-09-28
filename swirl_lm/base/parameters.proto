@@ -204,7 +204,7 @@ message SubGridScaleModel {
 }
 
 // Stores the parameters required by an incompressible Navier-Stokes simulation.
-// Next id: 36
+// Next id: 37
 message SwirlLMParameters {
   // Defines the type of the simulation procedure to be used in the solver.
   enum SolverProcedureType {
@@ -358,4 +358,7 @@ message SwirlLMParameters {
   optional MonitorSpec monitor_spec = 28;
   // Specification of probes that retrieves values at user specified locations.
   optional Probe probe = 29;
+  // If True, all field variables are 3D tf.Tensor. Otherwise, they are
+  // Sequence[tf.Tensor].
+  optional bool use_3d_tf_tensor = 36 [default = false];
 }

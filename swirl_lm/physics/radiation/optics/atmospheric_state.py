@@ -31,83 +31,121 @@ import dataclasses
 from typing import Any, Dict
 
 import numpy as np
+from swirl_lm.physics.radiation.config import radiative_transfer_pb2
 from swirl_lm.physics.radiation.optics import data_loader_base as loader
 from swirl_lm.physics.radiation.optics import lookup_volume_mixing_ratio as lookup_vmr
 from swirl_lm.utility import types
-
-# Default site corresponding to coordinates 13.5 N, 298.5 E.
-DEFAULT_SITE_COORD = 9
-# Default RFMIP experiment id.
-DEFAULT_RFMIP_EXP_LABEL = 0
 
 
 @dataclasses.dataclass(frozen=True)
 class AtmosphericState(loader.DataLoaderBase):
   """Atmospheric gas concentrations and miscellaneous optical properties."""
-
   # Surface emissivity; the same for all bands.
   sfc_emis: float
   # Surface albedo; the same for all bands.
   sfc_alb: float
   # The solar zenith angle.
   zenith: float
-  # The total solar irradiance.
+  # The total solar irradiance (in W/m²).
   irrad: float
   # Volume mixing ratio lookup for each gas species. Only water vapor and ozone
   # are assumed to be variable. Global means are used for all the other species.
   vmr: lookup_vmr.LookupVolumeMixingRatio
+  # The longwave incident flux at the top of the atmosphere (in W/m²).
+  toa_flux_lw: float = 0.0
 
   @classmethod
   def _load_data(
       cls,
+      params: radiative_transfer_pb2.AtmosphericState,
       tables: types.VariableMap,
-      site_coord: int,
-      exp_label: int,
       vmr_path: str,
   ) -> Dict[str, Any]:
-    """Preprocesses the RRTMGP atmospheric state data.
+    """Preprocesses the atmospheric state data.
 
     Args:
+      params: A `radiative_transfer_pb2.AtmosphericState` proto instance
+        containing RFMIP identifiers and override parameters.
       tables: The extracted data as a dictionary of `tf.Variable`s.
-      site_coord: The site coordinate index, which uniquely identifies a
-        (latitude, longitude, time) triplet.
-      exp_label: The RFMIP experiment label.
-      vmr_path: The full path of the zipped netCDF file containing the
-        atmospheric gas concentrations.
+      vmr_path: The full path of the netCDF file containing the atmospheric gas
+        concentrations.
 
     Returns:
       A dictionary containing dimension information and the preprocessed RRTMGP
       atmospheric state data as `tf.Variable`s.
     """
-    return dict(
-        sfc_emis=tables['surface_emissivity'][site_coord],
-        sfc_alb=tables['surface_albedo'][site_coord],
-        zenith=np.radians(tables['solar_zenith_angle'][site_coord]),
-        irrad=tables['total_solar_irradiance'][site_coord],
+    rfmip_site = params.rfmip_site
+    rfmip_expt_label = params.rfmip_expt_label
+
+    sfc_emis = (
+        params.sfc_emis
+        if params.HasField('sfc_emis')
+        else tables['surface_emissivity'][rfmip_site]
+    )
+    sfc_alb = (
+        params.sfc_alb
+        if params.HasField('sfc_alb')
+        else tables['surface_albedo'][rfmip_site]
+    )
+    zenith = (
+        params.zenith
+        if params.HasField('zenith')
+        else np.radians(tables['solar_zenith_angle'][rfmip_site])
+    )
+    irrad = (
+        params.irrad
+        if params.HasField('irrad')
+        else tables['total_solar_irradiance'][rfmip_site]
+    )
+    kwargs = dict(
+        sfc_emis=sfc_emis,
+        sfc_alb=sfc_alb,
+        zenith=zenith,
+        irrad=irrad,
         vmr=lookup_vmr.LookupVolumeMixingRatio.from_nc_file(
-            vmr_path, site_coord, exp_label
+            vmr_path, rfmip_site, rfmip_expt_label
         ),
     )
+    if params.HasField('toa_flux_lw'):
+      kwargs['toa_flux_lw'] = params.toa_flux_lw
+    return kwargs
+
+  @classmethod
+  def from_proto(
+      cls,
+      params: radiative_transfer_pb2.AtmosphericState,
+  ) -> 'AtmosphericState':
+    """Instantiates an `AtmosphericState` object from a netCDF file.
+
+    Args:
+      params: A `radiative_transfer_pb2.AtmosphericState` proto instance
+        containing RFMIP identifiers, override parameters, and a path to a
+        netCDF file containing gas concentrations for various species.
+
+    Returns:
+      An `AtmosphericState` instance.
+    """
+    _, tables, _ = cls._parse_nc_file(
+        params.atmospheric_state_nc_filepath, exclude_vars=['expt_label']
+    )
+    kwargs = cls._load_data(
+        params, tables, params.atmospheric_state_nc_filepath
+    )
+    return cls(**kwargs)
 
   @classmethod
   def from_nc_file(
       cls,
       path: str,
-      site_coord: int = DEFAULT_SITE_COORD,
-      exp_label: int = DEFAULT_RFMIP_EXP_LABEL,
   ) -> 'AtmosphericState':
-    """Instantiates an `AtmosphericState` object from a zipped netCDF file.
+    """Instantiates an `AtmosphericState` object from a netCDF file.
 
     Args:
-      path: The full path of the zipped netCDF file containing the atmospheric
-        state.
-      site_coord: The site coordinate index, which uniquely identifies a
-        (latitude, longitude, time) triplet.
-      exp_label: The RFMIP experiment label.
+      path: The full path of the netCDF file containing the atmospheric state.
 
     Returns:
-      An `AtmosphericState` object.
+      An `AtmosphericState` instance.
     """
-    _, tables, _ = cls._parse_nc_file(path, exclude_vars=['expt_label'])
-    kwargs = cls._load_data(tables, site_coord, exp_label, path)
-    return cls(**kwargs)
+    params = radiative_transfer_pb2.AtmosphericState()
+    params.atmospheric_state_nc_filepath = path
+    return cls.from_proto(params)

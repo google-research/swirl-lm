@@ -218,6 +218,7 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
 
     self.use_sgs = config.use_sgs
     self.sgs_model = config.sgs_model
+    self.use_3d_tf_tensor = config.use_3d_tf_tensor
 
     # Initialize the direction vector of gravitational force. Set to 0 if
     # gravity is not defined in the simulation.

@@ -96,40 +96,31 @@ def shear_stress(
   du_33 = du_dx[2][2]
 
   s11 = du_11
-  s12 = [0.5 * (du_12_i + du_21_i) for du_12_i, du_21_i in zip(du_12, du_21)]
-  s13 = [0.5 * (du_13_i + du_31_i) for du_13_i, du_31_i in zip(du_13, du_31)]
+  s12 = tf.nest.map_structure(common_ops.average, du_12, du_21)
+  s13 = tf.nest.map_structure(common_ops.average, du_13, du_31)
   s21 = s12
   s22 = du_22
-  s23 = [0.5 * (du_23_i + du_32_i) for du_23_i, du_32_i in zip(du_23, du_32)]
+  s23 = tf.nest.map_structure(common_ops.average, du_23, du_32)
   s31 = s13
   s32 = s23
   s33 = du_33
 
-  du_kk = [
-      du_11_i + du_22_i + du_33_i
-      for du_11_i, du_22_i, du_33_i in zip(du_11, du_22, du_33)
-  ]
+  du_kk = tf.nest.map_structure(lambda x, y, z: x + y + z, du_11, du_22, du_33)
 
-  tau11 = [
-      2.0 * mu_i * (s11_i - 1.0 / 3.0 * du_kk_i)
-      for mu_i, s11_i, du_kk_i in zip(mu, s11, du_kk)
-  ]
-  tau12 = [2.0 * mu_i * s12_i for mu_i, s12_i in zip(mu, s12)]
-  tau13 = [2.0 * mu_i * s13_i for mu_i, s13_i in zip(mu, s13)]
-  tau21 = [2.0 * mu_i * s21_i for mu_i, s21_i in zip(mu, s21)]
-  tau22 = [
-      2.0 * mu_i * (s22_i - 1.0 / 3.0 * du_kk_i)
-      for mu_i, s22_i, du_kk_i in zip(mu, s22, du_kk)
-  ]
-  tau23 = [2.0 * mu_i * s23_i for mu_i, s23_i in zip(mu, s23)]
-  tau31 = [2.0 * mu_i * s31_i for mu_i, s31_i in zip(mu, s31)]
-  tau32 = [2.0 * mu_i * s32_i for mu_i, s32_i in zip(mu, s32)]
-  tau33 = [
-      2.0 * mu_i * (s33_i - 1.0 / 3.0 * du_kk_i)
-      for mu_i, s33_i, du_kk_i in zip(mu, s33, du_kk)
-  ]
+  tau_ij = lambda mu, s_ij: 2 * mu * s_ij
+  tau_ii = lambda mu, s_ii, div_u: 2 * mu * (s_ii - div_u / 3)
 
-  tau_ij = {
+  tau11 = tf.nest.map_structure(tau_ii, mu, s11, du_kk)
+  tau12 = tf.nest.map_structure(tau_ij, mu, s12)
+  tau13 = tf.nest.map_structure(tau_ij, mu, s13)
+  tau21 = tf.nest.map_structure(tau_ij, mu, s21)
+  tau22 = tf.nest.map_structure(tau_ii, mu, s22, du_kk)
+  tau23 = tf.nest.map_structure(tau_ij, mu, s23)
+  tau31 = tf.nest.map_structure(tau_ij, mu, s31)
+  tau32 = tf.nest.map_structure(tau_ij, mu, s32)
+  tau33 = tf.nest.map_structure(tau_ii, mu, s33, du_kk)
+
+  tau = {
       'xx': tau11,
       'xy': tau12,
       'xz': tau13,
@@ -143,9 +134,9 @@ def shear_stress(
 
   if shear_bc_update_fn:
     for key, fn in shear_bc_update_fn.items():
-      tau_ij.update({key: fn(tau_ij[key])})
+      tau.update({key: fn(tau[key])})
 
-  return tau_ij
+  return tau
 
 
 def shear_flux(params: parameters_lib.SwirlLMParameters) -> ...:

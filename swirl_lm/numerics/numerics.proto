@@ -26,6 +26,8 @@ enum NumericalFlux {
   NUMERICAL_FLUX_UPWINDING = 1;
   // The Lax-Friedrich flux.
   NUMERICAL_FLUX_LF = 2;
+  // The Roe flux.
+  NUMERICAL_FLUX_ROE = 3;
 }
 
 // Defines the types of convection schemes.

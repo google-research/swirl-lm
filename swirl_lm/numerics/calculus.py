@@ -33,7 +33,8 @@ def _grad_impl(kernel_op: get_kernel_fn.ApplyKernelOp, state: FlowFieldVal,
   else:  # dim == 2
     d_state = kernel_op.apply_kernel_op_z(state, 'kDz', 'kDzsh')
 
-  return [d_state_i / (2.0 * grid_spacing) for d_state_i in d_state]
+  return tf.nest.map_structure(
+      lambda d_state_i: d_state_i / (2.0 * grid_spacing), d_state)
 
 
 def grad(

@@ -228,8 +228,6 @@ def tensor_scatter_1d_update_global(
       false_fn=lambda: tf.nest.map_structure(tf.identity, tensor))
 
 
-# TODO(b/140431015): Clean up upsream callsites that passing down `None` as
-# dtype down.
 def tf_cast(tensor: FlowFieldVal, dtype) -> FlowFieldVal:
   """Casts a sequence of tensors to desired dtype."""
   if dtype is None:
@@ -442,7 +440,7 @@ def apply_op_x(
     mulop: tf.Operation,
 ) -> FlowFieldVal:
   """Apply op in x."""
-  # Handles the case of a signel 3D tf.Tensor.
+  # Handles the case of a single 3D tf.Tensor.
   if isinstance(tile_list, tf.Tensor):
     return tf.einsum('lj,ijk->ilk', mulop, tile_list)
 
@@ -1246,7 +1244,7 @@ def integration_in_dim(
       of 2D `tf.Tensor` (x-y slices) or a single 3D `tf.Tensor`. The integration
       includes all nodes. If there are halos, those nodes will also be included
       in the integration result. Note if it is a list of 2D `tf.Tensor`, the
-      length of the list is `nz` and each silce has the shape [nx, ny]; if it is
+      length of the list is `nz` and each slice has the shape [nx, ny]; if it is
       a single 3D `tf.Tensor`, the shape is [nz, nx, ny].
     h: The uniform grid spacing in the integration direction.
     dim: The dimension along which the integration is performed. The indices
@@ -1411,7 +1409,7 @@ def get_field_inner(
 ) -> Tuple[FlowFieldVal, FlowFieldVal, FlowFieldVal]:
   """Validates and removes the halos of the input field components.
 
-  All three compoenents can be represented as a list of 2D `tf.Tensor` or a
+  All three components can be represented as a list of 2D `tf.Tensor` or a
   single 3D `tf.Tensor` but they must all be in the same format.
 
   Args:
@@ -1435,7 +1433,7 @@ def get_field_inner(
   Returns:
     A tuple with three components each representing the inner part of a field
     component with the halo region removed. Each component is represented in the
-    same format as they are pased in, either as a list of 2D `tf.Tensor` or a
+    same format as they are passed in, either as a list of 2D `tf.Tensor` or a
     single 3D `tf.Tensor`.
   """
   validate_fields(u, v, w)
@@ -1549,7 +1547,7 @@ def get_face(value: FlowFieldVal,
       start_idx[shifted_dim] = n - index - 1
 
     shape[shifted_dim] = 1
-    return scaling_factor * tf.slice(value, start_idx, shape)
+    return [scaling_factor * tf.slice(value, start_idx, shape)]
 
   # Handles the case of list of 2D tensors.
   nz = len(value)

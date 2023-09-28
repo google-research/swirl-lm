@@ -266,13 +266,15 @@ def _one_cycle(
         kernel_op=kernel_op,
         replica_id=state['replica_id'],
         replicas=logical_replicas,
-        params=params)
-    # Split essential/additional states into lists of 2D Tensors.
+        params=params,
+    )
     keys_to_split = (
         set.union(set(essential_keys), set(additional_keys)) -
         set(helper_var_keys))
-    for key in keys_to_split:
-      state[key] = tf.unstack(state[key])
+    if not params.use_3d_tf_tensor:
+      # Split essential/additional states into lists of 2D Tensors.
+      for key in keys_to_split:
+        state[key] = tf.unstack(state[key])
 
     for cycle_step_id in tf.range(num_steps):
       step_id = init_step_id + cycle_step_id
@@ -342,9 +344,10 @@ def _one_cycle(
       # categories. Just pass them through.
       state = _stateless_update_if_present(state, updated_state)
 
-    # Unsplit the keys that were previously split.
-    for key in keys_to_split:
-      state[key] = tf.stack(state[key])
+    if not params.use_3d_tf_tensor:
+      # Unsplit the keys that were previously split.
+      for key in keys_to_split:
+        state[key] = tf.stack(state[key])
 
     return state
 

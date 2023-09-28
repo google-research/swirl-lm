@@ -91,17 +91,30 @@ def filter_2(
           kernel_op.apply_kernel_op_z, name='kddz', shift='kddzsh'),
   )
 
-  g = [tf.identity(f_i) for f_i in f]
+  g = tf.nest.map_structure(tf.identity, f)
   if stencil == 7:
     for op in filter_ops:
-      g = [g_i + 1.0 / 12.0 * d2_f_i for g_i, d2_f_i in zip(g, op(f))]
+      g = tf.nest.map_structure(
+          lambda g_i, d2_f_i: g_i + 1.0 / 12.0 * d2_f_i, g, op(f))
   elif stencil == 27:
     for op in filter_ops:
-      g = [g_i + 0.25 * d2_g_i for g_i, d2_g_i in zip(g, op(g))]
+      g = tf.nest.map_structure(
+          lambda g_i, d2_g_i: g_i + 0.25 * d2_g_i, g, op(g))
   else:
     raise ValueError('Stencil width {} is not supported. Allowed stencil '
                      'widths are 7 and 27.'.format(stencil))
 
+  # Handle the 3D tensor case.
+  if isinstance(f, tf.Tensor):
+    nz, nx, ny = f.shape  # pytype: disable=attribute-error
+    mask = tf.pad(
+        tf.constant(True, shape=(nz - 2, nx - 2, ny - 2)),
+        paddings=[[1, 1], [1, 1], [1, 1]],
+        mode='CONSTANT',
+        constant_values=False)
+    return tf.where(mask, g, f)
+
+  # Handle the list-of-2D-tensors case.
   nx, ny = f[0].shape
   mask = tf.pad(
       tf.constant(True, shape=(nx - 2, ny - 2)),

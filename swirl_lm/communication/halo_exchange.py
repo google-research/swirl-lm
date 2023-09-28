@@ -455,6 +455,9 @@ def inplace_halo_exchange(
     top_padding: int = 0) -> FlowFieldVal:
   """Performs a N-dimensional halo exchange.
 
+  The case of `z_list` being 3D tensors is handled by unstacking them into
+  3D tensors. `boundary_conditions` should also be in the corresponding format.
+
   Args:
     z_list: A list of length nz of tensors of shape (nx, ny), where nx, ny and
       nz are the number of points along the axes of a (sub)grid.
@@ -507,6 +510,13 @@ def inplace_halo_exchange(
   periodic_dims = periodic_dims or [None] * len(dims)
   boundary_conditions = boundary_conditions or [[None, None]] * len(dims)
 
+  # If the input is a 3D `tf.Tensor`, then unstack it prior to the computations.
+  # Before returning the result we stack it back into the 3D `tf.Tensor` format.
+  is_z_list_3d = False
+  if not isinstance(z_list, Sequence):
+    z_list = tf.unstack(z_list)
+    is_z_list_3d = True
+
   assert len(dims) == len(replica_dims)
   assert len(dims) == len(periodic_dims)
   assert len(dims) == len(boundary_conditions)
@@ -516,6 +526,10 @@ def inplace_halo_exchange(
                                                 periodic_dims,
                                                 boundary_conditions):
       bc_low, bc_high = bc if bc else (None, None)
+      if is_z_list_3d:
+        bc_low = _update_to_2d_list(bc_low, dim, width)
+        bc_high = _update_to_2d_list(bc_high, dim, width)
+
       _validate_boundary_condition(bc_low, z_list, dim, width)
       _validate_boundary_condition(bc_high, z_list, dim, width)
 
@@ -555,6 +569,8 @@ def inplace_halo_exchange(
                                            bool(periodic), bc_low_plane,
                                            bc_high_plane, width, plane,
                                            left_or_top_padding)
+    if is_z_list_3d:
+      z_list = tf.stack(z_list)
 
     return z_list
 
@@ -642,6 +658,31 @@ def _validate_boundary_condition(bc, z_list, dim, width):
                            "float or a list of list of tensor of shape {}. "
                            "Found tensor with shape {}.".format(
                                dim, expected_shape, bc_tensor.shape))
+
+
+def _update_to_2d_list(bc, dim, width):
+  """Converts boundary conditions in 3D tensor format to lists of 2D tensors."""
+  if not bc:
+    return bc
+  bc_type, bc_value = bc
+  if isinstance(bc_value, float):
+    return bc
+
+  if not isinstance(bc_value, abc.Sequence):
+    raise ValueError("The boundary condition must be specified as a float "
+                     "or a list.")
+  if len(bc_value) != width:
+    raise ValueError("If bc is a list it should have length {}. Found "
+                     "length {}.".format(width, len(bc_value)))
+
+  updated_bc_value = []
+  for val in bc_value:
+    assert isinstance(val, tf.Tensor), (
+        "Expected boundary condition value to be a `tf.Tensor`. Got "
+        f"{type(val)}.")
+    updated_bc_value.append(val[0] if dim == 2 else tf.unstack(val))
+
+  return bc_type, updated_bc_value
 
 
 def get_edge_of_3d_field(

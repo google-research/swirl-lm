@@ -28,6 +28,7 @@ from swirl_lm.equations import scalars as scalars_model
 from swirl_lm.equations import velocity as velocity_model
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import thermodynamics_pb2
+from swirl_lm.utility import common_ops
 from swirl_lm.utility import components_debug
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import monitor
@@ -98,7 +99,6 @@ class Simulation:
 
     self.scalars = scalars_model.Scalars(self._kernel_op, self._params,
                                          self._ib, self.dbg)
-
     self.pressure = pressure_model.Pressure(self._kernel_op, self._params,
                                             self.thermodynamics, self.monitor)
 
@@ -168,25 +168,25 @@ class Simulation:
         'rho_thermal':
             self.thermodynamics.update_thermal_density(states_0,
                                                        additional_states),
-        'drho': [tf.zeros_like(rho_i) for rho_i in rho_0],
-        'buoyancy_u': [tf.zeros_like(rho_i) for rho_i in rho_0],
-        'buoyancy_v': [tf.zeros_like(rho_i) for rho_i in rho_0],
-        'buoyancy_w': [tf.zeros_like(rho_i) for rho_i in rho_0],
+        'drho': tf.nest.map_structure(tf.zeros_like, rho_0),
+        'buoyancy_u': tf.nest.map_structure(tf.zeros_like, rho_0),
+        'buoyancy_v': tf.nest.map_structure(tf.zeros_like, rho_0),
+        'buoyancy_w': tf.nest.map_structure(tf.zeros_like, rho_0),
     })
+
     states_0.update(
         self.velocity.update_velocity_halos(replica_id, replicas, states_0,
                                             states_0))
 
     states_0.update({
-        'rho_u': [rho0_i * u0_i for rho0_i, u0_i in zip(rho_0, states_0['u'])],
-        'rho_v': [rho0_i * v0_i for rho0_i, v0_i in zip(rho_0, states_0['v'])],
-        'rho_w': [rho0_i * w0_i for rho0_i, w0_i in zip(rho_0, states_0['w'])],
+        'rho_u': tf.nest.map_structure(tf.multiply, rho_0, states_0['u']),
+        'rho_v': tf.nest.map_structure(tf.multiply, rho_0, states_0['v']),
+        'rho_w': tf.nest.map_structure(tf.multiply, rho_0, states_0['w']),
     })
     for varname in self._params.transport_scalars_names:
       states_0.update({
-          'rho_{}'.format(varname): [
-              rho0_i * sc0_i for rho0_i, sc0_i in zip(rho_0, states_0[varname])
-          ]
+          'rho_{}'.format(varname): tf.nest.map_structure(
+              tf.multiply, rho_0, states_0[varname])
       })
 
     states_0.update(
@@ -251,20 +251,12 @@ class Simulation:
 
     def update_step(i, states_k):
       """Defines a predictor-corrector iteration."""
-      rho_mid = [
-          0.5 * (rho_i + rho0_i)
-          for rho_i, rho0_i in zip(states_k['rho'], states_0['rho'])
-      ]
+      rho_mid = tf.nest.map_structure(
+          common_ops.average, states_k['rho'], states_0['rho'])
       states_k.update({
-          'rho_u': [
-              rho_i * u_i for rho_i, u_i in zip(rho_mid, states_k['u'])
-          ],
-          'rho_v': [
-              rho_i * v_i for rho_i, v_i in zip(rho_mid, states_k['v'])
-          ],
-          'rho_w': [
-              rho_i * w_i for rho_i, w_i in zip(rho_mid, states_k['w'])
-          ],
+          'rho_u': tf.nest.map_structure(tf.multiply, rho_mid, states_k['u']),
+          'rho_v': tf.nest.map_structure(tf.multiply, rho_mid, states_k['v']),
+          'rho_w': tf.nest.map_structure(tf.multiply, rho_mid, states_k['w']),
       })
 
       # Step 2: Update all scalars in conservative form. Boundary conditions are

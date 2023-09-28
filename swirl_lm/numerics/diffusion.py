@@ -125,17 +125,21 @@ def diffusion_scalar(
         lambda f: kernel_op.apply_kernel_op_z(f, 'kdz+', 'kdz+sh'),
     )
 
-    rho_d = [rho_i * d_i for rho_i, d_i in zip(rho, diffusivity)]
+    rho_d = tf.nest.map_structure(tf.multiply, rho, diffusivity)
 
-    rho_d_dim = [[0.5 * rho_d_sum
-                  for rho_d_sum in sum_backward_fn[i](rho_d)]
-                 for i in range(3)]
+    rho_d_dim = [
+        tf.nest.map_structure(
+            lambda rho_d_sum: 0.5 * rho_d_sum, sum_backward_fn[i](rho_d)
+        )
+        for i in range(3)
+    ]
 
     f_diff = [
-        [  # pylint: disable=g-complex-comprehension
-            rho_d_i * d_phi / grid_spacing[i]
-            for rho_d_i, d_phi in zip(rho_d_dim[i], flux_backward_fn[i](phi))
-        ]
+        tf.nest.map_structure(  # pylint: disable=g-complex-comprehension
+            lambda rho_d_i, d_phi: rho_d_i * d_phi / grid_spacing[i],  # pylint: disable=cell-var-from-loop
+            rho_d_dim[i],
+            flux_backward_fn[i](phi),
+        )
         for i in range(3)
     ]
 
@@ -210,12 +214,22 @@ def diffusion_scalar(
           if not isinstance(f_diff, tf.Tensor):
             flux = tf.unstack(flux)
         f_diff[flux_info.dim] = common_ops.tensor_scatter_1d_update_global(
-            replica_id, replicas, f_diff[flux_info.dim], flux_info.dim,
-            core_index, plane_index, flux)
+            replica_id,
+            replicas,
+            f_diff[flux_info.dim],
+            flux_info.dim,
+            core_index,
+            plane_index,
+            flux,
+        )
 
-    return [[
-        d_f_diff / grid_spacing[i] for d_f_diff in grad_forward_fn[i](f_diff[i])
-    ] for i in range(3)]
+    return [
+        tf.nest.map_structure(  # pylint: disable=g-complex-comprehension
+            lambda d_f_diff: d_f_diff / grid_spacing[i],  # pylint: disable=cell-var-from-loop
+            grad_forward_fn[i](f_diff[i]),
+        )
+        for i in range(3)
+    ]
 
   return diffusion_fn
 
@@ -438,7 +452,8 @@ def diffusion_momentum(
       """Computes the diffusion term for `key` in direction `dim`."""
       shear = tau[shear_key[key][dim]]
       h = grid_spacing[dim]
-      return [d_flux / (grad_width * h) for d_flux in diff_op[dim](shear)]
+      return tf.nest.map_structure(lambda d_flux: d_flux / (grad_width * h),
+                                   diff_op[dim](shear))
 
     diff = {
         key: [diffusion_fn(key, i) for i in range(3)

@@ -103,24 +103,24 @@ def _einsum_ij(
 
 
 def _strain_rate_magnitude(
-    strain_rate: Sequence[Sequence[FlowFieldVal]]) -> FlowFieldVal:
+    strain_rate: Sequence[Sequence[FlowFieldVal]],
+) -> FlowFieldVal:
   """Computes the magnitude of the strain rate tensor."""
-  strain_rate_prod = [
-      tf.zeros_like(s_i) for s_i in strain_rate[0][0]
-  ]
+  strain_rate_prod = tf.nest.map_structure(tf.zeros_like, strain_rate[0][0])
 
   for i in range(len(strain_rate)):
     for j in range(3):
-      strain_rate_prod = [
-          s_l + 2.0 * tf.square(strain_rate_ij)
-          for s_l, strain_rate_ij in zip(strain_rate_prod, strain_rate[i][j])
-      ]
+      strain_rate_prod = tf.nest.map_structure(
+          lambda s_l, strain_rate_ij: s_l + 2.0 * tf.square(strain_rate_ij),
+          strain_rate_prod,
+          strain_rate[i][j],
+      )
 
-  return [tf.math.sqrt(s_l) for s_l in strain_rate_prod]
+  return tf.nest.map_structure(tf.math.sqrt, strain_rate_prod)
 
 
 def _strain_rate_tensor(
-    du_dx: Sequence[Sequence[FlowFieldVal]]
+    du_dx: Sequence[Sequence[FlowFieldVal]],
 ) -> Sequence[Sequence[FlowFieldVal]]:
   """Computes the strain rate tensor based on velocity gradients.
 
@@ -133,21 +133,27 @@ def _strain_rate_tensor(
   Returns:
     The strain rate tensor.
   """
-  sij = [[common_ops.average(du_dx[i][j], du_dx[j][i])
-          for j in range(3)]
-         for i in range(3)]
-  div = [
-      du_11 + du_22 + du_33
-      for du_11, du_22, du_33 in zip(du_dx[0][0], du_dx[1][1], du_dx[2][2])
+  sij = [
+      [common_ops.average(du_dx[i][j], du_dx[j][i]) for j in range(3)]
+      for i in range(3)
   ]
+  div = tf.nest.map_structure(
+      lambda du_11, du_22, du_33: du_11 + du_22 + du_33,
+      du_dx[0][0],
+      du_dx[1][1],
+      du_dx[2][2],
+  )
 
   def remove_divergence(value: FlowFieldVal) -> FlowFieldVal:
     """Remove 1/3 of the divergence from `value`."""
-    return [value_i - div_i / 3.0 for value_i, div_i in zip(value, div)]
+    return tf.nest.map_structure(
+        lambda value_i, div_i: value_i - div_i / 3.0, value, div
+    )
 
-  return [[
-      sij[i][j] if i != j else remove_divergence(sij[i][j]) for j in range(3)
-  ] for i in range(3)]
+  return [
+      [sij[i][j] if i != j else remove_divergence(sij[i][j]) for j in range(3)]
+      for i in range(3)
+  ]
 
 
 def _germano_averaging(
@@ -365,10 +371,10 @@ class SgsModel(object):
       if additional_states is not None and 'c_s' in additional_states.keys():
         c_s = additional_states['c_s']
       else:
-        c_s = [
-            self._params.smagorinsky.c_s * tf.ones_like(var, dtype=var.dtype)
-            for var in field_vars[0]
-        ]
+        c_s = tf.nest.map_structure(
+            lambda var: self._params.smagorinsky.c_s * tf.ones_like(var),
+            field_vars[0],
+        )
       nu_t = self.smagorinsky(field_vars, self._delta, c_s)
     elif self._params.WhichOneof('sgs_model_type') == 'dynamic_smagorinsky':
       if replicas is None:
@@ -431,11 +437,11 @@ class SgsModel(object):
     Returns:
       The turbulent viscosity.
     """
-    if not c_s_in:
-      c_s = [
-          _CS_CLASSICAL * tf.ones_like(var, dtype=var.dtype)
-          for var in field_vars[0]
-      ]
+    if c_s_in is None:
+      c_s = tf.nest.map_structure(
+          lambda var: _CS_CLASSICAL * tf.ones_like(var),
+          field_vars[0],
+      )
     else:
       c_s = c_s_in
 
@@ -452,12 +458,13 @@ class SgsModel(object):
 
     strain_rate_magnitude = _strain_rate_magnitude(s_ij)
 
-    delta_square = np.sum(np.array(delta)**2)
+    delta_square = np.sum(np.array(delta) ** 2)
 
-    return [
-        c_s_i**2 * delta_square * s_l
-        for c_s_i, s_l in zip(c_s, strain_rate_magnitude)
-    ]
+    return tf.nest.map_structure(
+        lambda c_s_i, s_l: c_s_i**2 * delta_square * s_l,
+        c_s,
+        strain_rate_magnitude,
+    )
 
   def dynamic_smagorinsky(
       self,

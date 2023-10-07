@@ -25,6 +25,7 @@ from swirl_lm.physics.radiation.optics import lookup_gas_optics_longwave
 from swirl_lm.physics.radiation.optics import lookup_gas_optics_shortwave
 from swirl_lm.physics.radiation.optics import lookup_volume_mixing_ratio
 from swirl_lm.physics.radiation.optics import optics_base
+from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import types
 import tensorflow as tf
@@ -274,6 +275,7 @@ class RRTMOptics(optics_base.OpticsScheme):
       temperature: FlowFieldVal,
       igpt: int,
       vmr_fields: Optional[Dict[int, FlowFieldVal]] = None,
+      sfc_temperature: Optional[FlowFieldVal] = None,
   ) -> FlowFieldMap:
     """Computes the monochromatic Planck sources given the atmospheric state.
 
@@ -289,48 +291,91 @@ class RRTMOptics(optics_base.OpticsScheme):
       igpt: The spectral interval index, or g-point.
       vmr_fields: An optional dictionary containing precomputed volume mixing
         ratio fields, keyed by gas index, that will overwrite the global means.
+      sfc_temperature: The optional surface temperature [K] represented as
+        either a 3D `tf.Tensor` or as a list of 2D `tf.Tensor`s but having a
+        single vertical dimension.
 
     Returns:
       A dictionary containing the Planck source at the cell center
-      (`planck_src`), the top cell boundary (`planck_src_top`), and the bottom
-      cell boundary (`planck_src_bottom`).
+      (`planck_src`), the top cell boundary (`planck_src_top`), the bottom cell
+      boundary (`planck_src_bottom`) and, if a `sfc_temperature` argument was
+      provided, the surface cell boundary (`planck_src_sfc`). Note that the
+      surface source will only be valid for the replicas in the first
+      computational layer, as the local temperature field is used to compute it.
     """
     temperature_bottom, temperature_top = self._reconstruct_face_values(
         replica_id, replicas, temperature
     )
 
-    def planck_src_fn(
+    def planck_fraction_fn(
         pressure: tf.Tensor,
         temperature: tf.Tensor,
-        temperature_top: tf.Tensor,
-        temperature_bottom: tf.Tensor,
         vmr_fields: Optional[Dict[int, tf.Tensor]] = None,
     ):
-      return gas_optics.compute_planck_sources(
+      """Precomputes Planck fraction that is used for all Planck sources."""
+      return gas_optics.compute_planck_fraction(
           self.gas_optics_lw,
           self.vmr_lib,
           pressure,
           temperature,
-          temperature_top,
-          temperature_bottom,
           igpt,
           vmr_fields,
       )
 
-    planck_srcs = self._map_fn(
-        planck_src_fn,
+    planck_fraction = self._map_fn(
+        planck_fraction_fn,
         pressure,
         temperature,
-        temperature_top,
-        temperature_bottom,
         vmr_fields,
     )
 
-    # Extract nested dictionaries from planck_srcs.
-    if isinstance(pressure, tf.Tensor):
-      return dict(planck_srcs)
-    else:
-      return {key: [d[key] for d in planck_srcs] for key in planck_srcs[0]}
+    def planck_src_fn(
+        planck_fraction: tf.Tensor,
+        temperature: tf.Tensor,
+    ):
+      """Computes Planck src for `temperature` scaled by `planck_fraction`."""
+      return gas_optics.compute_planck_sources(
+          self.gas_optics_lw,
+          planck_fraction,
+          temperature,
+          igpt,
+      )
+    temperature_fields = {
+        'planck_src': temperature,
+        'planck_src_top': temperature_top,
+        'planck_src_bottom': temperature_bottom,
+    }
+    planck_srcs = {}
+    for k, temperature in temperature_fields.items():
+      planck_srcs[k] = tf.nest.map_structure(
+          planck_src_fn,
+          planck_fraction,
+          temperature,
+      )
+
+    def slice_bottom(f: FlowFieldVal):
+      """Extracts the first fluid layer for surface calculations."""
+      f1 = common_ops.get_face(f, self._g_dim, face=0, index=self._halos)
+      return f1[0] if isinstance(f, tf.Tensor) or self._g_dim != 2 else f1
+
+    if sfc_temperature is not None:
+      planck_fraction_0 = slice_bottom(planck_fraction)
+      planck_src_sfc = self._map_fn(
+          planck_src_fn,
+          planck_fraction_0,
+          sfc_temperature,
+      )
+      # Only allow the first computational layer of cores to have a nonzero
+      # surface Planck source.
+      core_idx = common_ops.get_core_coordinate(replicas, replica_id)[
+          self._g_dim
+      ]
+      planck_srcs['planck_src_sfc'] = tf.cond(
+          pred=tf.equal(core_idx, 0),
+          true_fn=lambda: planck_src_sfc,
+          false_fn=lambda: tf.nest.map_structure(tf.zeros_like, planck_src_sfc)
+      )
+    return planck_srcs
 
   @property
   def n_gpt_lw(self) -> int:
@@ -453,6 +498,7 @@ class GrayAtmosphereOptics(optics_base.OpticsScheme):
       pressure: FlowFieldVal,
       temperature: FlowFieldVal,
       *args,
+      sfc_temperature: Optional[FlowFieldVal] = None,
   ) -> FlowFieldMap:
     """Computes the Planck sources used in the longwave problem.
 
@@ -467,6 +513,9 @@ class GrayAtmosphereOptics(optics_base.OpticsScheme):
       pressure: The pressure field [Pa].
       temperature: The temperature [K].
       *args: Miscellaneous inherited arguments.
+      sfc_temperature: The optional surface temperature [K] represented as
+        either a 3D `tf.Tensor` or as a list of 2D `tf.Tensor`s but having a
+        single vertical dimension.
 
     Returns:
       A dictionary containing the Planck source at the cell center
@@ -479,14 +528,19 @@ class GrayAtmosphereOptics(optics_base.OpticsScheme):
       return constants.STEFAN_BOLTZMANN * t**4 / np.pi
 
     temperature_bottom, temperature_top = self._reconstruct_face_values(
-        replica_id, replicas, temperature
+        replica_id, replicas, temperature,
     )
 
-    return {
+    planck_srcs = {
         'planck_src': tf.nest.map_structure(src_fn, temperature),
         'planck_src_top': tf.nest.map_structure(src_fn, temperature_top),
         'planck_src_bottom': tf.nest.map_structure(src_fn, temperature_bottom),
     }
+    if sfc_temperature is not None:
+      planck_srcs['planck_src_sfc'] = tf.nest.map_structure(
+          src_fn, sfc_temperature
+      )
+    return planck_srcs
 
   @property
   def n_gpt_lw(self) -> int:

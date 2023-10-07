@@ -533,17 +533,15 @@ def compute_rayleigh_optical_depth(
   )
 
 
-def compute_planck_sources(
+def compute_planck_fraction(
     lookup: LookupGasOpticsLongwave,
     vmr_lib: LookupVolumeMixingRatio,
     p: tf.Tensor,
     temperature: tf.Tensor,
-    temperature_top: tf.Tensor,
-    temperature_bottom: tf.Tensor,
     igpt: int,
     vmr_fields: Optional[Dict[int, tf.Tensor]] = None,
-) -> Dict[Text, tf.Tensor]:
-  """Computes the Planck source for the longwave problem.
+) -> tf.Tensor:
+  """Computes the Planck fraction that will be used to weight the Planck source.
 
   Args:
     lookup: An `LookupGasOpticsLongwave` object containing a RRTMGP index for
@@ -551,11 +549,7 @@ def compute_planck_sources(
     vmr_lib: A `LookupVolumeMixingRatio` object containing the volume mixing
       ratio of all relevant atmospheric gases.
     p: The pressure of the flow field [Pa].
-    temperature: The temperature of the flow field [K].
-    temperature_top: The temperature at the top face of the grid cell [K].
-    temperature_bottom: The temperature at the bottom face of the grid cell [K].
-      Note that if this is being stored in the first layer of the
-      model, then it corresponds to the surface temperature.
+    temperature: The temperature at the grid cell center [K].
     igpt: The absorption rank (g-point) index for which the optical depth will
       be computed.
     vmr_fields: An optional dictionary containing precomputed volume mixing
@@ -563,10 +557,7 @@ def compute_planck_sources(
       those gases that have a vmr field already available.
 
   Returns:
-    A dictionary of `tf.Tensor`s containing:
-      'planck_src': The Planck source at the grid cell center.
-      'planck_src_top': The Planck source at the top cell face.
-      'planck_src_bottom': The Planck source at the bottom cell face.
+    The pointwise Planck fraction associated with the temperature field.
   """
   # The troposphere index is 1 for levels above the troposphere limit and 0
   # otherwise.
@@ -602,24 +593,37 @@ def compute_planck_sources(
   ))
 
   # 3-D interpolation of the Planck fraction.
-  planck_fraction = optics_utils.interpolate(
+  return optics_utils.interpolate(
       lookup.planck_fraction[..., igpt], interpolants_fns
   )
 
+
+def compute_planck_sources(
+    lookup: LookupGasOpticsLongwave,
+    planck_fraction: tf.Tensor,
+    temperature: tf.Tensor,
+    igpt: int,
+) -> tf.Tensor:
+  """Computes the Planck source for the longwave problem.
+
+  Args:
+    lookup: An `LookupGasOpticsLongwave` object containing a RRTMGP index for
+      all relevant gases and a lookup table for the Planck source.
+    planck_fraction: The Planck fraction that scales the Planck source.
+    temperature: The temperature [K] for which the Planck source will be
+      computed.
+    igpt: The absorption rank (g-point) index for which the optical depth will
+      be computed.
+
+  Returns:
+    The planck source emanating from the points with given `temperature` [W/m²].
+  """
+  ibnd = lookup.g_point_to_bnd[igpt]
+
   # 1-D interpolation of the Planck source.
-  temperature_level = {
-      'cell': temperature,
-      'top': temperature_top,
-      'bottom': temperature_bottom,
-    }
-  plank_src = {}
-  for key, val in temperature_level.items():
-    interpolant = optics_utils.create_linear_interpolant(
-        val, lookup.t_planck
-    )
-    src_key = f'planck_src_{key}' if key != 'cell' else 'planck_src'
-    plank_src[src_key] = planck_fraction * optics_utils.interpolate(
-        lookup.totplnk[ibnd, :],
-        OrderedDict({'t': lambda _: interpolant}),  # pylint: disable=cell-var-from-loop
-    )
-  return plank_src
+  interpolant = optics_utils.create_linear_interpolant(
+      temperature, lookup.t_planck
+  )
+  return planck_fraction * optics_utils.interpolate(
+      lookup.totplnk[ibnd, :], OrderedDict({'t': lambda _: interpolant})
+  )

@@ -159,12 +159,12 @@ def _cumsum(
       true_fn=lambda: f_0,
       false_fn=lambda: tf.nest.map_structure(tf.zeros_like, f_0),
   )
+  axis = (dim + 1) % 3 if f_is_tensor else dim
   cumsum_local = tf.nest.map_structure(
-      lambda a, b: tf.math.cumsum(a, axis=dim) + b, f, f_0
+      lambda a, b: tf.math.cumsum(a, axis=axis) + b, f, f_0
   )
-  dim = (dim + 1) % 3 if f_is_tensor else dim
   n = tf.cast(
-      cumsum_local.shape[dim] if f_is_tensor else cumsum_local[0].shape[dim],
+      cumsum_local.shape[axis] if f_is_tensor else cumsum_local[0].shape[dim],
       tf.int32)
   sum_local = _slice_in_dim(cumsum_local, n-1, 1, dim)
 
@@ -216,12 +216,6 @@ def compute_buoyancy_balanced_hydrodynamic_pressure(
   Returns:
     The hydrodynamic pressure that balances the buoyancy term numerically.
   """
-  if not (isinstance(rho, Sequence) and isinstance(rho_0, Sequence)):
-    raise ValueError(
-        'Only the List[tf.Tensor] representation of a 3D tensor is supported '
-        'by the pressure initialization function.'
-    )
-
   b = utils.buoyancy_source(kernel_op, rho, rho_0, params, g_dim)
 
   # In ANELASTIC mode, the gradient to be balanced is for the buoyancy
@@ -278,8 +272,9 @@ def compute_buoyancy_balanced_hydrodynamic_pressure(
     )
     binary_sequence = tf.cast(tf.math.mod(sequence, 2), dtype=_DTYPE)
     if f_is_tensor:  # 3-D tensor.
+      shifted_dim = (g_dim + 1) % 3
       broadcast_shape = [1, 1, 1]
-      broadcast_shape[g_dim] = core_n
+      broadcast_shape[shifted_dim] = core_n
       broadcastable_mask = tf.reshape(binary_sequence, broadcast_shape)
     else:  # z-list.
       broadcast_shape = [1, 1]
@@ -322,8 +317,9 @@ def compute_buoyancy_balanced_hydrodynamic_pressure(
   if g_dim == 2 and isinstance(b_dz_even, Sequence):
     p_1 = [0.5 * tf.math.add_n(p_even[:3]) - b_dz_even[0]]
   else:
+    axis = g_dim if isinstance(b_dz_even, Sequence) else (g_dim + 1) % 3
     p_1 = tf.nest.map_structure(
-        lambda x, y: 0.5 * tf.math.reduce_sum(x, axis=g_dim, keepdims=True) - y,
+        lambda x, y: 0.5 * tf.math.reduce_sum(x, axis=axis, keepdims=True) - y,
         _slice_in_dim(p_even, 0, 3, g_dim),
         _slice_in_dim(b_dz_even, 0, 1, g_dim),
     )

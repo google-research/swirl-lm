@@ -98,8 +98,12 @@ def normal_distribution_init_fn(
     else:
       mean_val = tf.ones_like(zz, dtype=zz.dtype) * mean
 
-    return tf.random.normal(
-        mean_val.shape, stddev=std, dtype=mean_val.dtype, seed=seed) + mean_val
+    return (
+        tf.random.normal(
+            tf.shape(mean_val), stddev=std, dtype=mean_val.dtype, seed=seed
+        )
+        + mean_val
+    )
 
   return init_fn
 

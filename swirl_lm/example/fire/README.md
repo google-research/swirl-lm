@@ -1,5 +1,6 @@
 # Tubbs Fire on Cloud TPU
 
+## Steps to run the fire simulation on TPU
 This example simulates the Tubbs Fire.
 
 1. Create TPUs using the TPU VM architecture and pod software. For example,
@@ -88,6 +89,9 @@ This example simulates the Tubbs Fire.
    it. But the bucket should exist before the solver runs. `<TPU>` should be the
    name of the TPU pod from the first step. Adjust cx, cy, cz and nx, ny, nz to
    match the number of TPUs you created in the first step.
+
+   Tip: An introduction about the flags can be found in the header docstring of
+   `swirl_lm/example/fire/fire_main.py`.
 
 1. If you lose your ssh session, you can connect back to the same screen
    terminal by ssh'ing into the machine again and running `screen -rd`. You can

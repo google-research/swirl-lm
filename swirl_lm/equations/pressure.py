@@ -139,12 +139,14 @@ from swirl_lm.numerics import filters
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import thermodynamics_pb2
 from swirl_lm.utility import common_ops
+from swirl_lm.utility import debug_print
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import monitor
 from swirl_lm.utility import types
 import tensorflow as tf
 
 from google.protobuf import text_format
+
 
 FlowFieldVal = types.FlowFieldVal
 FlowFieldMap = types.FlowFieldMap
@@ -158,6 +160,8 @@ _POISSON_SOLVER_INTERNAL_DTYPE = None
 _TF_DTYPE = types.TF_DTYPE
 
 _NormType = common_ops.NormType
+
+_DEBUG_PRINT_LOG_LEVEL = debug_print.LogLevel.INFO
 
 
 def _monitor_key(
@@ -684,11 +688,41 @@ class Pressure(object):
         dp_exchange_halos,
         internal_dtype=_POISSON_SOLVER_INTERNAL_DTYPE,
         additional_states=helper_vars)
+
     dp = poisson_solution[poisson_solver.X]
 
     dp = common_ops.remove_global_mean(
         common_ops.tf_cast(dp, _TF_DTYPE), replicas,
         halo_width) if mean_removal else common_ops.tf_cast(dp, _TF_DTYPE)
+
+    # Debug print is guarded behind the flag so the default (not enabled)
+    # is a no-op where the computational graph is not changed.
+    if debug_print.log_enabled(_DEBUG_PRINT_LOG_LEVEL):
+      norm_types = (_NormType.L1, _NormType.L2, _NormType.L_INF)
+      norms, residual_raw = self._solver.compute_residual(
+          replica_id=replica_id,
+          replicas=replicas,
+          f=dp,
+          rhs=b,
+          norm_types=norm_types,
+          halo_width=halo_width,
+          halo_update_fn=dp_exchange_halos,
+          remove_mean_from_rhs=False,
+          internal_dtype=_POISSON_SOLVER_INTERNAL_DTYPE,
+      )
+      debug_print.log_mean_min_max(
+          common_ops.strip_halos(residual_raw, [halo_width] * 3),
+          replica_id=replica_id,
+          message='Pressure solver local residual: ',
+          log_level=_DEBUG_PRINT_LOG_LEVEL,
+      )
+      for i, norm_type in enumerate(norm_types):
+        debug_print.log_mean_min_max(
+            norms[i],
+            replica_id=replica_id,
+            message=f'Pressure solver global residual {norm_type} norm: ',
+            log_level=_DEBUG_PRINT_LOG_LEVEL,
+        )
 
     if (self._thermodynamics.solver_mode ==
         thermodynamics_pb2.Thermodynamics.ANELASTIC):

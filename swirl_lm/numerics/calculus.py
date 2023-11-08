@@ -90,24 +90,34 @@ def divergence(
     ValueError: If the length of either `field_var` or `delta` is not 3.
   """
   if len(field_var) != 3:
-    raise ValueError('The vector has to have exactly 3 components to '
-                     'compute the divergence. {} is given.'.format(
-                         len(field_var)))
+    raise ValueError(
+        'The vector has to have exactly 3 components to '
+        'compute the divergence. {} is given.'.format(len(field_var))
+    )
 
   if len(delta) != 3:
     raise ValueError(
         'The length mesh size vector has to be 3. {} is given.'.format(
-            len(delta)))
+            len(delta)
+        )
+    )
 
   gradients = [
       _grad_impl(kernel_op, field_var[i], i, delta[i]) for i in range(3)
   ]
+  return tf.nest.map_structure(
+      lambda ddx, ddy, ddz: ddx + ddy + ddz, *gradients
+  )
 
-  return [ddx + ddy + ddz for ddx, ddy, ddz in zip(*gradients)]
 
-
-def laplacian(kernel_op: get_kernel_fn.ApplyKernelOp, f: FlowFieldVal,
-              nu: float, dx: float, dy: float, dz: float) -> FlowFieldVal:
+def laplacian(
+    kernel_op: get_kernel_fn.ApplyKernelOp,
+    f: FlowFieldVal,
+    nu: float,
+    dx: float,
+    dy: float,
+    dz: float,
+) -> FlowFieldVal:
   """Computes ν times the Laplacian of `f`.
 
   Args:

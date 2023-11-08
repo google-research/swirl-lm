@@ -25,8 +25,10 @@ import numpy as np
 from swirl_lm.base import driver_tpu
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.base import target_flag  # pylint: disable=unused-import
+from swirl_lm.boundary_condition import nonreflecting_boundary
 from swirl_lm.core import simulation
 from swirl_lm.linalg import poisson_solver
+from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import tpu_util
 from swirl_lm.utility import types
@@ -54,6 +56,13 @@ RESTART_DUMP_CYCLE = flags.DEFINE_integer(
     'restart_dump_cycle',
     1,
     'The number of cycles between which full variables may be dumped to file.',
+    allow_override=True,
+)
+
+SAVE_LAST_VALID_STEP = flags.DEFINE_bool(
+    'save_last_valid_step', False,
+    'If `True`, the solver will record and output the last non-NAN step before '
+    'crashing. Default is `False` as this might have some performance impacts.',
     allow_override=True,
 )
 
@@ -166,6 +175,7 @@ def _init_fn(
     if customized_init_fn is not None:
       states.update(customized_init_fn(replica_id, coordinates))
 
+    states.update(nonreflecting_boundary.nonreflecting_bc_state_init_fn(params))
     return states
 
   return init_fn
@@ -215,6 +225,53 @@ def _process_at_step_id(process_fn, essential_states, additional_states,
   return essential_states, additional_states
 
 
+def _update_additional_states(
+    essential_states, additional_states, step_id, **common_kwargs):
+  """Updates additional_states."""
+  # Perform the additional states update, if present.
+  updated_additional_states = additional_states
+  params = common_kwargs['params']
+
+  # Update BC additional states. Note currently this is only done
+  # for the nonreflecting BC and will be  a no-op if there is no nonreflecting
+  # BC present.
+  with tf.name_scope('bc_additional_states_update'):
+    updated_additional_states.update(
+        nonreflecting_boundary.nonreflecting_bc_state_update_fn(
+            states=essential_states,
+            additional_states=additional_states,
+            step_id=step_id,
+            **common_kwargs))
+
+  if params.additional_states_update_fn is not None:
+    with tf.name_scope('additional_states_update'):
+      updated_additional_states = params.additional_states_update_fn(
+          states=essential_states,
+          additional_states=additional_states,
+          step_id=step_id,
+          **common_kwargs)
+
+  return updated_additional_states
+
+
+def _state_has_nan_inf(state: PerReplica,
+                       replicas: Array) -> bool:
+  """Checks whether any field in the `state` contains `nan` or `inf`."""
+  has_nan_inf = False
+  for _, v in state.items():
+    # We want to make sure every core is seeing the same problem so the
+    # termination of all cores is synchronized, thus a global reduce operation
+    # is needed.
+    if common_ops.global_reduce(
+        tf.math.logical_or(tf.math.is_nan(v), tf.math.is_inf(v)),
+        tf.reduce_any, replicas.reshape([1, -1])):
+      has_nan_inf = True
+    # For some reason, the graph tracing in this case doesn't allow early break
+    # of the loop. For now we will just check through all fields without early
+    # break. This should still be very efficient.
+  return has_nan_inf
+
+
 @tf.function
 def _one_cycle(
     strategy: tf.distribute.Strategy,
@@ -222,7 +279,7 @@ def _one_cycle(
     init_step_id: Array,
     num_steps: Array,
     params: parameters_lib.SwirlLMParameters,
-) -> PerReplica:
+) -> Tuple[PerReplica, PerReplica]:
   """Runs one cycle of the Navier-Stokes solver.
 
   Args:
@@ -235,7 +292,8 @@ def _one_cycle(
     params: The solver configuration.
 
   Returns:
-    The final state at the end of the cycle.
+    A 2-tuple of the final state at the end of the cycle and the completed
+    number of steps, both will be in the PerReplica format.
   """
   logging.info('Tracing and compiling of _one_cycle starts. '
                'This can take up to 30 min.')
@@ -276,7 +334,8 @@ def _one_cycle(
       for key in keys_to_split:
         state[key] = tf.unstack(state[key])
 
-    for cycle_step_id in tf.range(num_steps):
+    cycle_step_id = 0
+    for _ in tf.range(num_steps):
       step_id = init_step_id + cycle_step_id
       # Split the state into essential states and additional states. Note that
       # `additional_states` consists of both additional state keys and helper
@@ -298,14 +357,13 @@ def _one_cycle(
               process_step_id=params.preprocess_step_id,
               is_periodic=params.preprocess_periodic)
 
-      # Perform the additional states update, if present.
-      if params.additional_states_update_fn is not None:
-        with tf.name_scope('additional_states_update'):
-          additional_states = params.additional_states_update_fn(
-              states=essential_states,
+      # Perform additional_states update.
+      additional_states.update(
+          _update_additional_states(
+              essential_states=essential_states,
               additional_states=additional_states,
               step_id=step_id,
-              **common_kwargs)
+              **common_kwargs))
 
       # Perform one step of the Navier-Stokes model. The updated state should
       # contain both the essential and additional states.
@@ -340,16 +398,22 @@ def _one_cycle(
           updated_state = _stateless_update_if_present(updated_state,
                                                        essential_states)
 
+      if SAVE_LAST_VALID_STEP.value:
+        if _state_has_nan_inf(updated_state, logical_replicas):
+          # Detected nan/inf, skip the update of state by early-exiting from the
+          # for loop.
+          break
       # Some state keys such as `replica_id` may not lie in either of the three
       # categories. Just pass them through.
       state = _stateless_update_if_present(state, updated_state)
+      cycle_step_id += 1
 
     if not params.use_3d_tf_tensor:
       # Unsplit the keys that were previously split.
       for key in keys_to_split:
         state[key] = tf.stack(state[key])
 
-    return state
+    return state, cycle_step_id
 
   return strategy.run(step_fn, args=(init_state,))
 
@@ -480,9 +544,9 @@ def solver(
 
   t_start = time.time()
 
+  init_fn = _init_fn(params, customized_init_fn)
   # Wrapping `init_fn` with tf.function so it is not retraced unnecessarily for
   # every core/device.
-  init_fn = _init_fn(params, customized_init_fn)
   state = driver_tpu.distribute_values(
       strategy, value_fn=tf.function(init_fn),
       logical_coordinates=logical_coordinates)
@@ -544,6 +608,7 @@ def solver(
     logging.info('Starting `write_state` for the initial state.')
     write_status = write_state_and_sync(state=_local_state(strategy, state),
                                         step_id=step_id_value())
+    ckpt_manager.save()
     logging.info(
         '`restoring-checkpoint-if-necessary` stage '
         'done with writing initial steps. Write status are: %s', write_status)
@@ -572,14 +637,32 @@ def solver(
     cycle = (step_id_value() - params.start_step) // params.num_steps
     logging.info('Step %d (cycle %d) is starting.', step_id_value(), cycle)
     t0 = time.time()
-    state = _one_cycle(
+    state, num_steps_completed = _one_cycle(
         strategy=strategy,
         init_state=state,
         init_step_id=step_id_value(),
         num_steps=params.num_steps,
         params=params)
 
-    step_id.assign_add(params.num_steps)
+    # Completed number steps are guaranteed to be identical for all replicas, so
+    # we are just taking replica 0 value.
+    completed_steps = _local_state(strategy, num_steps_completed)[0].numpy()
+    step_id.assign_add(completed_steps)
+    # Did not complete a full cycle.
+    if completed_steps < params.num_steps:
+      logging.info(
+          'Non-convergence detected. Early exit from cycle %d at step %d.'
+          'Starting dumping the last valid state at step %d',
+          cycle, step_id_value() + 1, step_id_value())
+      write_status = write_state_and_sync(_local_state(strategy, state),
+                                          step_id=step_id_value())
+      logging.info('Dumping full state done. Write status are: %s',
+                   write_status)
+      raise ValueError(
+          f'Non-convergence detected. Early exit from cycle {cycle} at step '
+          f'{step_id_value() + 1}. The last valid state at step '
+          f'{step_id_value()} has been saved in the specified output path.')
+
     replica_id_values = []
     for i in range(num_replicas):
       replica_id_values.append(

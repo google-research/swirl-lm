@@ -156,11 +156,6 @@ class WenoNN:
     # Small positive number to avoid division by zero. Set close to machine
     # precision.
     epsilon = np.finfo(types.NP_DTYPE).resolution
-    max_delta_0 = tf.math.reduce_max(delta[0])
-    max_delta_1 = tf.math.reduce_max(delta[1])
-    max_val = tf.maximum(
-        tf.maximum(max_delta_0, epsilon), tf.maximum(max_delta_1, epsilon)
-    )
     if isinstance(delta[0], list):
       # Transpose the order of list of lists (get Z along outer axis and
       # features along inner axis).
@@ -168,7 +163,18 @@ class WenoNN:
       delta = [tf.stack(delta_z, axis=2) for delta_z in delta]
     else:  # For flow field as 3D tensor, get features along last axis
       delta = tf.stack(delta, axis=-1)
-    delta = tf.nest.map_structure(lambda delta_z: delta_z / max_val, delta)
+    max_delta = tf.nest.map_structure(
+        lambda delta_z: tf.expand_dims(
+            tf.maximum(delta_z[..., 0], delta_z[..., 1]), axis=-1
+        ),
+        delta,
+    )
+    max_val = tf.nest.map_structure(
+        lambda max_delta_z: tf.maximum(max_delta_z, epsilon), max_delta
+    )
+    delta = tf.nest.map_structure(
+        lambda delta_z, max_val_z: delta_z / max_val_z, delta, max_val
+    )
     # Add a column of ones to account for the bias layer.
     delta = tf.nest.map_structure(
         lambda delta_z: tf.concat(  # pylint: disable=g-long-lambda

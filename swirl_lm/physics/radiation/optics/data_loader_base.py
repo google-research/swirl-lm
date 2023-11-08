@@ -77,9 +77,7 @@ class DataLoaderBase(metaclass=abc.ABCMeta):
         continue
       if val.dtype == np.float64:
         val = val.astype(np.float32)
-      # Create a tf.Variable that delays materializing the content until graph
-      # execution.
-      tensor_dict.update({key: tf.Variable(lambda: val, shape=val.shape)})  # pylint: disable=cell-var-from-loop
+      tensor_dict.update({key: tf.constant(val)})
     return (ds, tensor_dict, dim_map)
 
   @classmethod

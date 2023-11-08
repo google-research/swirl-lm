@@ -229,22 +229,21 @@ def interp_1d_coeff_init_fn(
     An `init_fn` that initializes the interpolation coefficients of surface in
     each core. Grid points that are not adjacent to `surface` are set to 0.
   """
-  n_total = surface.shape
-  n_non_dim_cores = list(n_cores)
-  del n_non_dim_cores[dim]
+  n_total = tf.shape(surface)
+  kept_dims = [0, 1, 2]
+  del kept_dims[dim]
+  n_non_dim_cores = tf.gather(n_cores, kept_dims)
 
-  assert len(n_total) == 2, (
-      f'`surface` needs to be a 2D tensor, but a {len(n_total)}-dimension'
-      ' tensor is provided.'
-  )
+  # This implicitly checks that the length of `n_total` and `n_non_dim_cores`
+  # are both 2, and expclicitly checks the divisibility. Note this assertion
+  # works since this part is executed outside the TPU/not in the replica
+  # context.
+  tf.debugging.Assert(
+      tf.math.reduce_all(tf.math.equal(
+          tf.math.floormod(n_total, n_non_dim_cores), [0, 0])),
+      [n_total, n_non_dim_cores], summarize=2)
 
-  core_n = []
-  for n, nc in zip(n_total, n_non_dim_cores):
-    assert n % nc == 0, (
-        f'`surface` size ({n}) is not fully divisible by the number of cores'
-        f' ({nc}).'
-    )
-    core_n.append(int(n // nc))
+  core_n = tf.math.floordiv(n_total, n_non_dim_cores)
 
   def init_fn(
       xx: tf.Tensor,
@@ -258,30 +257,27 @@ def interp_1d_coeff_init_fn(
     """Computes the interpolation coefficients for surface."""
     del lx, ly, lz
 
-    # Check if dimension of `surface` matches the mesh.
-    mesh_size_non_dim = xx.get_shape().as_list()
-    del mesh_size_non_dim[dim]
+    mesh_size_non_dim = tf.gather(tf.shape(xx), kept_dims)
 
-    for n_target, n_mesh in zip(core_n, mesh_size_non_dim):
-      assert n_target == n_mesh, (
-          f'`surface` local tensor dimension ({n_target}) mismatch with the'
-          f' mesh size ({n_mesh}).'
-      )
+    # Check if dimension of `surface` matches the mesh. Since assertion ops are
+    # ignored on TPUs, we explicitly place the assertion ops on CPU using
+    # outside_compilation() (by default this section will be on TPU since this
+    # is executed under the replica context.
+    def _check_mesh_size(a, b):
+      op = tf.debugging.Assert(
+          tf.math.reduce_all(tf.math.equal(a, b)),
+          [a, b],
+          summarize=2)
+      with tf.control_dependencies([op]):
+        return a, b
 
-    # Get part of the surface that is local to the current core.
-    coord = list(coord)
-    del coord[dim]
-
-    indices = [
-        (core_n[i] * coord[i], core_n[i] * (coord[i] + 1)) for i in range(2)
-    ]
-    surface_local = tf.expand_dims(
-        surface[
-            slice(indices[0][0], indices[0][1]),
-            slice(indices[1][0], indices[1][1]),
-        ],
-        dim,
+    local_core_n, mesh_size_non_dim = tf.compat.v1.tpu.outside_compilation(
+        _check_mesh_size, *(core_n, mesh_size_non_dim)
     )
+    # Get part of the surface that is local to the current core.
+    coord = tf.gather(coord, kept_dims)
+    surface_local = tf.expand_dims(
+        tf.slice(surface, local_core_n * coord, local_core_n), dim)
 
     # Compute the interpolation weights. Because the point where the surface
     # cuts through the axis along `dim` has to fall between a mesh grid,

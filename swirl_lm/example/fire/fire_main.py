@@ -95,17 +95,11 @@ The ignition kernel is a sphere with its boundary smoothed by a tanh function.
 - `ignition_scale`: The smoothness factor of the tanh function.
 """
 
-from absl import flags
-from swirl_lm.base import driver as tf2_driver
+from absl import app
+from swirl_lm.base import driver
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.example.fire import fire
 from swirl_lm.example.shared import wildfire_utils
-import tensorflow as tf
-
-# Ignored.
-_IS_TF2 = flags.DEFINE_boolean(
-    'is_tf2', True, 'Whether to run the job as a tf2 binary.'
-)
 
 
 def main(_):
@@ -116,8 +110,8 @@ def main(_):
   params.additional_states_update_fn = simulation.additional_states_update_fn
   params.preprocessing_states_update_fn = simulation.pre_simulation_update_fn
   params.postprocessing_states_update_fn = simulation.post_simulation_update_fn
-  tf2_driver.solver(simulation.initialization, params)
+  driver.solver(simulation.initialization, params)
 
 
 if __name__ == '__main__':
-  tf.compat.v1.app.run(main)
+  app.run(main)

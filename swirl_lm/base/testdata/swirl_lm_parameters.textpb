@@ -26,7 +26,7 @@ boundary_conditions {
     dim: 1 location: 1 type: BC_TYPE_DIRICHLET value: -1.0
   }
   boundary_info {
-    dim: 2 location: 0 type: BC_TYPE_NEUMANN
+    dim: 2 location: 0 type: BC_TYPE_NONREFLECTING
   }
   boundary_info {
     dim: 2 location: 1 type: BC_TYPE_NEUMANN
@@ -44,7 +44,11 @@ boundary_conditions {
     dim: 1 location: 0 type: BC_TYPE_NEUMANN
   }
   boundary_info {
-    dim: 1 location: 1 type: BC_TYPE_NEUMANN
+    dim: 1 location: 1 type: BC_TYPE_NONREFLECTING value: 1.0
+    bc_params {
+      buffer_init_step: 100
+      nonreflecting_bc_mode: NONREFLECTING_GLOBAL_MAX
+    }
   }
   boundary_info {
     dim: 2 location: 0 type: BC_TYPE_DIRICHLET value: 2.0

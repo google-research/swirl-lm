@@ -18,7 +18,7 @@ package swirl_lm;
 
 // Defines the type of boundary condition to be used for each variable in a
 // specific boundary.
-// Next id: 6.
+// Next id: 7.
 enum BoundaryConditionType {
   // The default option where no boundary condition is set. Results in an error
   // if that direction is not periodic.
@@ -34,6 +34,47 @@ enum BoundaryConditionType {
   BC_TYPE_NO_TOUCH = 3;
   // The periodic boundary condition.
   BC_TYPE_PERIODIC = 4;
+  // The nonreflecting boundary condition.
+  // Using the "high" side of the domain as an example, a forward Euler with
+  // upwinding scheme is used to solve the boundary:
+  //
+  //    ∂ϕ/∂t = - U* ∂ϕ/∂x
+  //
+  // In discrete form:
+  //
+  //    ϕⱼⁿ⁺¹ = (1 - Δt U* /Δx) ϕⱼⁿ + (Δt U* /Δx) ϕⱼ₋₁ⁿ
+  //
+  // Similarly for "low" side of the domain boundary, we have a symmetric case:
+  //
+  //    ∂ϕ/∂t = U* ∂ϕ/∂x
+  //
+  // In discrete form:
+  //
+  //    ϕⱼⁿ⁺¹ = (1 - Δt U* /Δx) ϕⱼⁿ + (Δt U* /Δx) ϕⱼ₊₁ⁿ
+  //
+  // In the current implementation, U* is specified by the configuration
+  // through the value in the boundary condition and the mode (specified
+  // through `boundary_info.bc_params.nonreflecting_bc_mode`) setting as:
+  //
+  // For NONREFLECTING_LOCAL_MAX mode:
+  //
+  //    U* = abs(max(u + u0, 0)) for the "high" side of the domain, and
+  //    U* = abs(min(u - u0, 0)) for the "low" side of the domain.
+  //
+  // For NONREFLECTING_GLOBAL_MEAN mode:
+  //
+  //    U* = abs(global_mean(u) + u0), for the "high" side of the domain, and
+  //    U* = abs(global_mean(u) - u0), for the "low" side of the domain.
+  //
+  // For NONREFLECTING_GLOBAL_MAX mode:
+  //
+  //    U* = abs(max(global_max(u), 0) + u0), for the "high" side of the domain,
+  //    U* = abs(min(global_min(u), 0) - u0), for the "low" side of the domain.
+  //
+  //  where u is the (spatially dependent) velocity field at the boundary
+  //  (first inner fluid layer), while u0 is value specified for the boundary
+  //  condition configuration.
+  BC_TYPE_NONREFLECTING = 6;
 }
 
 // Messages encapsulating 3-D coordinates. Dimensions may correspond to x, y,

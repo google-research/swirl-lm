@@ -220,7 +220,7 @@ def shear_flux(params: parameters_lib.SwirlLMParameters) -> ...:
       else:
         raise ValueError('Unsupport dimension: {}'.format(dim))
 
-      return [df_i / 2.0 for df_i in df]
+      return tf.nest.map_structure(lambda df_i: 0.5 * df_i, df)
 
     def grad_n(f: FlowFieldVal, dim: int, h: float) -> FlowFieldVal:
       """Computes gradient of `value` in `dim` on nodes."""
@@ -233,7 +233,7 @@ def shear_flux(params: parameters_lib.SwirlLMParameters) -> ...:
       else:
         raise ValueError('Unsupport dimension: {}'.format(dim))
 
-      return [df_i / (2.0 * h) for df_i in df]
+      return tf.nest.map_structure(lambda df_i: df_i / (2.0 * h), df)
 
     def grad_f(f: FlowFieldVal, dim: int, h: float) -> FlowFieldVal:
       """Computes gradient of `value` in `dim` on faces."""
@@ -246,7 +246,7 @@ def shear_flux(params: parameters_lib.SwirlLMParameters) -> ...:
       else:
         raise ValueError('Unsupport dimension: {}'.format(dim))
 
-      return [df_i / h for df_i in df]
+      return tf.nest.map_structure(lambda df_i: df_i / h, df)
 
     def grad_interp(f: FlowFieldVal, grad_dim: int, interp_dim: int,
                     h: float) -> FlowFieldVal:
@@ -259,66 +259,96 @@ def shear_flux(params: parameters_lib.SwirlLMParameters) -> ...:
     # `dv/dx` (computed with a central-difference scheme) needs to be
     # interpolated onto j faces. Similar interpolations are applied to compute
     # other components in the strain rate tensor S.
-    s12 = [
-        0.5 * (du_dy + dv_dx)
-        for du_dy, dv_dx in zip(grad_f(u, 1, dy), grad_interp(v, 0, 1, dx))
-    ]
-    s13 = [
-        0.5 * (du_dz + dw_dx)
-        for du_dz, dw_dx in zip(grad_f(u, 2, dz), grad_interp(w, 0, 2, dx))
-    ]
-    s21 = [
-        0.5 * (dv_dx + du_dy)
-        for dv_dx, du_dy in zip(grad_f(v, 0, dx), grad_interp(u, 1, 0, dy))
-    ]
+    s12 = tf.nest.map_structure(
+        lambda du_dy, dv_dx: 0.5 * (du_dy + dv_dx),
+        grad_f(u, 1, dy),
+        grad_interp(v, 0, 1, dx),
+    )
+    s13 = tf.nest.map_structure(
+        lambda du_dz, dw_dx: 0.5 * (du_dz + dw_dx),
+        grad_f(u, 2, dz),
+        grad_interp(w, 0, 2, dx),
+    )
+    s21 = tf.nest.map_structure(
+        lambda dv_dx, du_dy: 0.5 * (dv_dx + du_dy),
+        grad_f(v, 0, dx),
+        grad_interp(u, 1, 0, dy),
+    )
     s22 = grad_f(v, 1, dy)
-    s23 = [
-        0.5 * (dv_dz + dw_dy)
-        for dv_dz, dw_dy in zip(grad_f(v, 2, dz), grad_interp(w, 1, 2, dy))
-    ]
-    s31 = [
-        0.5 * (dw_dx + du_dz)
-        for dw_dx, du_dz in zip(grad_f(w, 0, dx), grad_interp(u, 2, 0, dz))
-    ]
-    s32 = [
-        0.5 * (dw_dy + dv_dz)
-        for dw_dy, dv_dz in zip(grad_f(w, 1, dy), grad_interp(v, 2, 1, dz))
-    ]
+    s23 = tf.nest.map_structure(
+        lambda dv_dz, dw_dy: 0.5 * (dv_dz + dw_dy),
+        grad_f(v, 2, dz),
+        grad_interp(w, 1, 2, dy),
+    )
+    s31 = tf.nest.map_structure(
+        lambda dw_dx, du_dz: 0.5 * (dw_dx + du_dz),
+        grad_f(w, 0, dx),
+        grad_interp(u, 2, 0, dz),
+    )
+    s32 = tf.nest.map_structure(
+        lambda dw_dy, dv_dz: 0.5 * (dw_dy + dv_dz),
+        grad_f(w, 1, dy),
+        grad_interp(v, 2, 1, dz),
+    )
     s33 = grad_f(w, 2, dz)
 
-    du_kk_x = [
-        du_dx + dv_dy + dw_dz for du_dx, dv_dy, dw_dz in zip(
-            s11, grad_interp(v, 1, 0, dy), grad_interp(w, 2, 0, dz))
-    ]
+    du_kk_x = tf.nest.map_structure(
+        lambda du_dx, dv_dy, dw_dz: du_dx + dv_dy + dw_dz,
+        s11,
+        grad_interp(v, 1, 0, dy),
+        grad_interp(w, 2, 0, dz),
+    )
 
-    du_kk_y = [
-        du_dx + dv_dy + dw_dz for du_dx, dv_dy, dw_dz in zip(
-            grad_interp(u, 0, 1, dx), s22, grad_interp(w, 2, 1, dz))
-    ]
+    du_kk_y = tf.nest.map_structure(
+        lambda du_dx, dv_dy, dw_dz: du_dx + dv_dy + dw_dz,
+        grad_interp(u, 0, 1, dx),
+        s22,
+        grad_interp(w, 2, 1, dz),
+    )
 
-    du_kk_z = [
-        du_dx + dv_dy + dw_dz for du_dx, dv_dy, dw_dz in zip(
-            grad_interp(u, 0, 2, dx), grad_interp(v, 1, 2, dy), s33)
-    ]
+    du_kk_z = tf.nest.map_structure(
+        lambda du_dx, dv_dy, dw_dz: du_dx + dv_dy + dw_dz,
+        grad_interp(u, 0, 2, dx),
+        grad_interp(v, 1, 2, dy),
+        s33,
+    )
 
-    tau11 = [
-        2.0 * mu_i * (s11_i - 1.0 / 3.0 * du_kk_i)
-        for mu_i, s11_i, du_kk_i in zip(interp(mu, 0), s11, du_kk_x)
-    ]
-    tau12 = [2.0 * mu_i * s12_i for mu_i, s12_i in zip(interp(mu, 1), s12)]
-    tau13 = [2.0 * mu_i * s13_i for mu_i, s13_i in zip(interp(mu, 2), s13)]
-    tau21 = [2.0 * mu_i * s21_i for mu_i, s21_i in zip(interp(mu, 0), s21)]
-    tau22 = [
-        2.0 * mu_i * (s22_i - 1.0 / 3.0 * du_kk_i)
-        for mu_i, s22_i, du_kk_i in zip(interp(mu, 1), s22, du_kk_y)
-    ]
-    tau23 = [2.0 * mu_i * s23_i for mu_i, s23_i in zip(interp(mu, 2), s23)]
-    tau31 = [2.0 * mu_i * s31_i for mu_i, s31_i in zip(interp(mu, 0), s31)]
-    tau32 = [2.0 * mu_i * s32_i for mu_i, s32_i in zip(interp(mu, 1), s32)]
-    tau33 = [
-        2.0 * mu_i * (s33_i - 1.0 / 3.0 * du_kk_i)
-        for mu_i, s33_i, du_kk_i in zip(interp(mu, 2), s33, du_kk_z)
-    ]
+    tau11 = tf.nest.map_structure(
+        lambda mu_i, s11_i, du_kk_i: 2.0 * mu_i * (s11_i - 1.0 / 3.0 * du_kk_i),
+        interp(mu, 0),
+        s11,
+        du_kk_x,
+    )
+    tau12 = tf.nest.map_structure(
+        lambda mu_i, s12_i: 2.0 * mu_i * s12_i, interp(mu, 1), s12
+    )
+    tau13 = tf.nest.map_structure(
+        lambda mu_i, s13_i: 2.0 * mu_i * s13_i, interp(mu, 2), s13
+    )
+    tau21 = tf.nest.map_structure(
+        lambda mu_i, s21_i: 2.0 * mu_i * s21_i, interp(mu, 0), s21
+    )
+    tau22 = tf.nest.map_structure(
+        lambda mu_i, s22_i, du_kk_i: 2.0 * mu_i * (s22_i - 1.0 / 3.0 * du_kk_i),
+        interp(mu, 1),
+        s22,
+        du_kk_y,
+    )
+    tau23 = tf.nest.map_structure(
+        lambda mu_i, s23_i: 2.0 * mu_i * s23_i, interp(mu, 2), s23
+    )
+    tau31 = tf.nest.map_structure(
+        lambda mu_i, s31_i: 2.0 * mu_i * s31_i, interp(mu, 0), s31
+    )
+    tau32 = tf.nest.map_structure(
+        lambda mu_i, s32_i: 2.0 * mu_i * s32_i, interp(mu, 1), s32
+    )
+    tau33 = tf.nest.map_structure(
+        lambda mu_i, s33_i, du_kk_i: 2.0 * mu_i * (s33_i - 1.0 / 3.0 * du_kk_i),
+        interp(mu, 2),
+        s33,
+        du_kk_z,
+    )
 
     # Add the closure from Monin-Obukhov similarity theory if requested.
     if most is not None:
@@ -406,7 +436,7 @@ def subsidence_velocity_stevens(zz: FlowFieldVal) -> FlowFieldVal:
   Returns:
     The subsidence velocity.
   """
-  return [-_D * z for z in zz]
+  return tf.nest.map_structure(lambda z: -_D * z, zz)
 
 
 def subsidence_velocity_siebesma(zz: FlowFieldVal) -> FlowFieldVal:
@@ -463,9 +493,11 @@ def source_by_subsidence_velocity(
   else:  # vertical_dim == 2
     df = kernel_op.apply_kernel_op_z(field, 'kDz', 'kDzsh')
 
-  df_dh = [df_i / (2.0 * h) for df_i in df]
+  df_dh = tf.nest.map_structure(lambda df_i: df_i / (2.0 * h), df)
   w = subsidence_velocity_stevens(height)
-  return [-rho_i * w_i * df_dh_i for rho_i, w_i, df_dh_i in zip(rho, w, df_dh)]
+  return tf.nest.map_structure(
+      lambda rho_i, w_i, df_dh_i: -rho_i * w_i * df_dh_i, rho, w, df_dh
+  )
 
 
 def buoyancy_source(

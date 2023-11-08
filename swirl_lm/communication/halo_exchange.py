@@ -172,7 +172,7 @@ def _replace_halo(plane, bc, dim, side=None):
 
   if bc_type in (BCType.NEUMANN, BCType.NEUMANN_2):
     return neumann_value()
-  elif bc_type == BCType.DIRICHLET:
+  elif bc_type in (BCType.DIRICHLET, BCType.NONREFLECTING):
     return dirichlet_value()
   elif bc_type == BCType.ADDITIVE:
     return additive_value()
@@ -773,7 +773,7 @@ def clear_halos(x: FlowFieldVal, halo_width: int) -> FlowFieldVal:
   Raises:
     ValueError if halo width is too large, and there are no interior points.
   """
-  if (halo_width <= 0) or (not x):
+  if (halo_width <= 0):
     return x
 
   nz = len(x)

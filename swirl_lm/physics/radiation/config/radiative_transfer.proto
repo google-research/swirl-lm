@@ -63,3 +63,26 @@ message AtmosphericState {
   // The longwave incident flux at the top of the atmosphere (in W/m²).
   optional float toa_flux_lw = 8 [default = 0.0];
 }
+
+message RadiativeTransfer {
+  enum AlgorithmType {
+    // The default option where no algorithm type is specified.
+    UNKNOWN = 0;
+    // A parallel algorithm that simplifies the radiative transfer equations in
+    // a way that results in more independent workloads that can be executed in
+    // parallel.
+    PARALLEL = 1;
+    // A sequential algorithm that executes the back-subsitution computations
+    // of the radiative transfer solver one vertical layer at a time.
+    SEQUENTIAL = 2;
+  }
+
+  // Type of distributed algorithm to be used for the RTE solver.
+  optional AlgorithmType algorithm_type = 1 [default = PARALLEL];
+  // The optics library that calculates optical depth, single-scattering albedo,
+  // and other local optical properties of the layered atmosphere.
+  optional OpticsParameters optics = 2;
+  // Data about the prevalent atmospheric gases present in the atmosphere as
+  // well as boundary conditions for the surface and top of atmosphere.
+  optional AtmosphericState atmospheric_state = 3;
+}

@@ -61,6 +61,7 @@ class BCType(enum.Enum):
   DIRICHLET = 2  # Dirichlet boundary condition.
   NO_TOUCH = 3  # Preserves the boundary at its current value.
   ADDITIVE = 4  # Adds the given values at the boundary.
+  NONREFLECTING = 6  # Nonreflecting boundary condition.
 
 _TensorOrArray = Union[tf.Tensor, np.ndarray]
 _FaceBoundaryCondition = Tuple[BCType, Union[Sequence[

@@ -247,8 +247,8 @@ message SwirlLMParameters {
     KERNEL_OP_MATMUL = 3;
   }
 
-  // The mesh information.
-  optional swirl_lm.GridParametrization grid_info = 1;
+  // The mesh information. Deprecated. Do not use / rely on this.
+  optional swirl_lm.GridParametrization grid_info = 1 [deprecated = true];
   // The type of kernel operator to be used to represent finite difference
   // operators. Default set to `KERNEL_OP_CONV` to match previous behavior.
   optional KernelOpType kernel_op_type = 27 [default = KERNEL_OP_CONV];

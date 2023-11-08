@@ -14,6 +14,7 @@
 
 """Library for input config for the incompressible Navier-Stokes solver."""
 
+import os
 import os.path
 from typing import Callable, List, Mapping, Optional, Sequence, Tuple
 
@@ -21,6 +22,7 @@ from absl import flags
 from absl import logging
 import numpy as np
 from swirl_lm.base import parameters_pb2
+from swirl_lm.base import physical_variable_keys_manager
 from swirl_lm.boundary_condition import boundary_condition_utils
 from swirl_lm.boundary_condition import boundary_conditions_pb2
 from swirl_lm.communication import halo_exchange
@@ -124,6 +126,7 @@ SourceUpdateFnLib = Mapping[str, SourceUpdateFn]
 
 _BCInfo = boundary_conditions_pb2.BoundaryCondition.BoundaryInfo
 _BCType = grid_parametrization_pb2.BoundaryConditionType
+_BCParams = boundary_conditions_pb2.BoundaryCondition.BoundaryConditionParams
 
 FLAGS = flags.FLAGS
 
@@ -173,6 +176,8 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     super(SwirlLMParameters, self).__init__(grid_params)
 
     self.swirl_lm_parameters_proto = config
+    self.bc_manager = (
+        physical_variable_keys_manager.BoundaryConditionKeysHelper())
 
     self._start_step = _START_STEP.value
     self._loading_step = (
@@ -277,11 +282,13 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
 
     self.bc = {'u': None, 'v': None, 'w': None, 'p': None}
     self.bc.update({scalar.name: None for scalar in self.scalars})
+    self.bc_params = {'u': None, 'v': None, 'w': None, 'p': None}
+    self.bc_params.update({scalar.name: None for scalar in self.scalars})
 
     for input_bc in config.boundary_conditions:
-      self.bc.update({
-          input_bc.name: self._parse_boundary_conditions(input_bc.boundary_info)
-      })
+      bc, bc_params = self._parse_boundary_conditions(input_bc.boundary_info)
+      self.bc[input_bc.name] = bc
+      self.bc_params[input_bc.name] = bc_params
 
     # Find the type of boundary, e.g. wall, open boundary, periodic, from the
     # boundary conditions.
@@ -292,6 +299,12 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     logging.info('Boundary conditions for `u`, `v`, `w`, and all scalars are '
                  'retrieved from the config file. Boundary condition for `p` '
                  'is derived based on boundary types.')
+
+    # Adding new additional keys to hold boundary conditions.
+    self.bc_keys = (
+        boundary_condition_utils.get_keys_for_boundary_condition(
+            self.bc, halo_exchange.BCType.NONREFLECTING))
+    self.additional_state_keys.extend(self.bc_keys)
 
     # Get the number of sub-iterations at each time step.
     self.corrector_nit = config.num_sub_iterations
@@ -500,22 +513,29 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
 
   def _parse_boundary_info(
       self, boundary_info: _BCInfo
-  ) -> Optional[Tuple[halo_exchange.BCType, float]]:
+  ) -> Tuple[
+      Optional[Tuple[halo_exchange.BCType, float]],
+      Optional[_BCParams]]:
     """Retrieves the boundary condition from proto to fit the framework."""
+    bc_type_value = None
     if boundary_info.type == _BCType.BC_TYPE_DIRICHLET:
-      return (halo_exchange.BCType.DIRICHLET, boundary_info.value)
+      bc_type_value = (halo_exchange.BCType.DIRICHLET, boundary_info.value)
     elif boundary_info.type == _BCType.BC_TYPE_NEUMANN:
-      return (halo_exchange.BCType.NEUMANN, boundary_info.value)
+      bc_type_value = (halo_exchange.BCType.NEUMANN, boundary_info.value)
     elif boundary_info.type == _BCType.BC_TYPE_NEUMANN_2:
-      return (halo_exchange.BCType.NEUMANN_2, boundary_info.value)
+      bc_type_value = (halo_exchange.BCType.NEUMANN_2, boundary_info.value)
     elif boundary_info.type == _BCType.BC_TYPE_NO_TOUCH:
-      return (halo_exchange.BCType.NO_TOUCH, 0.0)
-    else:
-      return None
+      bc_type_value = (halo_exchange.BCType.NO_TOUCH, 0.0)
+    elif boundary_info.type == _BCType.BC_TYPE_NONREFLECTING:
+      bc_type_value = (halo_exchange.BCType.NONREFLECTING, boundary_info.value)
+
+    return (bc_type_value, boundary_info.bc_params)
 
   def _parse_boundary_conditions(
       self, boundary_conditions: Sequence[_BCInfo]
-  ) -> List[List[Optional[Tuple[halo_exchange.BCType, float]]]]:
+  ) -> Tuple[
+      List[List[Optional[Tuple[halo_exchange.BCType, float]]]],
+      List[List[Optional[_BCParams]]]]:
     """Parses the boundary conditions.
 
     Args:
@@ -527,9 +547,12 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     """
 
     bc = [[None, None], [None, None], [None, None]]
+    bc_params = [[None, None], [None, None], [None, None]]
     for bc_info in boundary_conditions:
-      bc[bc_info.dim][bc_info.location] = self._parse_boundary_info(bc_info)
-    return bc
+      (bc[bc_info.dim][bc_info.location],
+       bc_params[bc_info.dim][bc_info.location]) = self._parse_boundary_info(
+           bc_info)
+    return bc, bc_params
 
   @staticmethod
   def config_from_text_proto(
@@ -750,7 +773,7 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
       The function that updates `states` and `additional_states`, which takes
       the following arguments:
       `kernel_op`, `states`, `additional_states`, `params`,
-      and it should return a dictionary containing the updated `states` and/or
+     and it should return a dictionary containing the updated `states` and/or
       `additional_states`.
     """
     return self._postprocessing_states_update_fn

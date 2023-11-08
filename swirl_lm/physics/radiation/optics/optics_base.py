@@ -57,8 +57,8 @@ class OpticsScheme(metaclass=abc.ABCMeta):
       self,
       pressure: FlowFieldVal,
       temperature: FlowFieldVal,
-      mols: FlowFieldVal,
-      igpt: int,
+      molecules: FlowFieldVal,
+      igpt: tf.Tensor,
       vmr_fields: Optional[Dict[int, FlowFieldVal]] = None,
   ) -> FlowFieldMap:
     """Computes the monochromatic longwave optical properties.
@@ -66,8 +66,8 @@ class OpticsScheme(metaclass=abc.ABCMeta):
     Args:
       pressure: The pressure field [Pa].
       temperature: The temperature [K].
-      mols: The number of molecules in an atmospheric grid cell per area
-        [molecules / m^2].
+      molecules: The number of molecules in an atmospheric grid cell per area
+        [molecules/m²].
       igpt: The spectral interval index, or g-point.
       vmr_fields: An optional dictionary containing precomputed volume mixing
         ratio fields, keyed by gas index, that will overwrite the global means.
@@ -84,8 +84,8 @@ class OpticsScheme(metaclass=abc.ABCMeta):
       self,
       pressure: FlowFieldVal,
       temperature: FlowFieldVal,
-      mols: FlowFieldVal,
-      igpt: int,
+      molecules: FlowFieldVal,
+      igpt: tf.Tensor,
       vmr_fields: Optional[Dict[int, FlowFieldVal]] = None,
   ) -> FlowFieldMap:
     """Computes the monochromatic shortwave optical properties.
@@ -93,8 +93,8 @@ class OpticsScheme(metaclass=abc.ABCMeta):
     Args:
       pressure: The pressure field [Pa].
       temperature: The temperature [K].
-      mols: The number of molecules in an atmospheric grid cell per area
-        [molecules / m^2].
+      molecules: The number of molecules in an atmospheric grid cell per area
+        [molecules/m²].
       igpt: The spectral interval index, or g-point.
       vmr_fields: An optional dictionary containing precomputed volume mixing
         ratio fields, keyed by gas index, that will overwrite the global means.
@@ -113,8 +113,9 @@ class OpticsScheme(metaclass=abc.ABCMeta):
       replicas: np.ndarray,
       pressure: FlowFieldVal,
       temperature: FlowFieldVal,
-      igpt: int,
+      igpt: tf.Tensor,
       vmr_fields: Optional[Dict[int, FlowFieldVal]] = None,
+      sfc_temperature: Optional[FlowFieldVal] = None,
   ) -> FlowFieldMap:
     """Computes the Planck sources used in the longwave problem.
 
@@ -127,6 +128,7 @@ class OpticsScheme(metaclass=abc.ABCMeta):
       igpt: The spectral interval index, or g-point.
       vmr_fields: An optional dictionary containing precomputed volume mixing
         ratio fields, keyed by gas index, that will overwrite the global means.
+      sfc_temperature: An optional 2D plane for the surface temperature [K].
 
     Returns:
       A dictionary containing the Planck source at the cell center
@@ -143,6 +145,11 @@ class OpticsScheme(metaclass=abc.ABCMeta):
   @abc.abstractmethod
   def n_gpt_sw(self) -> int:
     """The number of g-points in the shortwave bands."""
+
+  @property
+  @abc.abstractmethod
+  def solar_fraction_by_gpt(self) -> Sequence[float]:
+    """Mapping from g-point to the fraction of total solar radiation."""
 
   def _slice_field(
       self,

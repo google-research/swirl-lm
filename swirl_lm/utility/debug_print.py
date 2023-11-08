@@ -45,10 +45,10 @@ _LOG_LEVEL = flags.DEFINE_enum(
     'at or above the set severity level will be enabled.')
 
 
-def _log_enabled(log_flag_value, log_level):
-  if log_flag_value is None:
+def log_enabled(log_level):
+  if _LOG_LEVEL.value is None:
     return False
-  log_flag_level = LogLevel[log_flag_value].value
+  log_flag_level = LogLevel[_LOG_LEVEL.value].value
   return log_level.value >= log_flag_level
 
 
@@ -88,7 +88,7 @@ def log(
     is returned.
   """
 
-  if not _log_enabled(_LOG_LEVEL.value, log_level):
+  if not log_enabled(log_level):
     return tf.constant(0)
 
   message = _get_log_msg(log_level, message, stack_info)
@@ -126,7 +126,7 @@ def log_mean_min_max(
     is returned.
   """
 
-  if not _log_enabled(_LOG_LEVEL.value, log_level):
+  if not log_enabled(log_level):
     return tf.constant(0)
 
   message = _get_log_msg(log_level, message, stack_info)

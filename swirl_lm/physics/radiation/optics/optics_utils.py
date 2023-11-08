@@ -29,7 +29,7 @@
 
 import collections
 import dataclasses
-from typing import Callable, Optional, Sequence
+from typing import Callable, Optional, Sequence, Tuple
 
 from swirl_lm.physics.radiation.optics import lookup_gas_optics_base
 from swirl_lm.physics.radiation.optics import lookup_volume_mixing_ratio
@@ -63,22 +63,23 @@ class Interpolant:
 def validate_range(
     f: tf.Tensor,
     reference_values: tf.Tensor,
-) -> None:
+) -> Tuple[tf.Operation, tf.Operation]:
   """Verifies that no value in `f` is outside the range of reference values."""
-  min_t_ref = tf.math.reduce_min(reference_values)
-  max_t_ref = tf.math.reduce_max(reference_values)
-  min_t = tf.math.reduce_min(f)
-  max_t = tf.math.reduce_max(f)
-  tf.compat.v1.assert_greater_equal(
-      min_t,
-      min_t_ref,
+  min_ref = tf.math.reduce_min(reference_values)
+  max_ref = tf.math.reduce_max(reference_values)
+  min_f = tf.math.reduce_min(f)
+  max_f = tf.math.reduce_max(f)
+  assert_above_min = tf.compat.v1.assert_greater_equal(
+      min_f,
+      min_ref,
       message='At least one value is below the reference range.',
   )
-  tf.compat.v1.assert_less_equal(
-      max_t,
-      max_t_ref,
+  assert_below_max = tf.compat.v1.assert_less_equal(
+      max_f,
+      max_ref,
       message='At least one value is above the reference range.',
   )
+  return (assert_above_min, assert_below_max)
 
 
 def lookup_values(
@@ -173,8 +174,7 @@ def create_linear_interpolant(
     An `Interpolant` object containing the pointwise floor and ceiling indices
     and interpolation weights of `f`.
   """
-  with tf.control_dependencies(
-      [validate_range(f, f_ref)]):
+  with tf.control_dependencies(validate_range(f, f_ref)):
     size = f_ref.shape[0]
     delta = f_ref[1] - f_ref[0]
     idx_low = floor_idx(f, f_ref)
@@ -193,9 +193,8 @@ def create_linear_interpolant(
 
 def interpolate(
     coeffs: tf.Tensor,
-    interpolant_fns: OrderedDict[str, Callable[..., Interpolant]],
-    idx_weight_by_varname: Optional[OrderedDict[str, IndexAndWeight]] = None):
-  """Recursively interpolates coefficients according to the `interpolant_fns`.
+    interpolant_fns: OrderedDict[str, Callable[..., Interpolant]]):
+  """Interpolates coefficients according to the `interpolant_fns`.
 
   The `interpolant_fns` are provided as functions taking in a dictionary of
   `IndexAndWeight` objects that the interpolant might depend on and returning
@@ -208,33 +207,22 @@ def interpolate(
   this dependency.
 
   For example, if `coeffs` has rank 2, where the first axis is indexed by a
-  variable `x`, the second axis is indexed by a variable `y`, and `y` depends on
-  `x`, the interpolation can be done as follows:
+  variable `t`, the second axis is indexed by a variable `s`, and `s` depends on
+  `t`, the interpolation can be done as follows:
 
-  independent_x_interpolant = create_linear_interpolant(x, x_ref)
+  independent_t_interpolant = create_linear_interpolant(t, t_ref)
 
-  def dependent_y_interpolant_func(dep: Dict[Text, IndexAndWeight]):
-    x_idx = dep['x'].idx
-    y = compute_y(x_idx, ...)
-    return create_linear_interpolant(y, y_ref)
+  def dependent_s_interpolant_func(dep: Dict[Text, IndexAndWeight]):
+    t_idx = dep['t'].idx
+    s = compute_s(t_idx, ...)
+    return create_linear_interpolant(s, s_ref)
 
   interpolant_fns = {
-      'x': lambda _: independent_x_interp,
-      'y': dependent_y_interpolant_func,
+      't': lambda _: independent_x_interp,
+      's': dependent_s_interpolant_func,
   }
 
   interpolated_vals = interpolate(coeffs, interpolant_fns)
-
-  This function is implemented recursively, but the depth of the recursive tree
-  never exceeds the rank of the `coeffs` tensor, which is at most 3 in the
-  RRTMGP interpolations. The `idx_weight_list` contains indices and weights for
-  a particular branch of interpolation. The sum of lengths of `interpolant_fns`
-  and `idx_weight_list` will always equal the rank of `coeffs`. At each call of
-  this function, a branch of the next interpolant is selected until there are no
-  more branches left. At that point a weighted lookup is evaluated rendering the
-  interpolant value for that path. Recursively adding the weighted lookups of
-  the upper index branch and the lower index branch for each index variable
-  gives the interpolated values of the coefficients.
 
   Args:
     coeffs: The tensor of coefficients of arbitrary shape whose values will be
@@ -245,38 +233,27 @@ def interpolate(
       they should be sorted in topological order (dependent indices appearing
       after the indices they depend on). The axes of `coeffs` are assumed to
       already conform to this ordering.
-    idx_weight_by_varname: An ordered dictionary of `IndexAndWeight` objects
-      that will be used in the interpolation, indexed by variable name.
 
   Returns:
     A `tf.Tensor` of the same shape as any of the index tensors, but with the
     indices replaced by the interpolated coefficients.
   """
-  if idx_weight_by_varname is None:
-    idx_weight_by_varname = {}
-  if not interpolant_fns:
-    if not idx_weight_by_varname:
-      raise ValueError(
-          'The number of interpolant functions must equal the rank of `coeffs`.'
-      )
-    # Recursion base case.
-    return evaluate_weighted_lookup(
-        coeffs, list(idx_weight_by_varname.values())
+  weighted_indices = [OrderedDict()]
+  for varname, interpolant_fn in interpolant_fns.items():
+    for idx_weight_dict in list(weighted_indices):
+      interpolant = interpolant_fn(idx_weight_dict)
+      idx_weight_dict_low = idx_weight_dict.copy()
+      idx_weight_dict_low.update({varname: interpolant.interp_low})
+      weighted_indices.append(idx_weight_dict_low)
+      idx_weight_dict.update({varname: interpolant.interp_high})
+
+  weighted_vals = [
+      evaluate_weighted_lookup(coeffs, list(x.values()))
+      for x in weighted_indices
+  ]
+  weighted_sum = tf.nest.map_structure(tf.zeros_like, weighted_vals[0])
+  for weighted_val in weighted_vals:
+    weighted_sum = tf.nest.map_structure(
+        tf.math.add, weighted_sum, weighted_val
     )
-  else:
-    interpolant_fns = interpolant_fns.copy()
-    varname, interpolant_fn = interpolant_fns.popitem(last=False)
-    interpolant = interpolant_fn(idx_weight_by_varname)
-    # Branch into the lower index.
-    lower_idx_weight_dict = idx_weight_by_varname.copy()
-    lower_idx_weight_dict.update({varname: interpolant.interp_low})
-    lower = interpolate(
-        coeffs, interpolant_fns.copy(), lower_idx_weight_dict
-    )
-    # Branch into the higher index.
-    higher_idx_weight_dict = idx_weight_by_varname.copy()
-    higher_idx_weight_dict.update({varname: interpolant.interp_high})
-    higher = interpolate(
-        coeffs, interpolant_fns.copy(), higher_idx_weight_dict
-    )
-    return lower + higher
+  return weighted_sum

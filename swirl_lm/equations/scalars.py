@@ -351,9 +351,10 @@ class Scalars(object):
         diff_t = self._sgs_model.turbulent_diffusivity(
             (sc_mid,), (states[_KEY_U], states[_KEY_V], states[_KEY_W]),
             replicas, additional_states)
-        diffusivity = [
-            self._params.diffusivity(sc_name) + diff_t_i for diff_t_i in diff_t
-        ]
+        diffusivity = tf.nest.map_structure(
+            lambda diff_t_i: self._params.diffusivity(sc_name) + diff_t_i,  # pylint: disable=cell-var-from-loop
+            diff_t,
+        )
       else:
         diffusivity = tf.nest.map_structure(
             lambda sc: self._params.diffusivity(sc_name) * tf.ones_like(sc),  # pylint: disable=cell-var-from-loop

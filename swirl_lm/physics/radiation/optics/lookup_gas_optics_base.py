@@ -111,31 +111,33 @@ class AbstractLookupGasOptics(loader.DataLoaderBase, metaclass=abc.ABCMeta):
   # n_contrib_upper, 2)`.
   minor_upper_gpt_lims: tf.Tensor
   # Map from `g-point` to band.
-  g_point_to_bnd: Sequence[int]
+  g_point_to_bnd: tf.Tensor
   # Band number for minor contributor in the lower atmosphere
   # `(n_contrib_lower)`.
-  minor_lower_bnd: Sequence[int]
+  minor_lower_bnd: tf.Tensor
   # Band number for minor contributor in the upper atmosphere
   # `(n_contrib_upper)`.
-  minor_upper_bnd: Sequence[int]
+  minor_upper_bnd: tf.Tensor
   # Starting index to `idx_gases_minor_lower` for each band `(n_bnd)`.
-  minor_lower_bnd_start: Dict[int, int]
+  minor_lower_bnd_start: tf.Tensor
   # Starting index to `idx_gases_minor_upper` for each band `(n_bnd)`.
-  minor_upper_bnd_start: Dict[int, int]
+  minor_upper_bnd_start: tf.Tensor
+  minor_upper_bnd_end: tf.Tensor
+  minor_lower_bnd_end: tf.Tensor
   # Shift in `kminor_lower` for each band `(n_min_absrb_lower)`.
-  minor_lower_gpt_shift: Sequence[int]
+  minor_lower_gpt_shift: tf.Tensor
   # Shift in `kminor_upper` for each band `(n_min_absrb_upper)`.
-  minor_upper_gpt_shift: Sequence[int]
+  minor_upper_gpt_shift: tf.Tensor
   # Indices for minor gases contributing to absorption in the lower atmosphere
   # `(n_min_absrb_lower)`.
-  idx_minor_gases_lower: Dict[int, int]
+  idx_minor_gases_lower: tf.Tensor
   # Indices for minor gases contributing to absorption in the upper atmosphere
   # `(n_min_absrb_upper)`.
-  idx_minor_gases_upper: Dict[int, int]
+  idx_minor_gases_upper: tf.Tensor
   # Indices for scaling gases in the lower atmosphere `(n_min_absrb_lower)`.
-  idx_scaling_gases_lower: Dict[int, int]
+  idx_scaling_gases_lower: tf.Tensor
   # Indices for scaling gases in the upper atmosphere `(n_min_absrb_upper)`.
-  idx_scaling_gases_upper: Dict[int, int]
+  idx_scaling_gases_upper: tf.Tensor
   # Minor gas (lower atmosphere) scales with density? `(n_minor_absrb_lower)`.
   minor_lower_scales_with_density: tf.Tensor
   # Minor gas (upper atmosphere) scales with density? `(n_minor_absrb_upper)`.
@@ -164,7 +166,7 @@ class AbstractLookupGasOptics(loader.DataLoaderBase, metaclass=abc.ABCMeta):
       idx_gases: Dict[str, int],
       gases_minor_arr: Sequence[Any],
       scaling_gases_arr: Sequence[Any],
-  ) -> Tuple[Dict[int, int], Dict[int, int]]:
+  ) -> Tuple[tf.Tensor, tf.Tensor]:
     """Creates a mapping from the minor and scaling absorber to the RRTM index.
 
     Args:
@@ -186,8 +188,16 @@ class AbstractLookupGasOptics(loader.DataLoaderBase, metaclass=abc.ABCMeta):
     )
     gases_minor_arr = [cls._bytes_to_str(b) for b in gases_minor_arr]
     scaling_gases_arr = [cls._bytes_to_str(b) for b in scaling_gases_arr]
-    idx_minor = {i: idx_gases[g] for i, g in enumerate(gases_minor_arr) if g}
-    idx_scale = {i: idx_gases[g] for i, g in enumerate(scaling_gases_arr) if g}
+
+    def idx_tensor(arr):
+      idx = [-1] * len(arr)
+      for i, g in enumerate(arr):
+        if g:
+          idx[i] = idx_gases[g]
+      return tf.constant(idx)
+
+    idx_minor = idx_tensor(gases_minor_arr)
+    idx_scale = idx_tensor(scaling_gases_arr)
     return idx_minor, idx_scale
 
   @classmethod
@@ -196,7 +206,7 @@ class AbstractLookupGasOptics(loader.DataLoaderBase, metaclass=abc.ABCMeta):
       g_point_to_bnd: np.ndarray,
       minor_gpt_limits: np.ndarray,
       n_bnd: int,
-  ) -> Tuple[Sequence[int], Dict[int, int], Sequence[int]]:
+  ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:
     """Computes useful mappings and offsets for the minor gases.
 
     Args:
@@ -207,20 +217,25 @@ class AbstractLookupGasOptics(loader.DataLoaderBase, metaclass=abc.ABCMeta):
       n_bnd: The total number of frequency bands.
 
     Returns:
-      A 3-tuple containing 1) a mapping from minor absorber index to the
+      A 4-tuple containing 1) a mapping from minor absorber index to the
       frequency band it contributes to, 2) a mapping from the frequency band
       to the index of the first minor absorber that contributes to it (note that
-      minor absorbers are grouped by band), and 3) a mapping from the minor
-      absorber index to its first index in the absorption coefficient table.
+      minor absorbers are grouped by band), 3) a mapping from the frequency band
+      to the index of the last minor absorber that contributes to it, and 4) a
+      mapping from the minor absorber index to its first index in the absorption
+      coefficient table.
     """
     n_minor_absrb = minor_gpt_limits.shape[0]
     # Map from the minor absorber index to the band it contributes to.
     minor_bnd = [
         g_point_to_bnd[minor_gpt_limits[i, 0]] for i in range(n_minor_absrb)
     ]
-    minor_bnd_start = {
-        bnd: minor_bnd.index(bnd) for bnd in set(minor_bnd)
-    }
+    minor_bnd_start = [n_minor_absrb] * n_bnd
+    for bnd in set(minor_bnd):
+      minor_bnd_start[bnd] = minor_bnd.index(bnd)
+    minor_bnd_end = [n_minor_absrb] * n_bnd
+    for bnd in set(minor_bnd):
+      minor_bnd_end[bnd] = n_minor_absrb - 1 - minor_bnd[::-1].index(bnd)
 
     # Note that the `kminor` absorption coefficient table is indexed by all
     # combinations of minor absorbers and valid g-point, which is why the
@@ -236,7 +251,12 @@ class AbstractLookupGasOptics(loader.DataLoaderBase, metaclass=abc.ABCMeta):
           - minor_gpt_limits[i - 1, 0]
           + 1
       )
-    return (minor_bnd, minor_bnd_start, minor_gpt_shift)
+    return (
+        tf.constant(minor_bnd),
+        tf.constant(minor_bnd_start),
+        tf.constant(minor_bnd_end),
+        tf.constant(minor_gpt_shift),
+    )
 
   @classmethod
   def _load_data(
@@ -300,17 +320,24 @@ class AbstractLookupGasOptics(loader.DataLoaderBase, metaclass=abc.ABCMeta):
     g_point_to_bnd = np.asarray([None] * dims['gpt'])
     for i in range(dims['bnd']):
       g_point_to_bnd[bnd_limits_gpt[i, 0] : bnd_limits_gpt[i, 1] + 1] = i
+    g_point_to_bnd = np.array(g_point_to_bnd, dtype=np.int32)
     minor_lower_gpt_lims = ds['minor_limits_gpt_lower'][:].data - 1
-    minor_lower_bnd, minor_lower_bnd_start, minor_lower_gpt_shift = (
-        cls._minor_gas_mappings(
-            g_point_to_bnd, minor_lower_gpt_lims, dims['bnd']
-        )
+    (
+        minor_lower_bnd,
+        minor_lower_bnd_start,
+        minor_lower_bnd_end,
+        minor_lower_gpt_shift,
+    ) = cls._minor_gas_mappings(
+        g_point_to_bnd, minor_lower_gpt_lims, dims['bnd']
     )
     minor_upper_gpt_lims = ds['minor_limits_gpt_upper'][:].data - 1
-    minor_upper_bnd, minor_upper_bnd_start, minor_upper_gpt_shift = (
-        cls._minor_gas_mappings(
-            g_point_to_bnd, minor_upper_gpt_lims, dims['bnd']
-        )
+    (
+        minor_upper_bnd,
+        minor_upper_bnd_start,
+        minor_upper_bnd_end,
+        minor_upper_gpt_shift,
+    ) = cls._minor_gas_mappings(
+        g_point_to_bnd, minor_upper_gpt_lims, dims['bnd']
     )
     return dict(
         idx_h2o=idx_h2o,
@@ -336,21 +363,23 @@ class AbstractLookupGasOptics(loader.DataLoaderBase, metaclass=abc.ABCMeta):
         kmajor=tables['kmajor'],
         kminor_lower=tables['kminor_lower'],
         kminor_upper=tables['kminor_upper'],
-        bnd_lims_gpt=tables['bnd_limits_gpt'],
+        bnd_lims_gpt=tables['bnd_limits_gpt'] - 1,
         bnd_lims_wn=tables['bnd_limits_wavenumber'],
-        g_point_to_bnd=g_point_to_bnd,
-        minor_lower_bnd=minor_lower_bnd,
-        minor_lower_bnd_start=minor_lower_bnd_start,
-        minor_lower_gpt_shift=minor_lower_gpt_shift,
-        minor_upper_bnd=minor_upper_bnd,
-        minor_upper_bnd_start=minor_upper_bnd_start,
-        minor_upper_gpt_shift=minor_upper_gpt_shift,
-        idx_minor_gases_lower=idx_minor_gases_lower,
-        idx_scaling_gases_lower=idx_scaling_gases_lower,
-        idx_minor_gases_upper=idx_minor_gases_upper,
-        idx_scaling_gases_upper=idx_scaling_gases_upper,
-        minor_lower_gpt_lims=minor_lower_gpt_lims,
-        minor_upper_gpt_lims=minor_upper_gpt_lims,
+        g_point_to_bnd=tf.constant(g_point_to_bnd),
+        minor_lower_bnd=tf.constant(minor_lower_bnd),
+        minor_lower_bnd_start=tf.constant(minor_lower_bnd_start),
+        minor_lower_bnd_end=tf.constant(minor_lower_bnd_end),
+        minor_lower_gpt_shift=tf.constant(minor_lower_gpt_shift),
+        minor_upper_bnd=tf.constant(minor_upper_bnd),
+        minor_upper_bnd_start=tf.constant(minor_upper_bnd_start),
+        minor_upper_bnd_end=tf.constant(minor_upper_bnd_end),
+        minor_upper_gpt_shift=tf.constant(minor_upper_gpt_shift),
+        idx_minor_gases_lower=tf.constant(idx_minor_gases_lower),
+        idx_scaling_gases_lower=tf.constant(idx_scaling_gases_lower),
+        idx_minor_gases_upper=tf.constant(idx_minor_gases_upper),
+        idx_scaling_gases_upper=tf.constant(idx_scaling_gases_upper),
+        minor_lower_gpt_lims=tf.constant(minor_lower_gpt_lims),
+        minor_upper_gpt_lims=tf.constant(minor_upper_gpt_lims),
         minor_lower_scales_with_density=tables[
             'minor_scales_with_density_lower'
         ],

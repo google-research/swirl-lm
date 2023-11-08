@@ -143,20 +143,23 @@ class PoissonSolver(object):
 
     terms = []
     if 0 in indices:
-      terms.append([
-          x_i * self._params.dx**-2
-          for x_i in self._kernel_op.apply_kernel_op_x(f, 'kddx')
-      ])
+      terms.append(
+          tf.nest.map_structure(
+              lambda x_i: x_i * self._params.dx**-2,
+              self._kernel_op.apply_kernel_op_x(f, 'kddx'))
+      )
     if 1 in indices:
-      terms.append([
-          y_i * self._params.dy**-2
-          for y_i in self._kernel_op.apply_kernel_op_y(f, 'kddy')
-      ])
+      terms.append(
+          tf.nest.map_structure(
+              lambda y_i: y_i * self._params.dy**-2,
+              self._kernel_op.apply_kernel_op_y(f, 'kddy'))
+      )
     if 2 in indices:
-      terms.append([
-          z_i * self._params.dz**-2
-          for z_i in self._kernel_op.apply_kernel_op_z(f, 'kddz', 'kddzsh')
-      ])
+      terms.append(
+          tf.nest.map_structure(
+              lambda z_i: z_i * self._params.dz**-2,
+              self._kernel_op.apply_kernel_op_z(f, 'kddz', 'kddzsh'))
+      )
     return tuple(terms)
 
   def _laplacian(
@@ -165,10 +168,10 @@ class PoissonSolver(object):
       halo_update: Optional[_HaloUpdateFn] = None,
   ) -> FlowFieldVal:
     """Computes the Laplacian of `f`."""
-    return [
-        ddx_ + ddy_ + ddz_ for ddx_, ddy_, ddz_ in zip(  # pytype: disable=bad-unpacking
-            *self._laplacian_terms(f, halo_update=halo_update))
-    ]
+    laplacian_terms = self._laplacian_terms(f, halo_update=halo_update)
+    return tf.nest.map_structure(
+        lambda ddx_, ddy_, ddz_: ddx_ + ddy_ + ddz_,
+        laplacian_terms[0], laplacian_terms[1], laplacian_terms[2])
 
   def compute_residual(
       self,
@@ -222,10 +225,7 @@ class PoissonSolver(object):
     """
     # Using `rhs` instead of `f` here, as `f` might be a different type,
     # depending on the precision for the Poisson solver.
-    if rhs:
-      input_dtype = rhs[0].dtype
-    else:
-      input_dtype = _TF_DTYPE
+    input_dtype = rhs[0].dtype
 
     f = common_ops.tf_cast(f, internal_dtype)
     rhs = common_ops.tf_cast(rhs, internal_dtype)
@@ -241,7 +241,8 @@ class PoissonSolver(object):
     laplacian_f = self._laplacian(f)
     res = tf.stack(
         halo_exchange.clear_halos(
-            [lap_f - rhs_i for lap_f, rhs_i in zip(laplacian_f, rhs)],
+            tf.nest.map_structure(
+                lambda lap_f, rhs_i: lap_f - rhs_i, laplacian_f, rhs),
             halo_width))
 
     typed_norms = common_ops.compute_norm(res, norm_types, replicas)

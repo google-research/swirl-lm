@@ -27,8 +27,8 @@
 # limitations under the License.
 """Utility library for solving the radiative transfer equation (RTE)."""
 
-import enum
-from typing import List, Sequence, Tuple
+import inspect
+from typing import Callable, List, Sequence, Tuple
 
 import numpy as np
 from swirl_lm.communication import halo_exchange
@@ -40,21 +40,6 @@ import tensorflow as tf
 
 FlowFieldVal = types.FlowFieldVal
 FlowFieldMap = types.FlowFieldMap
-
-
-@enum.unique
-class RecurrentAlgorithmType(enum.Enum):
-  """Defines the distributed algorithm to be used in recurrent operations."""
-  # A sequential algorithm wherein the TPU topological layers compute the
-  # recurrent operation in series, waiting for output from the previous layer,
-  # then proceeding with their local computations and sending their recurrent
-  # output to the next layer.
-  SEQUENTIAL = 'sequential'
-  # A parallel algorithm wherein the TPU cores do as much operations in
-  # parallel as possible. This algorithm requires broader TPU communication
-  # and a larger memory overhead as each core is allowed more access to the
-  # global state.
-  PARALLEL = 'parallel'
 
 
 class RTEUtils:
@@ -131,69 +116,6 @@ class RTEUtils:
     paddings[dim] = (low_n, high_n)
     return common_ops.pad(f, paddings)
 
-  def cumulative_recurrent_affine_op_local(
-      self,
-      w: FlowFieldVal,
-      b: FlowFieldVal,
-      x0: FlowFieldVal,
-      dim: int,
-      n: int,
-      forward: bool = True,
-  ) -> Tuple[FlowFieldVal, FlowFieldVal]:
-    """Computes a local sequence of pointwise recurrent affine transformations.
-
-    Given 3D coefficients `w` and 3D bias terms `b`, this accumulates the
-    outputs of a chain of pointwise affine transformations along the given
-    dimension `dim` on the initial input plane `x0` following the recurrence
-    relation:
-
-    x[i] = w[i] * x[i - 1] + b[i]
-    if `forward` is True.
-
-    If `forward` is False, then the following recurrence relation is used:
-
-    x[i] = w[i] * x[i + 1] + b[i].
-
-    The initial input `x0` is not included in the final output.
-
-    Args:
-      w: The 3D variable that will be used as the coefficients of the affine
-        transformation.
-      b: The 3D variable that will be used as the additive (bias) terms of the
-        affine transformation.
-      x0: The 2D plane that is the input to the first affine transformation.
-      dim: The physical dimension along which the sequence of affine
-        transformations will be applied.
-      n: The number of layers in the final solution.
-      forward: Whether the accumulation starts with the first layer of
-        coefficients. If set to False, then the recurrence relation unravels
-        from the last layer to the first as follows:
-        x[i] = w[i] * x[i + 1] + b[i].
-
-    Returns:
-      A tuple containing 1) A 3D variable of the cumulative output from the
-      chain of affine transformations having the same structure as `w` and
-      2) the 2D output of the last recurrent affine transformation.
-    """
-    x = x0
-
-    face = 0 if forward else 1
-
-    def affine_fn(w, b, x0):
-      return w * x0 + b
-
-    for i in range(n):
-      prev_layer_idx = i - 1
-      prev_x = x0 if i == 0 else self.slice(x, dim, prev_layer_idx, face)
-      w_plane = self.slice(w, dim, i, face)
-      b_plane = self.slice(b, dim, i, face)
-      next_layer = tf.nest.map_structure(affine_fn, w_plane, b_plane, prev_x)
-      x = next_layer if i == 0 else self._append(x, next_layer, dim, forward)
-
-    last_local_layer = self.slice(x, dim, n - 1, face)
-
-    return x, last_local_layer
-
   def _generate_adjacent_pair_assignments(
       self, replicas: np.ndarray, axis: int, forward: bool
   ) -> List[np.ndarray]:
@@ -244,13 +166,72 @@ class RTEUtils:
       pair_groups.append(pair_group.tolist())
     return pair_groups
 
-  def _cumulative_recurrent_affine_op_sequential(
+  def _local_recurrent_op(
+      self,
+      recurrent_fn: Callable[..., tf.Tensor],
+      variables: FlowFieldMap,
+      dim: int,
+      n: int,
+      forward: bool = True,
+  ) -> Tuple[FlowFieldVal, FlowFieldVal]:
+    """Computes a sequence of recurrent operations along a dimension.
+
+    Each core performs the same operation on data local to it independently.
+    Note that the initial input `x0` in `variables` is not included in the final
+    output.
+
+    Args:
+      recurrent_fn: The local cumulative recurrent operation.
+      variables: A dictionary containing the local fields that will be inputs to
+        `recurrent_fn`. One of the entries must be `x0`, which should correspond
+        to the boundary solution that initiates the recurrence. `x0` has the
+        same structure as other fields in `variables` (i.e. either a 3-D
+        tf.Tensor or a list of 2D `tf.Tensor`s) but has a size of 1 along the
+        axis determined by `dim`.
+      dim: The physical dimension along which the sequence of affine
+        transformations will be applied.
+      n: The number of layers in the final solution.
+      forward: Whether the accumulation starts with the first layer of
+        coefficients. If set to False, then the recurrence relation unravels
+        from the last layer to the first as follows:
+        x[i] = recurrent_fn(x[i + 1]).
+
+    Returns:
+      A tuple containing 1) A 3D variable with the cumulative output from the
+      chain of recurrent transformations having the same structure and shape as
+      any field in `variables` that is not `x0`. 2) the 2D output of the last
+      recurrent transformation.
+    """
+    x = variables['x0']
+
+    face = 0 if forward else 1
+
+    for i in range(n):
+      prev_idx = i - 1
+      plane_args = {
+          k: self.slice(v, dim, i, face)
+          for k, v in variables.items()
+          if k != 'x0'
+      }
+      plane_args['x0'] = (
+          x if i == 0 else self.slice(x, dim, prev_idx, face)
+      )
+      arg_lst = [
+          plane_args[k] for k in inspect.getfullargspec(recurrent_fn).args
+      ]
+      next_layer = tf.nest.map_structure(recurrent_fn, *arg_lst)
+      x = next_layer if i == 0 else self._append(x, next_layer, dim, forward)
+
+    last_local_layer = self.slice(x, dim, n - 1, face)
+
+    return x, last_local_layer
+
+  def _cumulative_recurrent_op_sequential(
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
-      w: FlowFieldVal,
-      b: FlowFieldVal,
-      x0: FlowFieldVal,
+      recurrent_fn: Callable[..., FlowFieldVal],
+      variables: FlowFieldMap,
       dim: int,
       forward: bool = True,
   ) -> FlowFieldVal:
@@ -267,11 +248,10 @@ class RTEUtils:
       replica_id: The index of the current TPU replica.
       replicas: The mapping from the core coordinate to the local replica id
         `replica_id`.
-      w: The 3D variable that will be used as the coefficients of the affine
-        transformation.
-      b: The 3D variable that will be used as the additive (bias) terms of the
-        affine transformation.
-      x0: The 2D plane that is the input to the first affine transformation.
+      recurrent_fn: The local cumulative recurrent operation.
+      variables: A dictionary containing the local fields that will be inputs to
+        `recurrent_fn`. One of the entries must be `x0`, which should correspond
+        to the boundary solution that initiates the recurrence.
       dim: The physical dimension along which the sequence of affine
         transformations will be applied.
       forward: Whether the accumulation starts with the first layer of
@@ -280,23 +260,27 @@ class RTEUtils:
         x[i] = w[i] * x[i + 1] + b[i].
 
     Returns:
-      A 3D variable having the same structure and shape as `w` holding the
-      cumulative output of the sequence of affine transformations.
+      A 3D variable with the cumulative output from the chain of recurrent
+      transformations having the same structure and shape as any field in
+      `variables` that is not `x0`.
     """
     halos = [0] * 3
     halos[dim] = self.halos
 
-    # Remove halos along the axis.
-    w = common_ops.strip_halos(w, halos)
-    b = common_ops.strip_halos(b, halos)
-
     n = self.grid_size[dim] - 2 * self.halos
+
+    # Remove halos along the axis.
+    kwargs = {
+        k: common_ops.strip_halos(v, halos)
+        for k, v in variables.items()
+        if k != 'x0'
+    }
+    kwargs['x0'] = variables['x0']
 
     def local_fn(x0: FlowFieldVal) -> Tuple[FlowFieldVal, FlowFieldVal]:
       """Generates the output of a cumulative operation and its last layer."""
-      return self.cumulative_recurrent_affine_op_local(
-          w, b, x0, dim, n, forward
-      )
+      kwargs['x0'] = x0
+      return self._local_recurrent_op(recurrent_fn, kwargs, dim, n, forward)
 
     def communicate_fn(x):
       return tf.raw_ops.CollectivePermute(
@@ -309,7 +293,7 @@ class RTEUtils:
     # for the first level of the computational topology. All the subsequent
     # levels will need to wait for the output from the previous level before
     # evaluating their local function.
-    x_cum, x_out = local_fn(x0=x0)
+    x_cum, x_out = local_fn(x0=variables['x0'])
 
     pair_groups = self._generate_adjacent_pair_assignments(
         replicas, dim, forward
@@ -403,7 +387,7 @@ class RTEUtils:
 
     return cum_prod
 
-  def _cumulative_recurrent_affine_op_parallel(
+  def cumulative_recurrent_affine_op_parallel(
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
@@ -415,13 +399,32 @@ class RTEUtils:
   ) -> FlowFieldVal:
     """Computes a sequence of recurrent affine transformations globally.
 
+    Given 3D coefficients `w` and 3D bias terms `b`, this accumulates the
+    outputs of a chain of pointwise affine transformations along the given
+    dimension `dim` on the initial input plane `x0` following the recurrence
+    relation:
+
+    x[i] = w[i] * x[i - 1] + b[i]
+    if `forward` is True.
+
+    If `forward` is False, then the following recurrence relation is used:
+
+    x[i] = w[i] * x[i + 1] + b[i].
+
+    This accumulation happens globally across possibly multiple TPU cores,
+    ignoring the halo layers along the dimension `dim`. The output is padded so
+    its shape conforms to the shape of the input variables. The boundary value
+    near the face where the recurrent operation is initiated is set to `x0`. The
+    boundary value at the opposite face just repeats the values in the outermost
+    fluid layers.
+
     This implementation computes a partial local output first and then combines
     this local output with data from all the other replicas via an
     `tf.raw_ops.AllToAll` operation. This reduces idle time significantly as
     each core is able to work independently until the global communication
     happens. Furthermore, the TPU communication happens directly
-    between all pairs of cores without going through intermediate nodes in the
-    computational topology.
+    between all pairs of cores in the same axis without going through
+    intermediate nodes in the computational topology.
 
     Since this algorithm involves a local concatenation of 2D planes from all
     the TPU replicas along an axis, the HBM memory overhead can be potentially
@@ -442,12 +445,13 @@ class RTEUtils:
         transformations will be applied.
       forward: Whether the accumulation starts with the first layer of
         coefficients. If set to False, then the recurrence relation unravels
-        from the last layer to the first as follows:
-        x[i] = w[i] * x[i + 1] + b[i].
+        from the last layer to the first as follows: x[i] = w[i] * x[i + 1] +
+        b[i].
 
     Returns:
       A 3D variable having the same structure and shape as `w` holding the
-      cumulative output of the sequence of affine transformations.
+      cumulative output of the sequence of affine transformations and having
+      `x0` as the boundary value at the face that initiates the recurrence.
     """
     halos = [0] * 3
     halos[dim] = self.halos
@@ -472,9 +476,10 @@ class RTEUtils:
         true_fn=lambda: x0,
         false_fn=lambda: tf.nest.map_structure(tf.zeros_like, x0)
     )
-
-    local_cum_x, local_x_out = self.cumulative_recurrent_affine_op_local(
-        w, b, x0, dim, n, forward
+    local_vars = {'w': w, 'b': b, 'x0': x0}
+    affine_op = lambda w, b, x0: w * x0 + b
+    local_cum_x, local_x_out = self._local_recurrent_op(
+        affine_op, local_vars, dim, n, forward
     )
 
     local_w_cumprod = self.cum_prod(w, dim, forward)
@@ -505,8 +510,13 @@ class RTEUtils:
 
     # Run the cumulative recurrent affine operation again, this time on the
     # partial outputs of all the cores.
-    global_x, _ = self.cumulative_recurrent_affine_op_local(
-        global_w, global_b, global_x0, dim, num_cores, forward
+    global_vars = {
+        'w': global_w,
+        'b': global_b,
+        'x0': global_x0,
+    }
+    global_x, _ = self._local_recurrent_op(
+        affine_op, global_vars, dim, num_cores, forward
     )
 
     prev_core_idx = core_idx - 1 if forward else core_idx + 1
@@ -531,86 +541,12 @@ class RTEUtils:
           prev_x,
       )
 
-    value = tf.cond(
-        pred=tf.equal(core_idx, first_core_idx),
-        true_fn=lambda: local_cum_x,
-        false_fn=combine_local_and_global_fn,
-    )
-
-    return self._pad(value, self.halos, self.halos, dim)
-
-  def cumulative_recurrent_affine_op(
-      self,
-      replica_id: tf.Tensor,
-      replicas: np.ndarray,
-      w: FlowFieldVal,
-      b: FlowFieldVal,
-      x0: FlowFieldVal,
-      dim: int,
-      forward: bool,
-      mode: RecurrentAlgorithmType = RecurrentAlgorithmType.PARALLEL,
-  ) -> FlowFieldVal:
-    """Computes a sequence of recurrent affine transformations globally.
-
-    Given 3D coefficients `w` and 3D bias terms `b`, this accumulates the
-    outputs of a chain of pointwise affine transformations along the given
-    dimension `dim` on the initial input plane `x0` following the recurrence
-    relation:
-
-    x[i] = w[i] * x[i - 1] + b[i]
-    if `forward` is True.
-
-    If `forward` is False, then the following recurrence relation is used:
-
-    x[i] = w[i] * x[i + 1] + b[i].
-
-    This accumulation happens globally across possibly multiple TPU cores,
-    ignoring the halo layers along the dimension `dim`. The output is padded so
-    its shape conforms to the shape of the input variables. The boundary value
-    near the face where the recurrent operation is initiated is set to `x0`. The
-    boundary value at the opposite face just repeats the values in the outermost
-    fluid layers.
-
-    Args:
-      replica_id: The index of the current TPU replica.
-      replicas: The mapping from the core coordinate to the local replica id
-        `replica_id`.
-      w: The 3D variable that will be used as the coefficients of the affine
-        transformation.
-      b: The 3D variable that will be used as the additive (bias) terms of the
-        affine transformation.
-      x0: The 2D plane that is the input to the first affine transformation.
-      dim: The physical dimension along which the sequence of affine
-        transformations will be applied.
-      forward: Whether the accumulation starts with the first layer of
-        coefficients. If set to False, then the recurrence relation unravels
-        from the last layer to the first as follows: x[i] = w[i] * x[i + 1] +
-        b[i].
-      mode: The algorithm to compute the reccurent operation. It should be one
-        of 'parallel' or 'sequential'. If 'sequential' the cores will
-        evaluate the cumulative operation sequentially, but with minimal memory
-        overhead. If 'parallel', the cores will parallelize the computation as
-        much as possible. The lower runtime of this mode comes at the cost of
-        greater memory overhead, as the partial results from all cores need to
-        be materialized in each core.
-
-    Returns:
-      A 3D variable having the same structure and shape as `w` holding the
-      cumulative output of the sequence of affine transformations and having
-      `x0` as the boundary value at the face that initiates the recurrence.
-    """
-    if mode.value == 'parallel':
-      val = self._cumulative_recurrent_affine_op_parallel(
-          replica_id, replicas, w, b, x0, dim, forward
-      )
-    elif mode.value == 'sequential':
-      val = self._cumulative_recurrent_affine_op_sequential(
-          replica_id, replicas, w, b, x0, dim, forward
-      )
-    else:
-      raise ValueError(
-          'Unsupported recurrent computation mode: {mode}.'
-      )
+    val = self._pad(
+        tf.cond(
+            pred=tf.equal(core_idx, first_core_idx),
+            true_fn=lambda: local_cum_x,
+            false_fn=combine_local_and_global_fn,
+        ), self.halos, self.halos, dim)
 
     # If the variables are 3D tensors, skip the halo exchange as it is not yet
     # supported for 3D tensors.
@@ -622,6 +558,80 @@ class RTEUtils:
     # if set along one of the tensor dimensions, a list of thin tensors of
     # dimension (1, ny) or (nx, 1) is expected.
     if dim == 2 and isinstance(x0, Sequence):
+      x0 = x0[0]
+
+    face = 0 if forward else 1
+    bc = [[(halo_exchange.BCType.NEUMANN, 0.0)] * 2 for _ in range(3)]
+    # Set the boundary plane that initiates the recurrent operation above as the
+    # halo values.
+    bc[dim][face] = (
+        halo_exchange.BCType.DIRICHLET,
+        [x0] * self.halos,
+    )
+    return halo_exchange.inplace_halo_exchange(
+        val,
+        (0, 1, 2),
+        replica_id,
+        replicas,
+        (0, 1, 2),
+        (False, False, False),
+        boundary_conditions=bc,
+        width=self.halos,
+    )
+
+  def cumulative_recurrent_op(
+      self,
+      replica_id: tf.Tensor,
+      replicas: np.ndarray,
+      recurrent_fn: Callable[..., FlowFieldVal],
+      variables: FlowFieldMap,
+      dim: int,
+      forward: bool = True,
+  ) -> FlowFieldVal:
+    """Applies a recurrent operation globally along a specified dimension.
+
+    This global operation is sequential and will process each layer along `dim`
+    at a time in increase order if `forward` is `True` and in decreasing order
+    otherwise. As a consequence, if there are multiple TPU cores assigned to
+    dimension `dim` in the computational topology some cores will experience
+    idleness as they wait for previous layers residing in other cores to be
+    processed.
+
+    Args:
+      replica_id: The index of the current TPU replica.
+      replicas: The mapping from the core coordinate to the local replica id
+        `replica_id`.
+      recurrent_fn: The cumulative recurrent operation.
+      variables: A dictionary containing the local fields that will be inputs to
+        `recurrent_fn`. One of the entries must be `x0`, which should correspond
+        to the boundary solution that initiates the recurrence.
+      dim: The physical dimension along which the sequence of affine
+        transformations will be applied.
+      forward: Whether the accumulation starts with the first layer of
+        coefficients. If set to False, then the recurrence relation unravels
+        from the last layer to the first as follows:
+        x[i] = recurrent_fn({'x0': x[i + 1], ...})
+
+    Returns:
+      A 3D variable with the cumulative output from the chain of recurrent
+      transformations having the same structure and shape as any field in
+      `variables` that is not `x0` and having `x0` as the boundary value at the
+      face that initiates the recurrence.
+    """
+    val = self._cumulative_recurrent_op_sequential(
+        replica_id, replicas, recurrent_fn, variables, dim, forward
+    )
+
+    # If the variables are 3D tensors, skip the halo exchange as it is not yet
+    # supported for 3D tensors.
+    x0 = variables['x0']
+    if isinstance(x0, tf.Tensor):
+      return val
+    # If the boundary condition is set along the list dimension, the halo
+    # exchange expects the boundary plane represented as a 2D tensor. Otherwise,
+    # if set along one of the tensor dimensions, a list of thin tensors of
+    # dimension (1, ny) or (nx, 1) is expected.
+    elif dim == 2:
       x0 = x0[0]
 
     face = 0 if forward else 1

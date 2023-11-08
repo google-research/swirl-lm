@@ -47,6 +47,7 @@ LookupGasOpticsShortwave = lookup_gas_optics_shortwave.LookupGasOpticsShortwave
 LookupVolumeMixingRatio = lookup_volume_mixing_ratio.LookupVolumeMixingRatio
 
 _PASCAL_TO_HPASCAL_FACTOR = 0.01
+_M2_TO_CM2_FACTOR = 1e4
 
 
 def _pressure_interpolant(
@@ -132,7 +133,7 @@ def _compute_relative_abundance_interpolant(
     vmr_lib: LookupVolumeMixingRatio,
     troposphere_idx: tf.Tensor,
     temperature_idx: tf.Tensor,
-    ibnd: int,
+    ibnd: tf.Tensor,
     scale_by_mixture: bool,
     vmr_fields: Optional[Dict[int, tf.Tensor]] = None,
 ) -> Interpolant:
@@ -200,7 +201,7 @@ def compute_major_optical_depth(
     molecules: tf.Tensor,
     temperature: tf.Tensor,
     p: tf.Tensor,
-    igpt: int,
+    igpt: tf.Tensor,
     vmr_fields: Optional[Dict[int, tf.Tensor]] = None,
 ) -> tf.Tensor:
   """Computes the optical depth contributions from major gases.
@@ -260,7 +261,7 @@ def compute_major_optical_depth(
       ('p', lambda _: p_interp),
       ('m', mix_interpolant_fn),
   ))
-  return molecules * optics_utils.interpolate(
+  return molecules / _M2_TO_CM2_FACTOR * optics_utils.interpolate(
       lookup_gas_optics.kmajor[..., igpt], interpolant_fns=interpolant_fn_dict
   )
 
@@ -271,7 +272,7 @@ def _compute_minor_optical_depth(
     molecules: tf.Tensor,
     temperature: tf.Tensor,
     p: tf.Tensor,
-    igpt: int,
+    igpt: tf.Tensor,
     is_lower_atmosphere: bool,
     vmr_fields: Optional[Dict[int, tf.Tensor]] = None,
 ) -> tf.Tensor:
@@ -304,9 +305,6 @@ def _compute_minor_optical_depth(
       x=tf.ones_like(p, dtype=tf.int32),
       y=tf.zeros_like(p, dtype=tf.int32),
   )
-  minor_absorber_to_bnd = (
-      lookup.minor_lower_bnd if is_lower_atmosphere else lookup.minor_upper_bnd
-  )
   minor_absorber_intervals = (
       lookup.n_minor_absrb_lower
       if is_lower_atmosphere
@@ -316,6 +314,11 @@ def _compute_minor_optical_depth(
       lookup.minor_lower_bnd_start
       if is_lower_atmosphere
       else lookup.minor_upper_bnd_start
+  )
+  minor_bnd_end = (
+      lookup.minor_lower_bnd_end
+      if is_lower_atmosphere
+      else lookup.minor_upper_bnd_end
   )
   idx_gases_minor = (
       lookup.idx_minor_gases_lower
@@ -356,8 +359,6 @@ def _compute_minor_optical_depth(
   else:
     dry_factor = 1.0
 
-  tau_minor = tf.zeros_like(temperature)
-
   def mix_interpolant_fn(dep: Dict[Text, IndexAndWeight]) -> Interpolant:
     """Relative abundance interpolant that depends on `t`."""
     t_idx = dep['t'].idx
@@ -365,33 +366,47 @@ def _compute_minor_optical_depth(
         lookup, vmr_lib, tropo_idx, t_idx, ibnd, False, vmr_fields,
     )
 
-  if ibnd not in minor_bnd_start:
-    return tau_minor
+  def scaling_fn(scaling_vmr, dry_factor):
+    return lambda: scaling_vmr * dry_factor
+
+  def scaling_by_complement_fn(scaling_vmr, dry_factor):
+    return lambda: (1.0 - scaling_vmr * dry_factor)
+
+  def scale_with_gas_fn(i):
+    sgas = tf.maximum(idx_scaling_gas[i], 0)
+    sgas_idx = sgas * tf.ones_like(tropo_idx)
+    scaling_vmr = get_vmr(lookup, vmr_lib, sgas_idx, vmr_fields)
+    scaling = tf.cond(
+        pred=tf.equal(scale_by_complement[i], 1),
+        true_fn=scaling_by_complement_fn(scaling_vmr, dry_factor),
+        false_fn=scaling_fn(scaling_vmr, dry_factor),
+    )
+    return lambda: scaling
+
+  def scale_with_density_fn(i):
+    scaling = _PASCAL_TO_HPASCAL_FACTOR * p / temperature
+    scaling *= tf.cond(
+        pred=tf.greater(idx_scaling_gas[i], 0),
+        true_fn=scale_with_gas_fn(i),
+        false_fn=lambda: tf.ones_like(p),
+    )
+    return lambda: scaling
 
   # Optical depth will be aggregated over all the minor absorbers contributing
-  # to the g-point and frequency band.
-  for i in range(minor_bnd_start[ibnd], minor_absorber_intervals):
-    if minor_absorber_to_bnd[i] != ibnd:
-      # No additional minor absorbers contributing to band 'ibnd'.
-      break
+  # to the frequency band.
+  def step_fn(i, tau_minor):
     # Map the minor contributor to the RRTMGP gas index.
     gas_idx = idx_gases_minor[i] * tf.ones_like(tropo_idx)
     vmr_minor = get_vmr(lookup, vmr_lib, gas_idx, vmr_fields)
-    scaling = vmr_minor * molecules
-    if minor_scales_with_density[i] == 1:
-      scaling *= _PASCAL_TO_HPASCAL_FACTOR * p / temperature
-      if i in idx_scaling_gas:
-        sgas = idx_scaling_gas[i]
-        sgas_idx = sgas * tf.ones_like(tropo_idx)
-        scaling_vmr = get_vmr(lookup, vmr_lib, sgas_idx, vmr_fields)
-        if scale_by_complement[i] == 1:
-          scaling *= (1.0 - scaling_vmr * dry_factor)
-        else:
-          scaling *= scaling_vmr * dry_factor
+    scaling = vmr_minor * molecules / _M2_TO_CM2_FACTOR
+    scaling *= tf.cond(
+        pred=tf.equal(minor_scales_with_density[i], 1),
+        true_fn=scale_with_density_fn(i),
+        false_fn=lambda: tf.ones_like(p),
+    )
     # Obtain the global contributor index needed to index into the `kminor`
     # table.
     k_loc = minor_gpt_shift[i] + loc_in_bnd
-
     tau_minor += (
         optics_utils.interpolate(
             kminor[..., k_loc],
@@ -402,7 +417,29 @@ def _compute_minor_optical_depth(
         )
         * scaling
     )
-  return tau_minor
+    return i + 1, tau_minor
+
+  def stop_condition(i, tau_minor):
+    del tau_minor
+    return tf.logical_and(
+        tf.less_equal(i, minor_bnd_end[ibnd]),
+        tf.less(i, minor_absorber_intervals),
+    )
+  minor_start_idx = minor_bnd_start[ibnd]
+  i0 = tf.cond(
+      tf.greater_equal(minor_start_idx, 0),
+      true_fn=lambda: minor_start_idx,
+      false_fn=lambda: minor_absorber_intervals
+  )
+  tau_minor_0 = tf.zeros_like(temperature)
+  return tf.nest.map_structure(
+      tf.stop_gradient,
+      tf.while_loop(
+          cond=stop_condition,
+          body=step_fn,
+          loop_vars=(i0, tau_minor_0),
+      ),
+  )[1]
 
 
 def compute_minor_optical_depth(
@@ -411,7 +448,7 @@ def compute_minor_optical_depth(
     molecules: tf.Tensor,
     temperature: tf.Tensor,
     p: tf.Tensor,
-    igpt: int,
+    igpt: tf.Tensor,
     vmr_fields: Optional[Dict[int, tf.Tensor]] = None,
 ) -> tf.Tensor:
   """Computes the optical depth contributions from minor gases.
@@ -464,7 +501,7 @@ def compute_rayleigh_optical_depth(
     molecules: tf.Tensor,
     temperature: tf.Tensor,
     p: tf.Tensor,
-    igpt: int,
+    igpt: tf.Tensor,
     vmr_fields: Optional[Dict[int, tf.Tensor]] = None,
 ) -> tf.Tensor:
   """Computes the optical depth contribution from Rayleigh scattering.
@@ -525,6 +562,7 @@ def compute_rayleigh_optical_depth(
   return (
       factor
       * molecules
+      / _M2_TO_CM2_FACTOR
       * tf.where(
           condition=tf.equal(tropo_idx, 1),
           x=rayl_tau_upper,
@@ -538,7 +576,7 @@ def compute_planck_fraction(
     vmr_lib: LookupVolumeMixingRatio,
     p: tf.Tensor,
     temperature: tf.Tensor,
-    igpt: int,
+    igpt: tf.Tensor,
     vmr_fields: Optional[Dict[int, tf.Tensor]] = None,
 ) -> tf.Tensor:
   """Computes the Planck fraction that will be used to weight the Planck source.
@@ -582,7 +620,7 @@ def compute_planck_fraction(
         tropo_idx,
         dep['t'].idx,
         ibnd,
-        True,
+        False,
         vmr_fields,
     )
 
@@ -602,7 +640,7 @@ def compute_planck_sources(
     lookup: LookupGasOpticsLongwave,
     planck_fraction: tf.Tensor,
     temperature: tf.Tensor,
-    igpt: int,
+    igpt: tf.Tensor,
 ) -> tf.Tensor:
   """Computes the Planck source for the longwave problem.
 

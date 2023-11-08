@@ -26,7 +26,50 @@ message BoundaryCondition {
   // The name of the variable for which the boundary conditions belongs to.
   optional string name = 1;
 
+  message BoundaryConditionParams {
+    // This controls the step_id when the buffer storing the boundary condition
+    // value is initialized to a desired value. The specific initialization will
+    // depend on the type of the boundary condition.
+    // Currently this is only used for NONREFLECTING boundary type.
+    optional int32 buffer_init_step = 1 [default = 0];
+
+    // This only applies for NONREFLECTING boundary condition type. It
+    // controls how the phase velocity in the convective nonreflecting boundary
+    // condition is determined. Specifically,
+    //
+    //      ∂ϕ/∂t = - U* ∂ϕ/∂x, for the "high" side of the domain, and
+    //      ∂ϕ/∂t = + U* ∂ϕ/∂x, for the "low" side of the domain, and
+    //
+    // for NONREFLECTING_LOCAL_MAX, the phase velocity is calculated on the
+    // boundary as local point-wise max:
+    //
+    //      U* = abs(max(u + u0, 0)), for the "high" end, and
+    //      U* = abs(min(u - u0, 0)), for the "low" end.
+    //
+    // For NONREFLECTING_GLOBAL_MEAN:
+    //
+    //      U* = abs(global_mean(u) + u0), for the "high" end, and
+    //      U* = abs(global_mean(u) - u0), for the "low" end.
+    //
+    // where `mean` is the global mean over the entire boundary.
+    //
+    // For  NONREFLECTING_GLOBAL_MAX:
+    //
+    //      U* = abs(max(global_max(u), 0) + u0), for the "high" end, and
+    //      U* = abs(min(global_min(u), 0) - u0), for the "low" end.
+    //
+    // Note that `u0` is specified as the value in BoundaryInfo.
+    enum NonReflectingMode {
+      NONREFLECTING_LOCAL_MAX = 0;
+      NONREFLECTING_GLOBAL_MEAN = 1;
+      NONREFLECTING_GLOBAL_MAX = 2;
+    }
+    optional NonReflectingMode nonreflecting_bc_mode = 2
+        [default = NONREFLECTING_LOCAL_MAX];
+  }
+
   // The information of a boundary condition for a specific fase.
+  // Next id: 6.
   message BoundaryInfo {
     // The dimension of the boundary condition.
     optional int32 dim = 1;
@@ -40,6 +83,8 @@ message BoundaryCondition {
     // TODO(wqing): make the value a 2D/3D array so that it can represent more
     // complex boundary conditions.
     optional float value = 4;
+    // Parameters associated with the specific boundary condition.
+    optional BoundaryConditionParams bc_params = 5;
   }
   // The detailed information of each boundary.
   repeated BoundaryInfo boundary_info = 2;

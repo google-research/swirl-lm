@@ -279,15 +279,17 @@ class SgsModel(object):
       coeff = np.sqrt(self._params.smagorinsky.pr_t) if use_pr_t else 1.0
 
       if additional_states is not None and 'c_s' in additional_states.keys():
-        c_s = [
-            c_s_i / coeff
-            for c_s_i in additional_states['c_s']
-        ]
+        c_s = tf.nest.map_structure(
+            lambda c_s_i: c_s_i / coeff,
+            additional_states['c_s'],
+        )
       else:
-        c_s = [
-            self._params.smagorinsky.c_s / coeff *
-            tf.ones_like(var, dtype=var.dtype) for var in field_vars[0]
-        ]
+        c_s = tf.nest.map_structure(
+            lambda var: self._params.smagorinsky.c_s  # pylint: disable=g-long-lambda
+            / coeff
+            * tf.ones_like(var),
+            field_vars[0],
+        )
       diff_t = (
           self.smagorinsky(velocity, self._delta, c_s)
           if use_pr_t
@@ -633,24 +635,26 @@ class SgsModel(object):
     def richardson_number():
       """Computes the Richardson number."""
       dt_dz = self._kernel_op.apply_kernel_op_z(temperature, 'kDz', 'kDzsh')
-      buoyancy_freq_square = [
-          constants.G / t_i * dt_dz_i for t_i, dt_dz_i in zip(
-              temperature, dt_dz)
-      ]
-      return [
-          tf.math.divide_no_nan(n_square, s**2)
-          for n_square, s in zip(buoyancy_freq_square, strain_rate_magnitude)
-      ]
+      buoyancy_freq_square = tf.nest.map_structure(
+          lambda t_i, dt_dz_i: constants.G / t_i * dt_dz_i, temperature, dt_dz
+      )
+      return tf.nest.map_structure(
+          lambda n_square, s: tf.math.divide_no_nan(n_square, s**2),
+          buoyancy_freq_square,
+          strain_rate_magnitude,
+      )
 
     def f_b():
       """Computes the stratification correction coefficient."""
       ri = richardson_number()
-      return [  # pylint: disable=g-complex-comprehension
-          tf.compat.v1.where(
-              tf.less_equal(ri_i, 0.0), tf.ones_like(ri_i, dtype=ri_i.dtype),
-              tf.math.pow(tf.maximum(0.0, 1.0 - ri_i / pr_t), 0.25))
-          for ri_i in ri
-      ]
+      return tf.nest.map_structure(
+          lambda ri_i: tf.compat.v1.where(  # pylint: disable=g-long-lambda
+              tf.less_equal(ri_i, 0.0),
+              tf.ones_like(ri_i),
+              tf.math.pow(tf.maximum(0.0, 1.0 - ri_i / pr_t), 0.25),
+          ),
+          ri,
+      )
 
     nvar = len(field_vars)
 
@@ -669,13 +673,16 @@ class SgsModel(object):
     du_dx = calculus.grad(self._kernel_op, velocity, delta)
     s_ij = _strain_rate_tensor(du_dx)
     strain_rate_magnitude = _strain_rate_magnitude(s_ij)
-
-    delta_updated = [
-        np.power(np.prod(delta), 1.0 / 3.0) * f_b_i for f_b_i in f_b()
-    ]
-
-    return [tf.math.minimum((c_s * delta_l)**2 * s_l, self._params.diff_t_max)
-            for delta_l, s_l in zip(delta_updated, df_magnitude)]
+    delta_updated = tf.nest.map_structure(
+        lambda f_b_i: np.power(np.prod(delta), 1.0 / 3.0) * f_b_i, f_b()
+    )
+    return tf.nest.map_structure(
+        lambda delta_l, s_l: tf.math.minimum(  # pylint: disable=g-long-lambda
+            (c_s * delta_l) ** 2 * s_l, self._params.diff_t_max
+        ),
+        delta_updated,
+        df_magnitude,
+    )
 
   def vreman(
       self,

@@ -282,30 +282,42 @@ def _diffusion_momentum_stencil_3(
 
   # Prepares the scaled/unscaled viscosity on faces.
   mu_dim = [
-      [0.5 * mu_sum for mu_sum in sum_backward_fn[i](mu)] for i in range(3)
+      tf.nest.map_structure(lambda mu_sum: 0.5 * mu_sum, sum_backward_fn[i](mu))
+      for i in range(3)
   ]
-  four_thirds_mu = [[4.0 / 3.0 * mu_i for mu_i in mu_dim[i]] for i in range(3)]
-  two_thirds_mu = [2.0 / 3.0 * mu_i for mu_i in mu]
+  four_thirds_mu = [
+      tf.nest.map_structure(lambda mu_i: 4.0 / 3.0 * mu_i, mu_dim[i])
+      for i in range(3)
+  ]
+  two_thirds_mu = tf.nest.map_structure(lambda mu_i: 2.0 / 3.0 * mu_i, mu)
 
+  # pylint: disable=g-complex-comprehension
   # Computes velocity gradients on faces along all directions. These gradients
   # used to compute second order derivatives of velocity along the gradient
   # direction.
-  flux_u = {  # pylint: disable=g-complex-comprehension
-      k: [[
-          flux / grid_spacing[dim]
-          for flux in flux_backward_fn[dim](velocity[k])
+  flux_u = {
+      k: [
+          tf.nest.map_structure(
+              lambda flux: flux / grid_spacing[dim],  # pylint: disable=cell-var-from-loop
+              flux_backward_fn[dim](velocity[k]),
+          )
+          for dim in range(3)
       ]
-          for dim in range(3)] for k in common.KEYS_VELOCITY
+      for k in common.KEYS_VELOCITY
   }
   # Computes velocity gradients with central difference. These gradients are
   # used to compute the cross terms in second order derivatives of velocity.
-  grad_central_u = {  # pylint: disable=g-complex-comprehension
-      k: [[
-          grad / (2.0 * grid_spacing[dim])
-          for grad in grad_central_fn[dim](velocity[k])
+  grad_central_u = {
+      k: [
+          tf.nest.map_structure(
+              lambda grad: grad / (2.0 * grid_spacing[dim]),  # pylint: disable=cell-var-from-loop
+              grad_central_fn[dim](velocity[k]),
+          )
+          for dim in range(3)
       ]
-          for dim in range(3)] for k in common.KEYS_VELOCITY
+      for k in common.KEYS_VELOCITY
   }
+  # pylint: enable=g-complex-comprehension
 
   # Functions that are used to compute the diffusion terms.
   def tangential_diffusion_fn(dim):

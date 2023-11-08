@@ -16,6 +16,7 @@
 
 from typing import Any, Callable, Dict, Optional, Sequence
 
+from absl import logging
 import numpy as np
 from swirl_lm.physics.radiation.config import radiative_transfer_pb2
 from swirl_lm.physics.radiation.optics import constants
@@ -60,37 +61,185 @@ class RRTMOptics(optics_base.OpticsScheme):
         rrtm_params.shortwave_nc_filepath
     )
 
-  def _compute_optical_depth_fn(
+  @tf.function
+  def _od_fn_graph(
       self,
-      lookup_gas_optics: AbstractLookupGasOptics,
-      mols: tf.Tensor,
+      is_lw: bool,
+      igpt: tf.Tensor,
+      molecules: tf.Tensor,
       temperature: tf.Tensor,
       pressure: tf.Tensor,
-      igpt: int,
+      vmr_fields: Optional[Dict[int, tf.Tensor]]
+  ) -> tf.Tensor:
+    """The actual optical_depth calculation as a graph."""
+    logging.info('Calling optical depth graph.')
+    lookup_gas_optics = self.gas_optics_lw if is_lw else self.gas_optics_sw
+    return (gas_optics.compute_minor_optical_depth(
+        lookup_gas_optics,
+        self.vmr_lib,
+        molecules,
+        temperature,
+        pressure,
+        igpt,
+        vmr_fields,
+    ) + gas_optics.compute_major_optical_depth(
+        lookup_gas_optics,
+        self.vmr_lib,
+        molecules,
+        temperature,
+        pressure,
+        igpt,
+        vmr_fields,
+    ))
+
+  def _optical_depth_fn(
+      self, igpt: tf.Tensor, is_lw: bool
+  ):
+    """Creates a callable Tensorflow graph for computing the optical depth.
+
+    The returned callable graph exposes a signature that is in terms of
+    `tf.Tensor`s and is less likely to be unnecessarily retraced by the
+    compiler.
+
+    Args:
+      igpt: The g-point that will be used to index into the RRTMGP lookup table.
+      is_lw: If `True`, uses the longwave lookup. Otherwise, uses the shortwave
+        lookup.
+
+    Returns:
+      A callable Tensorflow graph that computes the optical depth given fields
+      for the number of molecules per area, pressure, and volume mixing ratio of
+      various gases.
+    """
+    def od_fn(
+        molecules,
+        temperature,
+        pressure,
+        vmr_fields
+    ) -> tf.Tensor:
+      return self._od_fn_graph(
+          is_lw, igpt, molecules, temperature, pressure, vmr_fields)
+
+    return od_fn
+
+  @tf.function
+  def _rayl_fn_graph(
+      self,
+      igpt: tf.Tensor,
+      molecules: tf.Tensor,
+      temperature: tf.Tensor,
+      pressure: tf.Tensor,
+      vmr_fields: Optional[Dict[int, tf.Tensor]]
+  ) -> tf.Tensor:
+    """The actual Rayleigh scattering calculation as a graph."""
+    logging.info('Calling Rayleigh scattering graph.')
+    return gas_optics.compute_rayleigh_optical_depth(
+        self.gas_optics_sw,
+        self.vmr_lib,
+        molecules,
+        temperature,
+        pressure,
+        igpt,
+        vmr_fields,
+    )
+
+  def rayleigh_scattering_fn(self, igpt: tf.Tensor):
+    """Creates a callable Tensorflow graph for computing Rayleigh scattering.
+
+    Args:
+      igpt: The g-point that will be used to index into the RRTMGP lookup table.
+
+    Returns:
+      A callable Tensorflow graph that computes the Rayleigh scattering optical
+      depth given fields for the number of molecules per area, temperature,
+      pressure, and volume mixing ratio of various gases.
+    """
+    def rayl_fn(
+        molecules,
+        temperature,
+        pressure,
+        vmr_fields,
+    ) -> tf.Tensor:
+      return self._rayl_fn_graph(
+          igpt, molecules, temperature, pressure, vmr_fields)
+
+    return rayl_fn
+
+  @tf.function
+  def _pf_fn_graph(
+      self,
+      igpt: tf.Tensor,
+      pressure: tf.Tensor,
+      temperature: tf.Tensor,
       vmr_fields: Optional[Dict[int, tf.Tensor]] = None,
   ) -> tf.Tensor:
-    """Computes total optical depth from major and minor gas contributions."""
-    major_optical_depth = gas_optics.compute_major_optical_depth(
-        lookup_gas_optics,
+    """The actual Planck fraction calculation as a graph."""
+    logging.info('Calling Planck fraction graph.')
+    return gas_optics.compute_planck_fraction(
+        self.gas_optics_lw,
         self.vmr_lib,
-        mols,
-        temperature,
         pressure,
+        temperature,
         igpt,
         vmr_fields,
     )
 
-    minor_optical_depth = gas_optics.compute_minor_optical_depth(
-        lookup_gas_optics,
-        self.vmr_lib,
-        mols,
+  def planck_fraction_fn(
+      self,
+      igpt: tf.Tensor,
+  ):
+    """Creates a callable Tensorflow graph for computing the Planck fraction.
+
+    Args:
+      igpt: The g-point that will be used to index into the RRTMGP lookup table.
+
+    Returns:
+      A callable Tensorflow graph that computes the Planck fraction given fields
+      for pressure, temperature and volume mixing ratio of various gases.
+    """
+    def pf_fn(
+        pressure: tf.Tensor,
+        temperature: tf.Tensor,
+        vmr_fields: Optional[Dict[int, tf.Tensor]] = None,
+    ) -> tf.Tensor:
+      return self._pf_fn_graph(igpt, pressure, temperature, vmr_fields)
+    return pf_fn
+
+  @tf.function
+  def _ps_fn_graph(
+      self,
+      igpt: tf.Tensor,
+      planck_fraction: tf.Tensor,
+      temperature: tf.Tensor,
+  ) -> tf.Tensor:
+    """The actual Planck source calculation as a graph."""
+    logging.info('Calling Planck source graph.')
+    return gas_optics.compute_planck_sources(
+        self.gas_optics_lw,
+        planck_fraction,
         temperature,
-        pressure,
         igpt,
-        vmr_fields,
     )
 
-    return major_optical_depth + minor_optical_depth
+  def planck_src_fn(
+      self,
+      igpt: tf.Tensor,
+  ):
+    """Creates a callable Tensorflow graph for computing the Planck source.
+
+    Args:
+      igpt: The g-point that will be used to index into the RRTMGP lookup table.
+
+    Returns:
+      A callable Tensorflow graph that computes the Planck source given fields
+      for the precomputed pointwise Planck fraction and temperature.
+    """
+    def ps_fn(
+        planck_fraction: tf.Tensor,
+        temperature: tf.Tensor,
+    ) -> tf.Tensor:
+      return self._ps_fn_graph(igpt, planck_fraction, temperature)
+    return ps_fn
 
   def _map_fn(
       self,
@@ -149,7 +298,7 @@ class RRTMOptics(optics_base.OpticsScheme):
       pressure: FlowFieldVal,
       temperature: FlowFieldVal,
       molecules: FlowFieldVal,
-      igpt: int,
+      igpt: tf.Tensor,
       vmr_fields: Optional[Dict[int, FlowFieldVal]] = None,
   ) -> FlowFieldMap:
     """Computes the monochromatic longwave optical properties.
@@ -174,21 +323,16 @@ class RRTMOptics(optics_base.OpticsScheme):
         'ssa': The longwave single-scattering albedo.
         'asymmetry_factor': The longwave asymmetry factor.
     """
-
-    def optical_depth_lw_fn(molecules, temperature, pressure, vmr_fields):
-      return self._compute_optical_depth_fn(
-          self.gas_optics_lw,
-          molecules,
-          temperature,
-          pressure,
-          igpt,
-          vmr_fields,
-      )
-
-    optical_depth_lw = self._map_fn(
-        optical_depth_lw_fn, molecules, temperature, pressure, vmr_fields,
+    optical_depth_fn = self._optical_depth_fn(
+        igpt, True
     )
-
+    optical_depth_lw = self._map_fn(
+        optical_depth_fn,
+        molecules,
+        temperature,
+        pressure,
+        vmr_fields,
+    )
     zeros = tf.nest.map_structure(tf.zeros_like, optical_depth_lw)
     return {
         'optical_depth': optical_depth_lw,
@@ -201,7 +345,7 @@ class RRTMOptics(optics_base.OpticsScheme):
       pressure: FlowFieldVal,
       temperature: FlowFieldVal,
       molecules: FlowFieldVal,
-      igpt: int,
+      igpt: tf.Tensor,
       vmr_fields: Optional[Dict[int, FlowFieldVal]] = None,
   ) -> FlowFieldMap:
     """Computes the monochromatic shortwave optical properties.
@@ -226,34 +370,20 @@ class RRTMOptics(optics_base.OpticsScheme):
         'ssa': The shortwave single-scattering albedo.
         'asymmetry_factor': The shortwave asymmetry factor.
     """
-
-    def optical_depth_sw_fn(molecules, temperature, pressure, vmr_fields):
-      return self._compute_optical_depth_fn(
-          self.gas_optics_sw,
-          molecules,
-          temperature,
-          pressure,
-          igpt,
-          vmr_fields,
-      )
-
-    def rayleigh_scattering_fn(molecules, temperature, pressure):
-      return gas_optics.compute_rayleigh_optical_depth(
-          self.gas_optics_sw,
-          self.vmr_lib,
-          molecules,
-          temperature,
-          pressure,
-          igpt,
-          vmr_fields,
-      )
-
+    optical_depth_fn = self._optical_depth_fn(
+        igpt, False
+    )
     optical_depth_sw = self._map_fn(
-        optical_depth_sw_fn, molecules, temperature, pressure, vmr_fields,
+        optical_depth_fn,
+        molecules,
+        temperature,
+        pressure,
+        vmr_fields,
     )
 
-    rayleigh_scattering = tf.nest.map_structure(
-        rayleigh_scattering_fn, molecules, temperature, pressure
+    rayl_fn = self.rayleigh_scattering_fn(igpt)
+    rayleigh_scattering = self._map_fn(
+        rayl_fn, molecules, temperature, pressure, vmr_fields,
     )
     optical_depth_sw = tf.nest.map_structure(
         tf.math.add, optical_depth_sw, rayleigh_scattering
@@ -273,7 +403,7 @@ class RRTMOptics(optics_base.OpticsScheme):
       replicas: np.ndarray,
       pressure: FlowFieldVal,
       temperature: FlowFieldVal,
-      igpt: int,
+      igpt: tf.Tensor,
       vmr_fields: Optional[Dict[int, FlowFieldVal]] = None,
       sfc_temperature: Optional[FlowFieldVal] = None,
   ) -> FlowFieldMap:
@@ -307,45 +437,20 @@ class RRTMOptics(optics_base.OpticsScheme):
         replica_id, replicas, temperature
     )
 
-    def planck_fraction_fn(
-        pressure: tf.Tensor,
-        temperature: tf.Tensor,
-        vmr_fields: Optional[Dict[int, tf.Tensor]] = None,
-    ):
-      """Precomputes Planck fraction that is used for all Planck sources."""
-      return gas_optics.compute_planck_fraction(
-          self.gas_optics_lw,
-          self.vmr_lib,
-          pressure,
-          temperature,
-          igpt,
-          vmr_fields,
-      )
-
     planck_fraction = self._map_fn(
-        planck_fraction_fn,
+        self.planck_fraction_fn(igpt),
         pressure,
         temperature,
         vmr_fields,
     )
 
-    def planck_src_fn(
-        planck_fraction: tf.Tensor,
-        temperature: tf.Tensor,
-    ):
-      """Computes Planck src for `temperature` scaled by `planck_fraction`."""
-      return gas_optics.compute_planck_sources(
-          self.gas_optics_lw,
-          planck_fraction,
-          temperature,
-          igpt,
-      )
     temperature_fields = {
         'planck_src': temperature,
         'planck_src_top': temperature_top,
         'planck_src_bottom': temperature_bottom,
     }
     planck_srcs = {}
+    planck_src_fn = self.planck_src_fn(igpt)
     for k, temperature in temperature_fields.items():
       planck_srcs[k] = tf.nest.map_structure(
           planck_src_fn,
@@ -360,7 +465,7 @@ class RRTMOptics(optics_base.OpticsScheme):
 
     if sfc_temperature is not None:
       planck_fraction_0 = slice_bottom(planck_fraction)
-      planck_src_sfc = self._map_fn(
+      planck_src_sfc = tf.nest.map_structure(
           planck_src_fn,
           planck_fraction_0,
           sfc_temperature,
@@ -386,6 +491,11 @@ class RRTMOptics(optics_base.OpticsScheme):
   def n_gpt_sw(self) -> int:
     """The number of g-points in the shortwave bands."""
     return self.gas_optics_sw.n_gpt
+
+  @property
+  def solar_fraction_by_gpt(self) -> Sequence[float]:
+    """Mapping from g-point to the fraction of total solar radiation."""
+    return self.gas_optics_sw.solar_src_scaled
 
 
 class GrayAtmosphereOptics(optics_base.OpticsScheme):
@@ -551,6 +661,11 @@ class GrayAtmosphereOptics(optics_base.OpticsScheme):
   def n_gpt_sw(self) -> int:
     """The number of g-points in the shortwave bands."""
     return 1
+
+  @property
+  def solar_fraction_by_gpt(self) -> Sequence[float]:
+    """Mapping from g-point to the fraction of total solar radiation."""
+    return [1.0]
 
 
 def optics_factory(

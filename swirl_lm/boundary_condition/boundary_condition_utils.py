@@ -19,6 +19,8 @@ import enum
 import functools
 from typing import Dict, List, Optional, Sequence, Text
 
+from absl import logging
+from swirl_lm.base import physical_variable_keys_manager
 from swirl_lm.communication import halo_exchange
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import types
@@ -132,17 +134,22 @@ def find_bc_type(
 
     return True
 
+  # Note, this is currently exclusively used for deriving the BC type for
+  # pressure.
   def is_outflow(dim: int, face: int):
     """Checks if the boundary is an outflow."""
 
     # Here we only consider the case in which the outflow is specified by an
     # all-Neumann boundary condition.
     return (bc['u'][dim][face][0] in (halo_exchange.BCType.NEUMANN,
-                                      halo_exchange.BCType.NEUMANN_2) and
+                                      halo_exchange.BCType.NEUMANN_2,
+                                      halo_exchange.BCType.NONREFLECTING) and
             bc['v'][dim][face][0] in (halo_exchange.BCType.NEUMANN,
-                                      halo_exchange.BCType.NEUMANN_2) and
+                                      halo_exchange.BCType.NEUMANN_2,
+                                      halo_exchange.BCType.NONREFLECTING) and
             bc['w'][dim][face][0] in (halo_exchange.BCType.NEUMANN,
-                                      halo_exchange.BCType.NEUMANN_2))
+                                      halo_exchange.BCType.NEUMANN_2,
+                                      halo_exchange.BCType.NONREFLECTING))
 
   for dim in range(3):
     if periodic_dims[dim]:
@@ -245,3 +252,36 @@ def dirichlet_ghost_cell_quick(
     bc_new.update({varname: bc_values_new})
 
   return bc_new
+
+
+def get_keys_for_boundary_condition(
+    bc: BoundaryConditionDict,
+    bc_type: halo_exchange.BCType) -> List[str]:
+  """Generates a list of string keys for storing boudary values for `bc_type`.
+
+  Args:
+    bc: The dictionary containing the boundary conditions.
+    bc_type: The type of boundary condition to generate the keys for.
+
+  Returns:
+    A set of strings to be used as the key to `additional_states` for storing
+    the corresponding boundary condition values.
+  """
+  keys_for_bc = []
+  bc_manager = physical_variable_keys_manager.BoundaryConditionKeysHelper()
+  for k, v in bc.items():
+    if v is None:
+      continue
+    for dim in range(3):
+      for face in range(2):
+        if v[dim][face] is None:
+          continue
+        if v[dim][face][0] == bc_type:
+          additional_state_key_for_bc = bc_manager.generate_bc_key(
+              k, dim, face)
+          logging.info(
+              'Encountering %s BC for variable: %s, at dimension: '
+              '%d and face: %d. New additional_state_key: %s is added.',
+              str(bc_type), k, dim, face, additional_state_key_for_bc)
+          keys_for_bc.append(additional_state_key_for_bc)
+  return keys_for_bc

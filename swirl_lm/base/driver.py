@@ -629,7 +629,7 @@ def solver(
                                           step_id=step_id_value(),
                                           data_dump_filter=data_dump_filter)
       logging.info('`Post cycle writing filtered state done. '
-                    'Write status are: %s', write_status)
+                   'Write status are: %s', write_status)
     t2 = time.time()
     logging.info('Writing output & checkpoint took %f secs.', t2 - t1)
 

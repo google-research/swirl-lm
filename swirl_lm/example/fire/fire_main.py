@@ -112,13 +112,15 @@ _IS_TF2 = flags.DEFINE_boolean(
 # Run loop with updated flag values
 def main(_):
   logging.get_absl_handler().use_absl_log_file()
-  params = parameters_lib.params_from_config_file_flag()
-  fire_utils = wildfire_utils.WildfireUtils(params, None)
+
   uq_sampler = fire_uq.FireUQSampler()
   fd_samples, md_samples, ws_samples = uq_sampler.generate_samples()
   data_dump_prefixes = uq_sampler.generate_data_dump_prefixes(
     flags.FLAGS.data_dump_prefix
   )
+
+  params = parameters_lib.params_from_config_file_flag()
+  fire_utils = wildfire_utils.WildfireUtils(params, None)
   simulation = fire.Fire(fire_utils)
   params.source_update_fn_lib = simulation.source_term_update_fn()
   params.additional_states_update_fn = simulation.additional_states_update_fn
@@ -126,33 +128,26 @@ def main(_):
   params.postprocessing_states_update_fn = simulation.post_simulation_update_fn
   strategy, logical_coordinates = tf2_driver.strategy_and_coordinates(params)
 
-  logging.info("UQ-Evaluation using:")
-  logging.info("Fuel Densities")
-  logging.info(fd_samples)
-  logging.info("Moisture Densities")
-  logging.info(md_samples)
-  logging.info("Wind speeds")
-  logging.info(ws_samples)
-
   for i in range(uq_sampler.number_of_samples()):
     fire_utils.fuel_density = fd_samples[i]
     fire_utils.moisture_density = md_samples[i]
     fire_utils.update_wind_speed(ws_samples[i])
+    flags.FLAGS.data_dump_prefix = data_dump_prefixes[i]
+
+    # Redefinition of simulation-variable necessary so wind-speed gets updated
+    # in init_state.
     simulation = fire.Fire(fire_utils)
     params.source_update_fn_lib = simulation.source_term_update_fn()
     params.additional_states_update_fn = simulation.additional_states_update_fn
     params.preprocessing_states_update_fn = simulation.pre_simulation_update_fn
     params.postprocessing_states_update_fn = simulation.post_simulation_update_fn
-    flags.FLAGS.data_dump_prefix = data_dump_prefixes[i]
+
     init_state = tf2_driver.get_init_state(
       simulation.initialization,
       strategy,
       params,
       logical_coordinates,
     )
-    print(fire_utils.u_init)
-    print(fire_utils.u_mean)
-    print(init_state['u_init'])
     tf2_driver.solver(
       strategy,
       logical_coordinates,

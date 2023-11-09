@@ -26,5 +26,4 @@
         "**/.pytest_cache": true,
         "**/*.egg-info": true
     },
-    "editor.tabSize": 2
 }

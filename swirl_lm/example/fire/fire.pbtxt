@@ -281,3 +281,4 @@ boundary_conditions {
     dim: 2 location: 1 type: BC_TYPE_NEUMANN value: 0.0
   }
 }
+states_to_file: ["T_s", "rho_f"]

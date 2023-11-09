@@ -575,6 +575,19 @@ class WildfireUtils():
     else:
       self.init_fn_t = temperature_init_fn(self.config, self.t_var)
 
+  def update_wind_speed(self, wind_speed):
+    self.u_init = wind_speed * np.cos(
+        _WIND_ANGLE.value * np.pi / 180.0
+    )
+    self.v_init = wind_speed * np.sin(
+        _WIND_ANGLE.value * np.pi / 180.0
+    )
+    self.u_init = np.float32(self.u_init)
+    self.v_init = np.float32(self.v_init)
+    self.u_mean = self.u_init
+    self.v_mean = self.v_init
+    pass
+
   def vegetation_drag_update_fn(
       self,
       c_d: float,

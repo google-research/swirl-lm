@@ -121,7 +121,6 @@ def initialize_tpu(
       resolver, experimental_device_assignment=device_assignment)
 
 
-@tf.function
 def _inner_wrapped_value_fn(
     replica_ids: Array,
     value_fn: ValueFn,

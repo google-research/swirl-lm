@@ -56,6 +56,11 @@ RESTART_DUMP_CYCLE = flags.DEFINE_integer(
     'The number of cycles between which full variables may be dumped to file.',
     allow_override=True,
 )
+NEVER_LOG_FULL_STATE = flags.DEFINE_bool(
+  'never_log_full_state',
+  False,
+  'Whether to never log the full state.'
+)
 
 FLAGS = flags.FLAGS
 
@@ -354,8 +359,38 @@ def _one_cycle(
   return strategy.run(step_fn, args=(init_state,))
 
 
+def strategy_and_coordinates(params: parameters_lib.SwirlLMParameters):
+  computation_shape = np.array([params.cx, params.cy, params.cz])
+  logging.info('Computation_shape is %s', str(computation_shape))
+  strategy = driver_tpu.initialize_tpu(
+      tpu_address=FLAGS.target, computation_shape=computation_shape)
+  num_replicas = strategy.num_replicas_in_sync
+  logging.info('TPU is initialized. Number of replica is %d', num_replicas)
+  logical_coordinates = tpu_util.grid_coordinates(computation_shape).tolist()
+  return strategy, logical_coordinates
+
+
+def get_init_state(
+  customized_init_fn: types.InitFn,
+  strategy,
+  params,
+  logical_coordinates,
+):
+  t_start = time.time()
+  init_fn = _init_fn(params, customized_init_fn)
+  state = driver_tpu.distribute_values(
+      strategy, value_fn=init_fn,
+      logical_coordinates=logical_coordinates)
+  t_post_init = time.time()
+  logging.info('Initialization stage done. Took %f secs.',
+               t_post_init - t_start)
+  return state
+
+
 def solver(
-    customized_init_fn: types.InitFn,
+    strategy,
+    logical_coordinates,
+    init_state,
     params_input: Optional[parameters_lib.SwirlLMParameters] = None,
 ):
   """Runs the Navier-Stokes Solver with TF2 Distribution strategy.
@@ -375,16 +410,10 @@ def solver(
   if params is None:
     params = parameters_lib.params_from_config_file_flag()
   params.save_to_file(FLAGS.data_dump_prefix)
+  logging.info(f"params.start_step: {params.start_step}")
 
-  # Initialize the TPU.
   logging.info('Entering solver.')
-  computation_shape = np.array([params.cx, params.cy, params.cz])
-  logging.info('Computation_shape is %s', str(computation_shape))
-  strategy = driver_tpu.initialize_tpu(
-      tpu_address=FLAGS.target, computation_shape=computation_shape)
   num_replicas = strategy.num_replicas_in_sync
-  logging.info('TPU is initialized. Number of replica is %d', num_replicas)
-  logical_coordinates = tpu_util.grid_coordinates(computation_shape).tolist()
   # In order to save and restore from the filesystem, we use tf.train.Checkpoint
   # on the step id. The `step_id` Variable should be placed on the TPU device so
   # that we don't block TPU execution when writing the state to filenames
@@ -478,14 +507,7 @@ def solver(
       filename_prefix=filename_prefix)
   logging.info('read_state function created.')
 
-  t_start = time.time()
-
-  # Wrapping `init_fn` with tf.function so it is not retraced unnecessarily for
-  # every core/device.
-  init_fn = _init_fn(params, customized_init_fn)
-  state = driver_tpu.distribute_values(
-      strategy, value_fn=tf.function(init_fn),
-      logical_coordinates=logical_coordinates)
+  state = init_state
 
   # Accessing the values in state to synchronize the client so the main thread
   # will wait here until the `state` is initialized and all remote operations
@@ -493,8 +515,6 @@ def solver(
   replica_values = state['replica_id'].values
   logging.info('State initialized. Replicas are : %s', str(replica_values))
   t_post_init = time.time()
-  logging.info('Initialization stage done. Took %f secs.',
-               t_post_init - t_start)
 
   write_initial_state = False
 
@@ -594,7 +614,9 @@ def solver(
     # Save checkpoint if the current step, from the start of the simulation,
     # is a multiple of the checkpoint interval, else just record, a possibly
     # shortened version of the current state.
-    if (step_id_value() - params.start_step) % checkpoint_interval == 0:
+    if (
+      step_id_value() - params.start_step
+    ) % checkpoint_interval == 0 and not NEVER_LOG_FULL_STATE.value:
       write_status = write_state_and_sync(_local_state(strategy, state),
                                           step_id=step_id_value())
       logging.info('`Post cycle writing full state done. '
@@ -607,7 +629,7 @@ def solver(
                                           step_id=step_id_value(),
                                           data_dump_filter=data_dump_filter)
       logging.info('`Post cycle writing filtered state done. '
-                   'Write status are: %s', write_status)
+                    'Write status are: %s', write_status)
     t2 = time.time()
     logging.info('Writing output & checkpoint took %f secs.', t2 - t1)
 

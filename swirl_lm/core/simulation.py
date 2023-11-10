@@ -82,7 +82,7 @@ class Simulation:
                  self._params.bc_type)
 
     logging.info('Time integration scheme is predefined by the solver. The '
-                 ' time integration scheme specified in the config file is not '
+                 'time integration scheme specified in the config file is not '
                  'activated.')
 
     self.dbg = components_debug.ComponentsDebug(
@@ -163,8 +163,7 @@ class Simulation:
                                                   replicas, states_0,
                                                   additional_states)
     states_0.update({
-        'rho':
-            rho_0,
+        'rho': rho_0,
         'rho_thermal':
             self.thermodynamics.update_thermal_density(states_0,
                                                        additional_states),

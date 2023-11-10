@@ -81,8 +81,8 @@ class Simulation:
     logging.info('Boundary condition types in this simulation are: %r',
                  self._params.bc_type)
 
-    logging.info('Time integration scheme is predefined by the solver. The '
-                 'time integration scheme specified in the config file is not '
+    logging.info('Time integration scheme is predefined by the solver. The'
+                 ' time integration scheme specified in the config file is not '
                  'activated.')
 
     self.dbg = components_debug.ComponentsDebug(

@@ -129,6 +129,9 @@ def main(_):
   strategy, logical_coordinates = tf2_driver.strategy_and_coordinates(params)
 
   for i in range(uq_sampler.number_of_samples()):
+    logging.info(fd_samples[i])
+    logging.info(md_samples[i])
+    logging.info(ws_samples[i])
     fire_utils.fuel_density = fd_samples[i]
     fire_utils.moisture_density = md_samples[i]
     fire_utils.update_wind_speed(ws_samples[i])

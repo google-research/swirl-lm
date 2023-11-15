@@ -138,18 +138,3 @@ class FireUQSampler:
       for i in range(self.number_of_samples()):
         data_dump_prefixes.append(data_dump_prefix_base+f"{i}/")
       return data_dump_prefixes
-
-
-def main(_):
-  uq_sampler = FireUQSampler()
-  fd_samples, md_samples, ws_samples = uq_sampler.generate_samples()
-  print("Fueld")
-  print(fd_samples)
-  print("Moistd")
-  print(md_samples)
-  print("Wind speed")
-  print(ws_samples)
-
-
-if __name__ == "__main__":
-  app.run(main)

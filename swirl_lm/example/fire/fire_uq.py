@@ -1,5 +1,5 @@
 import numpy as np
-from absl import flags, logging
+from absl import flags, logging, app
 
 
 _RANDOM_SEED_UQ = flags.DEFINE_integer(
@@ -54,6 +54,16 @@ _MODIFY_INDIVIDUAL = flags.DEFINE_bool(
   'one at a time. This produces only 4 trajectories and should only be used'
   'for validation.'
 )
+_READ_UQ_FILE = flags.DEFINE_bool(
+  'read_uq_file',
+  False,
+  'Whether to read the UQ-parameters from a file',
+)
+_UQ_FILENAME = flags.DEFINE_string(
+  'uq_filename',
+  './large_scale_uq_params.npy',
+  'The location of the .npy file that contains the uq values'
+)
 
 
 class FireUQSampler:
@@ -89,29 +99,35 @@ class FireUQSampler:
     Returns:
       fuel_density_samples, moisture_density_samples, wind_speed_samples
     """
-    if _MODIFY_INDIVIDUAL.value:
-      fuel_load_samples = np.ones(4) * _FUEL_LOAD_LB.value
-      fuel_load_samples[1] = _FUEL_LOAD_UB.value
-      fuel_density_samples = fuel_load_samples / _FUEL_HEIGHT.value
-      moisture_content_samples = np.ones(4) * _MOISTURE_CONTENT_LB.value
-      moisture_content_samples[2] = _MOISTURE_CONTENT_UB.value
-      moisture_density_samples = moisture_content_samples * fuel_density_samples
-      wind_speed_samples = np.ones(4) * _WIND_SPEED_LB.value
-      wind_speed_samples[3] = _WIND_SPEED_UB.value
+    if _READ_UQ_FILE.value:
+      uq_values = np.load(_UQ_FILENAME.value)
+      fuel_density_samples = np.float32(uq_values[:, 0])
+      moisture_density_samples = np.float32(uq_values[:, 1])
+      wind_speed_samples = np.float32(uq_values[:, 2])
     else:
-      fuel_load_samples = self._uniform(
-        _FUEL_LOAD_LB.value, _FUEL_LOAD_UB.value, _N_SAMPLES_UQ.value
-      )
-      fuel_density_samples = fuel_load_samples / _FUEL_HEIGHT.value
-      moisture_content_samples = self._uniform(
-        _MOISTURE_CONTENT_LB.value,
-        _MOISTURE_CONTENT_UB.value,
-        _N_SAMPLES_UQ.value
-      )
-      moisture_density_samples = moisture_content_samples * fuel_density_samples
-      wind_speed_samples = self._uniform(
-        _WIND_SPEED_LB.value, _WIND_SPEED_UB.value, _N_SAMPLES_UQ.value
-      )
+      if _MODIFY_INDIVIDUAL.value:
+        fuel_load_samples = np.ones(4) * _FUEL_LOAD_LB.value
+        fuel_load_samples[1] = _FUEL_LOAD_UB.value
+        fuel_density_samples = fuel_load_samples / _FUEL_HEIGHT.value
+        moisture_content_samples = np.ones(4) * _MOISTURE_CONTENT_LB.value
+        moisture_content_samples[2] = _MOISTURE_CONTENT_UB.value
+        moisture_density_samples = moisture_content_samples * fuel_density_samples
+        wind_speed_samples = np.ones(4) * _WIND_SPEED_LB.value
+        wind_speed_samples[3] = _WIND_SPEED_UB.value
+      else:
+        fuel_load_samples = self._uniform(
+          _FUEL_LOAD_LB.value, _FUEL_LOAD_UB.value, _N_SAMPLES_UQ.value
+        )
+        fuel_density_samples = fuel_load_samples / _FUEL_HEIGHT.value
+        moisture_content_samples = self._uniform(
+          _MOISTURE_CONTENT_LB.value,
+          _MOISTURE_CONTENT_UB.value,
+          _N_SAMPLES_UQ.value
+        )
+        moisture_density_samples = moisture_content_samples * fuel_density_samples
+        wind_speed_samples = self._uniform(
+          _WIND_SPEED_LB.value, _WIND_SPEED_UB.value, _N_SAMPLES_UQ.value
+        )
     return fuel_density_samples, moisture_density_samples, wind_speed_samples
 
   def generate_data_dump_prefixes(self, data_dump_prefix):
@@ -122,3 +138,18 @@ class FireUQSampler:
       for i in range(self.number_of_samples()):
         data_dump_prefixes.append(data_dump_prefix_base+f"{i}/")
       return data_dump_prefixes
+
+
+def main(_):
+  uq_sampler = FireUQSampler()
+  fd_samples, md_samples, ws_samples = uq_sampler.generate_samples()
+  print("Fueld")
+  print(fd_samples)
+  print("Moistd")
+  print(md_samples)
+  print("Wind speed")
+  print(ws_samples)
+
+
+if __name__ == "__main__":
+  app.run(main)

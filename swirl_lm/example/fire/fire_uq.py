@@ -89,6 +89,8 @@ class FireUQSampler:
   def number_of_samples(self):
     if _MODIFY_INDIVIDUAL.value:
       return 4
+    elif _READ_UQ_FILE.value:
+      return 10
     else:
       return _N_SAMPLES_UQ.value
 

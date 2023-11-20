@@ -84,13 +84,13 @@ class FireUQSampler:
     version of random number generation.
     """
     norm_samples = self.sampler.random(size=(n_samples,), dtype=np.float32)
-    return (upper_bound-lower_bound)*norm_samples + lower_bound
+    return (upper_bound - lower_bound) * norm_samples + lower_bound
 
   def number_of_samples(self):
     if _MODIFY_INDIVIDUAL.value:
       return 4
     elif _READ_UQ_FILE.value:
-      return 10
+      return 20
     else:
       return _N_SAMPLES_UQ.value
 
@@ -133,13 +133,13 @@ class FireUQSampler:
     return fuel_density_samples, moisture_density_samples, wind_speed_samples
 
   def generate_data_dump_prefixes(self, data_dump_prefix):
-      data_dump_prefix_base = data_dump_prefix[:-1] + "_"
-      if _MODIFY_INDIVIDUAL.value:
-        data_dump_prefix_base = data_dump_prefix_base + "testrun_"
-      data_dump_prefixes = []
-      for i in range(self.number_of_samples()):
-        data_dump_prefixes.append(data_dump_prefix_base+f"{i}/")
-      return data_dump_prefixes
+    data_dump_prefix_base = data_dump_prefix[:-1] + "_"
+    if _MODIFY_INDIVIDUAL.value:
+      data_dump_prefix_base = data_dump_prefix_base + "testrun_"
+    data_dump_prefixes = []
+    for i in range(self.number_of_samples()):
+      data_dump_prefixes.append(data_dump_prefix_base + f"{i}/")
+    return data_dump_prefixes
 
 
 def main(_):

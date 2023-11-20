@@ -406,7 +406,7 @@ def solver(
   """
 
   # Obtain params either from the provided input or the flags.
-  logging.info(f"Logging full state is: {NEVER_LOG_FULL_STATE.value}")
+  logging.info(f"Never Logging full state is: {NEVER_LOG_FULL_STATE.value}")
   params = params_input
   if params is None:
     params = parameters_lib.params_from_config_file_flag()

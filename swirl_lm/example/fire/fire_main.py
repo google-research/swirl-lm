@@ -128,7 +128,7 @@ def main(_):
   params.postprocessing_states_update_fn = simulation.post_simulation_update_fn
   strategy, logical_coordinates = tf2_driver.strategy_and_coordinates(params)
 
-  for i in range(uq_sampler.number_of_samples()):
+  for i in range(uq_sampler.start_id, uq_sampler.number_of_samples()):
     logging.info(fd_samples[i])
     logging.info(md_samples[i])
     logging.info(ws_samples[i])
@@ -160,4 +160,4 @@ def main(_):
 
 
 if __name__ == "__main__":
-    tf.compat.v1.app.run(main)
+  tf.compat.v1.app.run(main)

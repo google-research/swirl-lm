@@ -64,11 +64,17 @@ _UQ_FILENAME = flags.DEFINE_string(
   './large_scale_uq_params.npy',
   'The location of the .npy file that contains the uq values'
 )
+_UQ_START_ID = flags.DEFINE_integer(
+  'uq_start_id',
+  0,
+  'The start id for uq.'
+)
 
 
 class FireUQSampler:
   def __init__(self):
     self.sampler = np.random.default_rng(_RANDOM_SEED_UQ.value)
+    self.start_id = _UQ_START_ID.value
     if _MODIFY_INDIVIDUAL.value:
       logging.warn(
         'Modifying uncertain parameters one at a time. Only generating 4'

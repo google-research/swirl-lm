@@ -42,11 +42,6 @@ _WIND_SPEED_UB = flags.DEFINE_float(
   12.0,
   'Upper bound of wind speed for uncertainty quantification.'
 )
-_FUEL_HEIGHT = flags.DEFINE_float(
-  'fuel_height',
-  0.9785,
-  'Fuel height parameter.'
-)
 _MODIFY_INDIVIDUAL = flags.DEFINE_bool(
   'modify_indiviual',
   False,
@@ -116,7 +111,7 @@ class FireUQSampler:
       if _MODIFY_INDIVIDUAL.value:
         fuel_load_samples = np.ones(4) * _FUEL_LOAD_LB.value
         fuel_load_samples[1] = _FUEL_LOAD_UB.value
-        fuel_density_samples = fuel_load_samples / _FUEL_HEIGHT.value
+        fuel_density_samples = fuel_load_samples / flags.FLAGS.fuel_bed_height
         moisture_content_samples = np.ones(4) * _MOISTURE_CONTENT_LB.value
         moisture_content_samples[2] = _MOISTURE_CONTENT_UB.value
         moisture_density_samples = moisture_content_samples * fuel_density_samples
@@ -126,7 +121,7 @@ class FireUQSampler:
         fuel_load_samples = self._uniform(
           _FUEL_LOAD_LB.value, _FUEL_LOAD_UB.value, _N_SAMPLES_UQ.value
         )
-        fuel_density_samples = fuel_load_samples / _FUEL_HEIGHT.value
+        fuel_density_samples = fuel_load_samples / flags.FLAGS.fuel_bed_height
         moisture_content_samples = self._uniform(
           _MOISTURE_CONTENT_LB.value,
           _MOISTURE_CONTENT_UB.value,

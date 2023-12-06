@@ -56,7 +56,7 @@ _READ_UQ_FILE = flags.DEFINE_bool(
 )
 _UQ_FILENAME = flags.DEFINE_string(
   'uq_filename',
-  './large_scale_uq_params.npy',
+  './large_scale_uq_params_new.npy',
   'The location of the .npy file that contains the uq values'
 )
 _UQ_START_ID = flags.DEFINE_integer(

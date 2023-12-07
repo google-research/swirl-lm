@@ -153,10 +153,13 @@ def main(_):
   fd_samples, md_samples, ws_samples = uq_sampler.generate_samples()
   print("Fueld")
   print(fd_samples[0])
+  print(np.mean(fd_samples))
   print("Moistd")
   print(md_samples)
+  print(np.mean(md_samples))
   print("Wind speed")
   print(ws_samples)
+  print(np.mean(ws_samples))
 
 
 if __name__ == "__main__":

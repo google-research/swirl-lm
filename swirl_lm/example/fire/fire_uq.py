@@ -22,6 +22,11 @@ _FUEL_LOAD_UB = flags.DEFINE_float(
   2.25,
   'Upper bound of fuel load for uncertainty quantification.'
 )
+_LARGE_SCALE_FUEL_BED_HEIGHT = flags.DEFINE_float(
+  'large_scale_fuel_bed_height',
+  9.785,
+  'fuel_bed_height of the large scale simulation'
+)
 _MOISTURE_CONTENT_LB = flags.DEFINE_float(
   'moisture_content_lb',
   0.03,
@@ -111,7 +116,7 @@ class FireUQSampler:
       if _MODIFY_INDIVIDUAL.value:
         fuel_load_samples = np.ones(4) * _FUEL_LOAD_LB.value
         fuel_load_samples[1] = _FUEL_LOAD_UB.value
-        fuel_density_samples = fuel_load_samples / flags.FLAGS.fuel_bed_height
+        fuel_density_samples = fuel_load_samples / _LARGE_SCALE_FUEL_BED_HEIGHT.value
         moisture_content_samples = np.ones(4) * _MOISTURE_CONTENT_LB.value
         moisture_content_samples[2] = _MOISTURE_CONTENT_UB.value
         moisture_density_samples = moisture_content_samples * fuel_density_samples
@@ -121,7 +126,7 @@ class FireUQSampler:
         fuel_load_samples = self._uniform(
           _FUEL_LOAD_LB.value, _FUEL_LOAD_UB.value, _N_SAMPLES_UQ.value
         )
-        fuel_density_samples = fuel_load_samples / flags.FLAGS.fuel_bed_height
+        fuel_density_samples = fuel_load_samples / _LARGE_SCALE_FUEL_BED_HEIGHT.value
         moisture_content_samples = self._uniform(
           _MOISTURE_CONTENT_LB.value,
           _MOISTURE_CONTENT_UB.value,

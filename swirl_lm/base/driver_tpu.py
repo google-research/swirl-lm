@@ -40,7 +40,7 @@ _WORKER_JOB_PREFIX = flags.DEFINE_string(
     'worker_job_prefix', '',
     'The prefix for worker job. This is for the explicit device placement '
     'used in TPU driver. If left empty the default behavior from '
-    'canonicalization will be used. For borg jobs, this usually should be '
+    'canonicalization will be used. For Google internal jobs, this usually should be '
     'set to `/job:worker/replica:0`.')
 
 FLAGS = flags.FLAGS
@@ -121,7 +121,6 @@ def initialize_tpu(
       resolver, experimental_device_assignment=device_assignment)
 
 
-@tf.function
 def _inner_wrapped_value_fn(
     replica_ids: Array,
     value_fn: ValueFn,

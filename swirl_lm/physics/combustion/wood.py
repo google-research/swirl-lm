@@ -138,6 +138,8 @@ def _reaction_rate(
     s_b: float,
     s_x: float,
     c_f: float,
+    t_0_ivf: float,
+    t_1_ivf: float,
 ) -> tf.Tensor:
   """Computes the reation rate of the wood combustion.
 
@@ -153,6 +155,8 @@ def _reaction_rate(
     s_b: The B scale of the fuel elements.
     s_x: The scale of the smallest fuel elements.
     c_f: An empirical scaling coefficient in local fire reaction rates.
+    t_0_ivf: Start temperature for the ramp up.
+    t_1_ivf: End temperature for the ramp up.
 
   Returns:
     The reaction rate due to wood combustion.
@@ -163,11 +167,9 @@ def _reaction_rate(
     return 0.09 * rho_g * s_b * tf.math.sqrt(tke)
 
   def psi_s():
-    """Computes the ignition volume fraction."""
-    return tf.math.minimum(
-        tf.math.maximum((temperature - 300.0) / 400.0,
-                        tf.zeros_like(temperature, dtype=_TF_DTYPE)),
-        tf.ones_like(temperature, dtype=_TF_DTYPE))
+    """Computes the ignited volume fraction."""
+    return tf.clip_by_value((temperature - t_0_ivf) / (t_1_ivf - t_0_ivf),
+                            0.0, 1.0)
 
   def lambda_of():
     """Computes 𝛌of = ϱf ϱo / (ϱf / Nf + ϱo / No)2."""
@@ -338,28 +340,30 @@ class Wood(object):
         simulation.
     """
     self.model_params = config.combustion.wood
+    params = self.model_params
 
-    self.s_b = self.model_params.s_b
-    self.s_x = self.model_params.s_x
-    self.h_conv = self.model_params.h_conv
-    self.a_v = self.model_params.a_v
-    self.cp_g = self.model_params.cp_g
-    self.h_f = self.model_params.h_f
-    self.t_pyr = self.model_params.t_pyr
-    self.n_step = self.model_params.n_step
-    self.include_radiation = self.model_params.include_radiation
-    self.efficiency = self.model_params.efficiency
-    self.c_f = self.model_params.c_f
+    self.s_b = params.s_b
+    self.s_x = params.s_x
+    self.h_conv = params.h_conv
+    self.a_v = params.a_v
+    self.cp_g = params.cp_g
+    self.h_f = params.h_f
+    self.t_pyr = params.t_pyr
+    self.n_step = params.n_step
+    self.include_radiation = params.include_radiation
+    self.efficiency = params.efficiency
+    self.c_f = params.c_f
     self.reaction_integration_scheme = (
-        self.model_params.reaction_integration_scheme)
+        params.reaction_integration_scheme)
 
     self.thermodynamics_model = thermodynamics_manager.thermodynamics_factory(
         config)
 
     self.reaction_rate = functools.partial(
-        _reaction_rate, s_b=self.s_b, s_x=self.s_x, c_f=self.c_f)
+        _reaction_rate, s_b=self.s_b, s_x=self.s_x, c_f=self.c_f,
+        t_0_ivf=params.t_0_ivf, t_1_ivf=params.t_1_ivf)
 
-    self.combustion_model_option = self.model_params.WhichOneof(
+    self.combustion_model_option = params.WhichOneof(
         'combustion_model_option'
     )
     if self.combustion_model_option == 'dry_wood':

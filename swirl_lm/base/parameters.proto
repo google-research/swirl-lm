@@ -23,6 +23,7 @@ import "swirl_lm/equations/pressure.proto";
 import "swirl_lm/equations/scalars.proto";
 import "swirl_lm/numerics/numerics.proto";
 import "swirl_lm/physics/combustion/combustion.proto";
+import "swirl_lm/physics/radiation/config/radiative_transfer.proto";
 import "swirl_lm/physics/thermodynamics/thermodynamics.proto";
 import "swirl_lm/utility/grid_parametrization.proto";
 import "swirl_lm/utility/monitor.proto";
@@ -204,7 +205,7 @@ message SubGridScaleModel {
 }
 
 // Stores the parameters required by an incompressible Navier-Stokes simulation.
-// Next id: 37
+// Next id: 38
 message SwirlLMParameters {
   // Defines the type of the simulation procedure to be used in the solver.
   enum SolverProcedureType {
@@ -361,4 +362,7 @@ message SwirlLMParameters {
   // If True, all field variables are 3D tf.Tensor. Otherwise, they are
   // Sequence[tf.Tensor].
   optional bool use_3d_tf_tensor = 36 [default = false];
+  // The radiation model that solves a two-stream radiative transfer equation
+  // taking into account the full atmospheric state.
+  optional RadiativeTransfer radiative_transfer = 37;
 }

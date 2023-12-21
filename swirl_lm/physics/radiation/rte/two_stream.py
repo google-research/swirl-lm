@@ -66,7 +66,6 @@ class TwoStreamSolver:
     self.atmospheric_state = AtmosphericState.from_proto(
         radiation_params.atmospheric_state
     )
-    self._kernel_op = kernel_op
     self._g_dim = g_dim
     self._halos = grid_params.halo_width
     self._optics_lib = optics.optics_factory(
@@ -85,14 +84,14 @@ class TwoStreamSolver:
 
     # Operators used when computing heating rate from fluxes.
     self._grad_central = (
-        lambda f: self._kernel_op.apply_kernel_op_x(f, 'kDx'),
-        lambda f: self._kernel_op.apply_kernel_op_y(f, 'kDy'),
-        lambda f: self._kernel_op.apply_kernel_op_z(f, 'kDz', 'kDzsh'),
+        lambda f: kernel_op.apply_kernel_op_x(f, 'kDx'),
+        lambda f: kernel_op.apply_kernel_op_y(f, 'kDy'),
+        lambda f: kernel_op.apply_kernel_op_z(f, 'kDz', 'kDzsh'),
     )[g_dim]
     self._grad_forward_fn = (
-        lambda f: self._kernel_op.apply_kernel_op_x(f, 'kdx+'),
-        lambda f: self._kernel_op.apply_kernel_op_y(f, 'kdy+'),
-        lambda f: self._kernel_op.apply_kernel_op_z(f, 'kdz+', 'kdz+sh'),
+        lambda f: kernel_op.apply_kernel_op_x(f, 'kdx+'),
+        lambda f: kernel_op.apply_kernel_op_y(f, 'kdy+'),
+        lambda f: kernel_op.apply_kernel_op_z(f, 'kdz+', 'kdz+sh'),
     )[g_dim]
 
     # Longwave parameters.
@@ -114,6 +113,10 @@ class TwoStreamSolver:
       molecules: FlowFieldVal,
       vmr_fields: Optional[Dict[int, FlowFieldVal]] = None,
       sfc_temperature: Optional[FlowFieldVal] = None,
+      cloud_r_eff_liq: Optional[FlowFieldVal] = None,
+      cloud_path_liq: Optional[FlowFieldVal] = None,
+      cloud_r_eff_ice: Optional[FlowFieldVal] = None,
+      cloud_path_ice: Optional[FlowFieldVal] = None,
   ) -> FlowFieldMap:
     """Solves two-stream radiative transfer equation over the longwave spectrum.
 
@@ -145,6 +148,12 @@ class TwoStreamSolver:
       sfc_temperature: The optional surface temperature represented as either a
         3D `tf.Tensor` or as a list of 2D `tf.Tensor`s but having a single
         vertical dimension [K].
+      cloud_r_eff_liq: The effective radius of cloud droplets [m].
+      cloud_path_liq: The cloud liquid water path in each atmospheric grid cell
+        [kg/m²].
+      cloud_r_eff_ice: The effective radius of cloud ice particles [m].
+      cloud_path_ice: The cloud ice water path in each atmospheric grid cell
+        [kg/m²].
 
     Returns:
       A dictionary with the following entries (in units of W/m²):
@@ -155,7 +164,12 @@ class TwoStreamSolver:
     def step_fn(igpt, cumulative_flux):
       lw_optical_props = dict(
           self._optics_lib.compute_lw_optical_properties(
-              pressure, temperature, molecules, igpt, vmr_fields
+              pressure, temperature, molecules, igpt,
+              vmr_fields=vmr_fields,
+              cloud_r_eff_liq=cloud_r_eff_liq,
+              cloud_path_liq=cloud_path_liq,
+              cloud_r_eff_ice=cloud_r_eff_ice,
+              cloud_path_ice=cloud_path_ice,
           )
       )
       planck_srcs = dict(
@@ -208,12 +222,14 @@ class TwoStreamSolver:
         for k in ['flux_up', 'flux_down', 'flux_net']
     }
     i0 = tf.constant(0)
-    _, fluxes = tf.while_loop(
-        cond=stop_condition,
-        body=step_fn,
-        loop_vars=(i0, lw_fluxes0),
-        parallel_iterations=self._optics_lib.n_gpt_lw,
-        back_prop=False,
+    _, fluxes = tf.nest.map_structure(
+        tf.stop_gradient,
+        tf.while_loop(
+            cond=stop_condition,
+            body=step_fn,
+            loop_vars=(i0, lw_fluxes0),
+            parallel_iterations=self._optics_lib.n_gpt_lw,
+        ),
     )
     return fluxes
 
@@ -225,6 +241,10 @@ class TwoStreamSolver:
       temperature: FlowFieldVal,
       molecules: FlowFieldVal,
       vmr_fields: Optional[Dict[int, FlowFieldVal]] = None,
+      cloud_r_eff_liq: Optional[FlowFieldVal] = None,
+      cloud_path_liq: Optional[FlowFieldVal] = None,
+      cloud_r_eff_ice: Optional[FlowFieldVal] = None,
+      cloud_path_ice: Optional[FlowFieldVal] = None,
   ) -> FlowFieldMap:
     """Solves the two-stream radiative transfer equation for shortwave.
 
@@ -251,6 +271,12 @@ class TwoStreamSolver:
         [molecules/m²].
       vmr_fields: An optional dictionary containing precomputed volume mixing
         ratio fields, keyed by gas index.
+      cloud_r_eff_liq: The effective radius of cloud droplets [m].
+      cloud_path_liq: The cloud liquid water path in each atmospheric grid cell
+        [kg/m²].
+      cloud_r_eff_ice: The effective radius of cloud ice particles [m].
+      cloud_path_ice: The cloud ice water path in each atmospheric grid cell
+        [kg/m²].
 
     Returns:
       A dictionary with the following entries (in units of W/m²):
@@ -263,7 +289,15 @@ class TwoStreamSolver:
 
     def step_fn(igpt, partial_fluxes):
       sw_optical_props = self._optics_lib.compute_sw_optical_properties(
-          pressure, temperature, molecules, igpt, vmr_fields
+          pressure,
+          temperature,
+          molecules,
+          igpt,
+          vmr_fields=vmr_fields,
+          cloud_r_eff_liq=cloud_r_eff_liq,
+          cloud_path_liq=cloud_path_liq,
+          cloud_r_eff_ice=cloud_r_eff_ice,
+          cloud_path_ice=cloud_path_ice,
       )
       optical_props_2stream = self._monochrom_solver.sw_cell_properties(
           zenith=self._zenith,
@@ -311,15 +345,20 @@ class TwoStreamSolver:
         k: tf.nest.map_structure(tf.zeros_like, pressure)
         for k in ['flux_up', 'flux_down', 'flux_net']
     }
-    i0 = tf.constant(0)
-    _, fluxes = tf.while_loop(
-        cond=stop_condition,
-        body=step_fn,
-        loop_vars=(i0, fluxes_0),
-        parallel_iterations=self._optics_lib.n_gpt_sw,
-        back_prop=False,
-    )
-    return fluxes
+    if self._zenith >= 0.5 * np.pi:
+      return fluxes_0
+    else:
+      i0 = tf.constant(0)
+      _, fluxes = tf.nest.map_structure(
+          tf.stop_gradient,
+          tf.while_loop(
+              cond=stop_condition,
+              body=step_fn,
+              loop_vars=(i0, fluxes_0),
+              parallel_iterations=self._optics_lib.n_gpt_sw,
+          ),
+      )
+      return fluxes
 
   def compute_heating_rate(
       self,

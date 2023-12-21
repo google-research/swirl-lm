@@ -19,8 +19,10 @@ from typing import Any, Callable, Dict, Optional, Sequence
 from absl import logging
 import numpy as np
 from swirl_lm.physics.radiation.config import radiative_transfer_pb2
+from swirl_lm.physics.radiation.optics import cloud_optics
 from swirl_lm.physics.radiation.optics import constants
 from swirl_lm.physics.radiation.optics import gas_optics
+from swirl_lm.physics.radiation.optics import lookup_cloud_optics as cloud_lookup_lib
 from swirl_lm.physics.radiation.optics import lookup_gas_optics_base
 from swirl_lm.physics.radiation.optics import lookup_gas_optics_longwave
 from swirl_lm.physics.radiation.optics import lookup_gas_optics_shortwave
@@ -33,6 +35,7 @@ import tensorflow as tf
 
 
 AbstractLookupGasOptics = lookup_gas_optics_base.AbstractLookupGasOptics
+LookupCloudOptics = cloud_lookup_lib.LookupCloudOptics
 LookupGasOpticsLongwave = lookup_gas_optics_longwave.LookupGasOpticsLongwave
 LookupGasOpticsShortwave = lookup_gas_optics_shortwave.LookupGasOpticsShortwave
 LookupVolumeMixingRatio = lookup_volume_mixing_ratio.LookupVolumeMixingRatio
@@ -54,6 +57,12 @@ class RRTMOptics(optics_base.OpticsScheme):
     super().__init__(params, kernel_op, g_dim, halos)
     rrtm_params = params.rrtm_optics
     self.vmr_lib = vmr_lib
+    self.cloud_optics_lw = LookupCloudOptics.from_nc_file(
+        rrtm_params.cloud_longwave_nc_filepath
+    )
+    self.cloud_optics_sw = LookupCloudOptics.from_nc_file(
+        rrtm_params.cloud_shortwave_nc_filepath
+    )
     self.gas_optics_lw = LookupGasOpticsLongwave.from_nc_file(
         rrtm_params.longwave_nc_filepath
     )
@@ -241,6 +250,52 @@ class RRTMOptics(optics_base.OpticsScheme):
       return self._ps_fn_graph(igpt, planck_fraction, temperature)
     return ps_fn
 
+  @tf.function
+  def _cloud_props_graph(
+      self, ibnd, is_lw, r_eff_liq, cloud_path_liq, r_eff_ice, cloud_path_ice
+  ):
+    """The actual cloud optical properties calculation as a graph."""
+    logging.info('Calling cloud optical properties graph.')
+    cloud_lookup = self.cloud_optics_lw if is_lw else self.cloud_optics_sw
+    return cloud_optics.compute_optical_properties(
+        cloud_lookup,
+        cloud_path_liq,
+        cloud_path_ice,
+        r_eff_liq,
+        r_eff_ice,
+        ibnd=ibnd,
+    )
+
+  def cloud_properties_fn(
+      self,
+      ibnd: tf.Tensor,
+      is_lw: bool,
+  ):
+    """Creates callable Tensorflow graph for computing cloud optical properties.
+
+    Args:
+      ibnd: The spectral band index that will be used to index into the lookup
+        tables for cloud absorption coefficients.
+      is_lw: If `True`, uses the longwave lookup. Otherwise, uses the shortwave
+        lookup.
+
+    Returns:
+      A callable Tensorflow graph that returns a dictionary containing the cloud
+        optical depth, single-scattering albedo, and asymmetry factor.
+    """
+    def cloud_props_fn(
+        r_eff_liq, cloud_path_liq, r_eff_ice, cloud_path_ice
+    ):
+      return self._cloud_props_graph(
+          ibnd,
+          is_lw,
+          r_eff_liq,
+          cloud_path_liq,
+          r_eff_ice,
+          cloud_path_ice,
+      )
+    return cloud_props_fn
+
   def _map_fn(
       self,
       fn: Callable[..., tf.Tensor],
@@ -293,6 +348,88 @@ class RRTMOptics(optics_base.OpticsScheme):
     split_inputs = [[extract_arg(arg, i) for arg in args] for i in range(n)]
     return [fn(*split_inputs[i]) for i in range(n)]
 
+  def _apply_delta_scaling_for_cloud(
+      self,
+      cloud_optical_props: FlowFieldMap,
+  ) -> FlowFieldMap:
+    """Delta-scales optical properties for shortwave bands."""
+    def delta_scale_tau(
+        tau: tf.Tensor, ssa: tf.Tensor, g: tf.Tensor
+    ) -> tf.Tensor:
+      wf = ssa * g**2
+      return (1.0 - wf) * tau
+
+    def delta_scale_ssa(ssa: tf.Tensor, g: tf.Tensor) -> tf.Tensor:
+      wf = ssa * g**2
+      return (ssa - wf) / tf.maximum(self._EPSILON, 1.0 - wf)
+
+    def delta_scale_asy(g: tf.Tensor) -> tf.Tensor:
+      f = g**2
+      return (g - f) / tf.maximum(self._EPSILON, 1.0 - f)
+
+    cloud_tau = tf.nest.map_structure(
+        delta_scale_tau,
+        cloud_optical_props['optical_depth'],
+        cloud_optical_props['ssa'],
+        cloud_optical_props['asymmetry_factor'],
+    )
+    cloud_ssa = tf.nest.map_structure(
+        delta_scale_ssa,
+        cloud_optical_props['ssa'],
+        cloud_optical_props['asymmetry_factor'],
+    )
+    cloud_asy = tf.nest.map_structure(
+        delta_scale_asy, cloud_optical_props['asymmetry_factor']
+    )
+    return {
+        'optical_depth': cloud_tau,
+        'ssa': cloud_ssa,
+        'asymmetry_factor': cloud_asy,
+    }
+
+  def _combine_gas_and_cloud_properties(
+      self,
+      igpt: tf.Tensor,
+      optical_props: FlowFieldMap,
+      is_lw: bool,
+      radius_eff_liq: Optional[FlowFieldVal] = None,
+      cloud_path_liq: Optional[FlowFieldVal] = None,
+      radius_eff_ice: Optional[FlowFieldVal] = None,
+      cloud_path_ice: Optional[FlowFieldVal] = None,
+  ) -> FlowFieldMap:
+    """Combines the gas optical properties with the cloud optical properties."""
+    gas_lookup = self.gas_optics_lw if is_lw else self.gas_optics_sw
+    cloud_states = [
+        radius_eff_liq,
+        cloud_path_liq,
+        radius_eff_ice,
+        cloud_path_ice,
+    ]
+    cloud_states = [
+        x
+        if x is not None
+        else tf.nest.map_structure(tf.zeros_like, optical_props['ssa'])
+        for x in cloud_states
+    ]
+    ibnd = gas_lookup.g_point_to_bnd[igpt]
+
+    compute_cloud_properties_fn = self.cloud_properties_fn(ibnd, is_lw)
+
+    cloud_optical_props = tf.nest.map_structure(
+        compute_cloud_properties_fn, *cloud_states
+    )
+    if isinstance(cloud_optical_props, Sequence):
+      # Unnest dictionary.
+      cloud_optical_props = {
+          k: [cloud_prop[k] for cloud_prop in cloud_optical_props]
+          for k in optical_props
+      }
+    if not is_lw:
+      cloud_optical_props = self._apply_delta_scaling_for_cloud(
+          cloud_optical_props
+      )
+    return self.combine_optical_properties(optical_props, cloud_optical_props)
+
   def compute_lw_optical_properties(
       self,
       pressure: FlowFieldVal,
@@ -300,6 +437,10 @@ class RRTMOptics(optics_base.OpticsScheme):
       molecules: FlowFieldVal,
       igpt: tf.Tensor,
       vmr_fields: Optional[Dict[int, FlowFieldVal]] = None,
+      cloud_r_eff_liq: Optional[FlowFieldVal] = None,
+      cloud_path_liq: Optional[FlowFieldVal] = None,
+      cloud_r_eff_ice: Optional[FlowFieldVal] = None,
+      cloud_path_ice: Optional[FlowFieldVal] = None,
   ) -> FlowFieldMap:
     """Computes the monochromatic longwave optical properties.
 
@@ -316,6 +457,12 @@ class RRTMOptics(optics_base.OpticsScheme):
       igpt: The spectral interval index, or g-point.
       vmr_fields: An optional dictionary containing precomputed volume mixing
         ratio fields, keyed by gas index, that will overwrite the global means.
+      cloud_r_eff_liq: The effective radius of cloud droplets [m].
+      cloud_path_liq: The cloud liquid water path in each atmospheric grid cell
+        [kg/m²].
+      cloud_r_eff_ice: The effective radius of cloud ice particles [m].
+      cloud_path_ice: The cloud ice water path in each atmospheric grid cell
+        [kg/m²].
 
     Returns:
       A dictionary containing (for a single g-point):
@@ -334,11 +481,22 @@ class RRTMOptics(optics_base.OpticsScheme):
         vmr_fields,
     )
     zeros = tf.nest.map_structure(tf.zeros_like, optical_depth_lw)
-    return {
+    optical_props = {
         'optical_depth': optical_depth_lw,
         'ssa': zeros,
         'asymmetry_factor': zeros,
     }
+    if cloud_path_liq is not None or cloud_path_ice is not None:
+      return self._combine_gas_and_cloud_properties(
+          igpt,
+          optical_props,
+          is_lw=True,
+          radius_eff_liq=cloud_r_eff_liq,
+          cloud_path_liq=cloud_path_liq,
+          radius_eff_ice=cloud_r_eff_ice,
+          cloud_path_ice=cloud_path_ice,
+      )
+    return optical_props
 
   def compute_sw_optical_properties(
       self,
@@ -347,6 +505,10 @@ class RRTMOptics(optics_base.OpticsScheme):
       molecules: FlowFieldVal,
       igpt: tf.Tensor,
       vmr_fields: Optional[Dict[int, FlowFieldVal]] = None,
+      cloud_r_eff_liq: Optional[FlowFieldVal] = None,
+      cloud_path_liq: Optional[FlowFieldVal] = None,
+      cloud_r_eff_ice: Optional[FlowFieldVal] = None,
+      cloud_path_ice: Optional[FlowFieldVal] = None,
   ) -> FlowFieldMap:
     """Computes the monochromatic shortwave optical properties.
 
@@ -363,6 +525,12 @@ class RRTMOptics(optics_base.OpticsScheme):
       igpt: The spectral interval index, or g-point.
       vmr_fields: An optional dictionary containing precomputed volume mixing
         ratio fields, keyed by gas index, that will overwrite the global means.
+      cloud_r_eff_liq: The effective radius of cloud droplets [m].
+      cloud_path_liq: The cloud liquid water path in each atmospheric grid cell
+        [kg/m²].
+      cloud_r_eff_ice: The effective radius of cloud ice particles [m].
+      cloud_path_ice: The cloud ice water path in each atmospheric grid cell
+        [kg/m²].
 
     Returns:
       A dictionary containing (for a single g-point):
@@ -391,11 +559,22 @@ class RRTMOptics(optics_base.OpticsScheme):
     ssa = tf.nest.map_structure(
         tf.math.divide_no_nan, rayleigh_scattering, optical_depth_sw
     )
-    return {
+    gas_optical_props = {
         'optical_depth': optical_depth_sw,
         'ssa': ssa,
         'asymmetry_factor': tf.nest.map_structure(tf.zeros_like, ssa),
     }
+    if cloud_path_liq is not None or cloud_path_ice is not None:
+      return self._combine_gas_and_cloud_properties(
+          igpt,
+          gas_optical_props,
+          is_lw=False,
+          radius_eff_liq=cloud_r_eff_liq,
+          cloud_path_liq=cloud_path_liq,
+          radius_eff_ice=cloud_r_eff_ice,
+          cloud_path_ice=cloud_path_ice,
+      )
+    return gas_optical_props
 
   def compute_planck_sources(
       self,
@@ -513,12 +692,11 @@ class GrayAtmosphereOptics(optics_base.OpticsScheme):
     self._alpha = params.gray_atmosphere_optics.alpha
     self._d0_lw = params.gray_atmosphere_optics.d0_lw
     self._d0_sw = params.gray_atmosphere_optics.d0_sw
-    self._kernel_op = kernel_op
     self._g_dim = g_dim
     self._grad_central = (
-        lambda f: self._kernel_op.apply_kernel_op_x(f, 'kDx'),
-        lambda f: self._kernel_op.apply_kernel_op_y(f, 'kDy'),
-        lambda f: self._kernel_op.apply_kernel_op_z(f, 'kDz', 'kDzsh'),
+        lambda f: kernel_op.apply_kernel_op_x(f, 'kDx'),
+        lambda f: kernel_op.apply_kernel_op_y(f, 'kDy'),
+        lambda f: kernel_op.apply_kernel_op_z(f, 'kDz', 'kDzsh'),
     )[g_dim]
 
   def compute_lw_optical_properties(

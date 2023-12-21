@@ -28,7 +28,7 @@ import "swirl_lm/physics/combustion/turbulent_kinetic_energy.proto";
 //     Coupled Atmosphere–fire Model: Basic Fire Behavior and Dependence on Wind
 //     Speed.” Journal of Geophysical Research 110 (D13): 287.
 //
-// Next id: 18
+// Next id: 20
 message Wood {
   // The B scale of the fuel elements, in units of m.
   optional float s_b = 1;
@@ -97,4 +97,10 @@ message Wood {
   // Defines the turbulent kinetic energy model to be used to compute the
   // reaction source terms.
   optional TKE tke = 16;
+
+  // Defines the linear ramp function for ignited volume fraction (ivf). At
+  // T=t_0_ivf the fraction is 0 and at T=t_1_ivf, it is 1.  See Figure 4.1 in
+  // [1].
+  optional float t_0_ivf = 18 [default = 300.0];
+  optional float t_1_ivf = 19 [default = 700.0];
 }

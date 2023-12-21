@@ -61,7 +61,7 @@ def compute_optical_properties(
     cloud_path_ice: tf.Tensor,
     radius_eff_liq: tf.Tensor,
     radius_eff_ice: tf.Tensor,
-    ibnd: int,
+    ibnd: tf.Tensor,
 ) -> Dict[str, tf.Tensor]:
   """Computes the optical properties of clouds from lookup tables.
 
@@ -158,7 +158,7 @@ def compute_optical_properties(
       'ssa': tf.math.divide_no_nan(
           combined_props['tau_ssa'], combined_props['tau']
       ),
-      'g': tf.math.divide_no_nan(
+      'asymmetry_factor': tf.math.divide_no_nan(
           combined_props['tau_ssa_g'], combined_props['tau_ssa']
       ),
   }

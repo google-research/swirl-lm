@@ -437,7 +437,7 @@ def prep_step_by_chunk_fn(
 
 def apply_op_x(
     tile_list: FlowFieldVal,
-    mulop: tf.Operation,
+    mulop: tf.Tensor,
 ) -> FlowFieldVal:
   """Apply op in x."""
   # Handles the case of a single 3D tf.Tensor.
@@ -464,7 +464,7 @@ def apply_op_x(
 
 def apply_op_y(
     tile_list: FlowFieldVal,
-    mulop: tf.Operation,
+    mulop: tf.Tensor,
 ) -> FlowFieldVal:
   """Apply op in y."""
   # Handles the case of a single 3D tf.Tensor.
@@ -491,7 +491,7 @@ def apply_op_y(
 
 def apply_op_z(
     tile_list: FlowFieldVal,
-    z_op_list: Sequence[tf.Operation],
+    z_op_list: Sequence[tf.Tensor],
     shift: Optional[Sequence[int]] = None,
 ) -> FlowFieldVal:
   """Apply op in z."""

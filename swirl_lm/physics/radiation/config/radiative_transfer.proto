@@ -11,6 +11,10 @@ message RRTMOptics {
   optional string longwave_nc_filepath = 1;
   // Path of NetCDF file containing the shortwave lookup tables.
   optional string shortwave_nc_filepath = 2;
+  // Path of NetCDF file containing the cloud longwave lookup table.
+  optional string cloud_longwave_nc_filepath = 3;
+  // Path of NetCDF file containing the cloud shortwave lookup table.
+  optional string cloud_shortwave_nc_filepath = 4;
 }
 
 message GrayAtmosphereOptics {
@@ -85,4 +89,10 @@ message RadiativeTransfer {
   // Data about the prevalent atmospheric gases present in the atmosphere as
   // well as boundary conditions for the surface and top of atmosphere.
   optional AtmosphericState atmospheric_state = 3;
+  // The time interval between updates of the radiative fluxes (in seconds).
+  // Since the RRTMGP model is very computationally expensive, it is highly
+  // recommended that the update cycle be no less than 10 minutes. However, too
+  // long an update cycle can lead to instabilities (Pauluis and Emanuel 2004,
+  // https://doi.org/10.1175/1520-0493(2004)132<0673:NIRFIC>2.0.CO;2).
+  optional float update_cycle_seconds = 4 [default = 600.0];
 }

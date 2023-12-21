@@ -14,6 +14,7 @@
 
 """Library for input config for the incompressible Navier-Stokes solver."""
 
+import copy
 import os
 import os.path
 from typing import Callable, List, Mapping, Optional, Sequence, Tuple
@@ -43,7 +44,8 @@ _G_THRESHOLD = 1e-6
 
 flags.DEFINE_string(
     'config_filepath', None,
-    'The full path to the text proto file that stores all input parameters.')
+    'The full path to the text proto file that stores all input parameters.'
+)
 flags.DEFINE_bool(
     'simulation_debug',
     False,
@@ -187,6 +189,16 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     )
 
     self.kernel_op_type = config.kernel_op_type
+    if config.kernel_op_type == KernelOpType.KERNEL_OP_CONV:
+      self._kernel_op = get_kernel_fn.ApplyKernelConvOp(self.kernel_size)
+    elif config.kernel_op_type == KernelOpType.KERNEL_OP_SLICE:
+      self._kernel_op = get_kernel_fn.ApplyKernelSliceOp()
+    elif config.kernel_op_type == KernelOpType.KERNEL_OP_MATMUL:
+      self._kernel_op = get_kernel_fn.ApplyKernelMulOp(self.nx, self.ny)
+    else:
+      raise ValueError(
+          'Unknown kernel operator {}'.format(config.kernel_op_type)
+      )
 
     self.solver_procedure = config.solver_procedure
     self.convection_scheme = config.convection_scheme
@@ -204,6 +216,8 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
 
     self.thermodynamics = config.thermodynamics if config.HasField(
         'thermodynamics') else None
+    self.radiative_transfer = config.radiative_transfer if config.HasField(
+        'radiative_transfer') else None
 
     if (self.thermodynamics is not None and
         self.thermodynamics.HasField('solver_mode')):
@@ -587,8 +601,11 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
           grid_parametrization_pb2.GridParametrization] = None,
   ) -> 'SwirlLMParameters':
     """Reads the config text proto file."""
-    with tf.io.gfile.GFile(config_filepath, 'r') as f:
-      text_proto = f.read()
+    text_proto: str = None
+    if text_proto is None:
+      with tf.io.gfile.GFile(config_filepath, 'r') as f:
+        text_proto = f.read()
+      logging.info('Loaded config file `%s` from file.', config_filepath)
 
     return SwirlLMParameters.config_from_text_proto(text_proto, grid_params)
 
@@ -777,6 +794,11 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
       `additional_states`.
     """
     return self._postprocessing_states_update_fn
+
+  @property
+  def kernel_op(self):
+    """A shallow copy of the `ApplyKernelOp` instance."""
+    return copy.copy(self._kernel_op)
 
   @preprocessing_states_update_fn.setter
   def preprocessing_states_update_fn(self, update_fn):

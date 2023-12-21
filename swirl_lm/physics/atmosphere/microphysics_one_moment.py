@@ -63,9 +63,12 @@ References:
    large-eddy simulations of mixed-phase Arctic stratocumulus clouds using a
    simple microphysics approach, Monthly Weather Review, 143(11), 4393–4421,
    2015.
+8. Liu, Y. and Hallett, J. (1997), The '1/3' power law between effective radius
+   and liquid-water content. Q.J.R. Meteorol. Soc., 123: 1789-1795.
 """
 
 import dataclasses
+import enum
 from typing import Callable, Optional, Union
 
 import numpy as np
@@ -88,6 +91,17 @@ K_COND = 2.4e-2
 NU_AIR = 1.6e-5
 # The molecular diffusivity of water vapor [m^2/s].
 D_VAP = 2.26e-5
+# The optical asymmetry factor of cloud droplets.
+ASYMMETRY_CLOUD = 0.8
+# The number of cloud droplets per cubic meter.
+DROPLET_N = 1e8
+
+
+class Phase(enum.Enum):
+  """Defines phases of water."""
+  LIQUID = 'l'
+  ICE = 'i'
+  VAPOR = 'v'
 
 
 def _gamma(x: Union[float, tf.Tensor]) -> tf.Tensor:
@@ -1065,3 +1079,42 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
         zz,
         additional_states,
     )
+
+  def cloud_particle_effective_radius(
+      self,
+      rho: types.FlowFieldVal,
+      q_c: types.FlowFieldVal,
+      phase: str,
+  ) -> types.FlowFieldVal:
+    """Computes the 1-moment approximation of cloud particle effective radius.
+
+    This follows the formulation from Liu and Hallett (1997) equation 8. The
+    concentration of cloud particles is assumed to be constant and the 1/3 Power
+    Law between effective radius and water content is used. Particles are
+    assumed to be spherical for both liquid and ice, which is an
+    oversimplification for ice because ice crystal shapes can be complex. The
+    same asymmetry factor is used for liquid and ice.
+
+    Args:
+      rho: The density of the moist air [kg/m^3].
+      q_c: The condensed-phase specific humidity [kg/kg]. Note that this is the
+        specific humidity of ice or liquid and not their sum.
+      phase: The phase of the cloud particles (whether 'solid' or 'liquid').
+
+    Returns:
+      The effective radius (m) of the cloud droplets or ice particles.
+    """
+    assert phase in (
+        Phase.ICE.value,
+        Phase.LIQUID.value,
+    ), 'Effective radius calculation is only valid for liquid or ice.'
+
+    # Density of the condensate.
+    rho_c = RHO_WATER if phase == Phase.LIQUID.value else RHO_ICE
+
+    def r_eff_fn(rho: tf.Tensor, q_c: tf.Tensor) -> tf.Tensor:
+      """Equation 8 from Liu and hallett (1997)."""
+      alpha = (4.0 / 3.0 * np.pi * rho_c * ASYMMETRY_CLOUD) ** (-1 / 3)
+      return alpha * (rho * q_c / DROPLET_N) ** (1 / 3)
+
+    return tf.nest.map_structure(r_eff_fn, rho, q_c)

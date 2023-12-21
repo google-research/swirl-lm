@@ -17,7 +17,7 @@
 import functools
 import os
 import time
-from typing import Any, Dict, Optional, Sequence, Tuple, TypeVar
+from typing import Any, Dict, Optional, Sequence, Tuple, TypeVar, Union
 
 from absl import flags
 from absl import logging
@@ -29,29 +29,42 @@ from swirl_lm.boundary_condition import nonreflecting_boundary
 from swirl_lm.core import simulation
 from swirl_lm.linalg import poisson_solver
 from swirl_lm.utility import common_ops
-from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import tpu_util
 from swirl_lm.utility import types
 import tensorflow as tf
 
 flags.DEFINE_integer(
-    'min_steps_for_output', 1, 'Total number of steps before '
-    'the output start to be generated.', allow_override=True)
+    'min_steps_for_output',
+    1,
+    'Total number of steps before the output start to be generated.',
+    allow_override=True,
+)
 flags.DEFINE_string(
-    'data_dump_prefix', '/tmp/data', 'The output `ser` or `h5` '
+    'data_dump_prefix',
+    '/tmp/data',
+    'The output `ser` or `h5` '
     'files prefix. This will be suffixed with the field '
-    'components and step count.', allow_override=True)
+    'components and step count.',
+    allow_override=True,
+)
 flags.DEFINE_string(
-    'data_load_prefix', '', 'If non-empty, the input `ser` or `h5` '
+    'data_load_prefix',
+    '',
+    'If non-empty, the input `ser` or `h5` '
     'files prefix from where the initial state will be loaded. This will be '
     'suffixed with the field components and step count. If set, the directory '
     'portion of the prefix has to be different from the directory portion of '
-    '--data_dump_prefix.', allow_override=True)
+    '--data_dump_prefix.',
+    allow_override=True,
+)
 flags.DEFINE_bool(
-    'apply_data_load_filter', False,
+    'apply_data_load_filter',
+    False,
     'If True, only variables with names provided in field `states_from_file` '
     'in the config file will be loaded from files (at step specified by flag '
-    '`loading_step`.', allow_override=True)
+    '`loading_step`.',
+    allow_override=True,
+)
 RESTART_DUMP_CYCLE = flags.DEFINE_integer(
     'restart_dump_cycle',
     1,
@@ -60,7 +73,8 @@ RESTART_DUMP_CYCLE = flags.DEFINE_integer(
 )
 
 SAVE_LAST_VALID_STEP = flags.DEFINE_bool(
-    'save_last_valid_step', False,
+    'save_last_valid_step',
+    False,
     'If `True`, the solver will record and output the last non-NAN step before '
     'crashing. Default is `False` as this might have some performance impacts.',
     allow_override=True,
@@ -77,8 +91,9 @@ T = TypeVar('T')
 S = TypeVar('S')
 
 
-def _stateless_update_if_present(mapping: Dict[T, S],
-                                 updates: Dict[T, S]) -> Dict[T, S]:
+def _stateless_update_if_present(
+    mapping: Dict[T, S], updates: Dict[T, S]
+) -> Dict[T, S]:
   """Returns a copy of `mapping` with only existing keys updated."""
   mapping = mapping.copy()
   mapping.update({key: val for key, val in updates.items() if key in mapping})
@@ -110,9 +125,11 @@ def get_checkpoint_manager(
   """
   checkpoint = tf.train.Checkpoint(step_id=step_id)
   checkpoint_dir = os.path.join(
-      output_dir, CKPT_DIR_FORMAT.format(filename_prefix=filename_prefix))
+      output_dir, CKPT_DIR_FORMAT.format(filename_prefix=filename_prefix)
+  )
   return tf.train.CheckpointManager(
-      checkpoint, directory=checkpoint_dir, max_to_keep=3)
+      checkpoint, directory=checkpoint_dir, max_to_keep=3
+  )
 
 
 def _get_state_keys(params):
@@ -126,18 +143,21 @@ def _get_state_keys(params):
   if params.solver_procedure == parameters_lib.SolverProcedure.VARIABLE_DENSITY:
     essential_keys += ['rho']
   additional_keys = list(
-      params.additional_state_keys if params.additional_state_keys else [])
+      params.additional_state_keys if params.additional_state_keys else []
+  )
   helper_var_keys = list(
-      params.helper_var_keys if params.helper_var_keys else [])
+      params.helper_var_keys if params.helper_var_keys else []
+  )
 
   # Check to make sure we don't have keys duplicating / overwriting each other.
-  if (len(set(essential_keys)) + len(set(additional_keys)) +
-      len(set(helper_var_keys)) !=
-      len(set(essential_keys + additional_keys + helper_var_keys))):
+  if len(set(essential_keys)) + len(set(additional_keys)) + len(
+      set(helper_var_keys)
+  ) != len(set(essential_keys + additional_keys + helper_var_keys)):
     raise ValueError(
-        f'Duplicated keys detected between the three types of states: '
+        'Duplicated keys detected between the three types of states: '
         f'essential states: {essential_keys}, additional states: '
-        f'{additional_keys}, and helper vars: {helper_var_keys}')
+        f'{additional_keys}, and helper vars: {helper_var_keys}'
+    )
 
   for state_analytics_info in params.monitor_spec.state_analytics:
     for analytics_spec in state_analytics_info.analytics:
@@ -185,12 +205,19 @@ def _get_model(kernel_op, params):
   """Returns the appropriate Navier-Stokes model from `params`."""
   if params.solver_procedure == parameters_lib.SolverProcedure.VARIABLE_DENSITY:
     return simulation.Simulation(kernel_op, params)
-  raise ValueError('Solver procedure not recognized: '
-                   f'{params.solver_procedure}')
+  raise ValueError(
+      f'Solver procedure not recognized: {params.solver_procedure}'
+  )
 
 
-def _process_at_step_id(process_fn, essential_states, additional_states,
-                        step_id, process_step_id, is_periodic):
+def _process_at_step_id(
+    process_fn,
+    essential_states,
+    additional_states,
+    step_id,
+    process_step_id,
+    is_periodic,
+):
   """Executes `process_fn` conditionally depending on `step_id`.
 
   Args:
@@ -212,21 +239,28 @@ def _process_at_step_id(process_fn, essential_states, additional_states,
   Returns:
     The updated `essential_states` and `additional_states`.
   """
-  should_process = ((step_id % process_step_id == 0)
-                    if is_periodic else step_id == process_step_id)
+  should_process = (
+      (step_id % process_step_id == 0)
+      if is_periodic
+      else step_id == process_step_id
+  )
   if should_process:
     updated_states = process_fn(
-        states=essential_states, additional_states=additional_states)
-    essential_states = _stateless_update_if_present(essential_states,
-                                                    updated_states)
-    additional_states = _stateless_update_if_present(additional_states,
-                                                     updated_states)
+        states=essential_states, additional_states=additional_states
+    )
+    essential_states = _stateless_update_if_present(
+        essential_states, updated_states
+    )
+    additional_states = _stateless_update_if_present(
+        additional_states, updated_states
+    )
 
   return essential_states, additional_states
 
 
 def _update_additional_states(
-    essential_states, additional_states, step_id, **common_kwargs):
+    essential_states, additional_states, step_id, **common_kwargs
+):
   """Updates additional_states."""
   # Perform the additional states update, if present.
   updated_additional_states = additional_states
@@ -241,7 +275,9 @@ def _update_additional_states(
             states=essential_states,
             additional_states=additional_states,
             step_id=step_id,
-            **common_kwargs))
+            **common_kwargs,
+        )
+    )
 
   if params.additional_states_update_fn is not None:
     with tf.name_scope('additional_states_update'):
@@ -249,13 +285,13 @@ def _update_additional_states(
           states=essential_states,
           additional_states=additional_states,
           step_id=step_id,
-          **common_kwargs)
+          **common_kwargs,
+      )
 
   return updated_additional_states
 
 
-def _state_has_nan_inf(state: PerReplica,
-                       replicas: Array) -> bool:
+def _state_has_nan_inf(state: PerReplica, replicas: Array) -> bool:
   """Checks whether any field in the `state` contains `nan` or `inf`."""
   has_nan_inf = False
   for _, v in state.items():
@@ -264,7 +300,9 @@ def _state_has_nan_inf(state: PerReplica,
     # is needed.
     if common_ops.global_reduce(
         tf.math.logical_or(tf.math.is_nan(v), tf.math.is_inf(v)),
-        tf.reduce_any, replicas.reshape([1, -1])):
+        tf.reduce_any,
+        replicas.reshape([1, -1]),
+    ):
       has_nan_inf = True
     # For some reason, the graph tracing in this case doesn't allow early break
     # of the loop. For now we will just check through all fields without early
@@ -278,7 +316,7 @@ def _one_cycle(
     init_state: PerReplica,
     init_step_id: Array,
     num_steps: Array,
-    params: parameters_lib.SwirlLMParameters,
+    params: Union[parameters_lib.SwirlLMParameters, Any],
 ) -> Tuple[PerReplica, PerReplica]:
   """Runs one cycle of the Navier-Stokes solver.
 
@@ -295,27 +333,16 @@ def _one_cycle(
     A 2-tuple of the final state at the end of the cycle and the completed
     number of steps, both will be in the PerReplica format.
   """
-  logging.info('Tracing and compiling of _one_cycle starts. '
-               'This can take up to 30 min.')
+  logging.info(
+      'Tracing and compiling of _one_cycle starts. This can take up to 30 min.'
+  )
   essential_keys, additional_keys, helper_var_keys = _get_state_keys(params)
   computation_shape = np.array([params.cx, params.cy, params.cz])
   logical_replicas = np.arange(
-      strategy.num_replicas_in_sync, dtype=np.int32).reshape(computation_shape)
+      strategy.num_replicas_in_sync, dtype=np.int32
+  ).reshape(computation_shape)
 
-  if (params.kernel_op_type ==
-      parameters_lib.KernelOpType.KERNEL_OP_CONV):
-    kernel_op = get_kernel_fn.ApplyKernelConvOp(params.kernel_size)
-  elif (params.kernel_op_type ==
-        parameters_lib.KernelOpType.KERNEL_OP_SLICE):
-    kernel_op = get_kernel_fn.ApplyKernelSliceOp()
-  elif (params.kernel_op_type ==
-        parameters_lib.KernelOpType.KERNEL_OP_MATMUL):
-    kernel_op = get_kernel_fn.ApplyKernelMulOp(params.nx,
-                                               params.ny)
-  else:
-    raise ValueError('Unknown kernel operator {}'.format(
-        params.kernel_op_type))
-
+  kernel_op = params.kernel_op
   model = _get_model(kernel_op, params)
 
   def step_fn(state):
@@ -326,9 +353,9 @@ def _one_cycle(
         replicas=logical_replicas,
         params=params,
     )
-    keys_to_split = (
-        set.union(set(essential_keys), set(additional_keys)) -
-        set(helper_var_keys))
+    keys_to_split = set.union(set(essential_keys), set(additional_keys)) - set(
+        helper_var_keys
+    )
     if not params.use_3d_tf_tensor:
       # Split essential/additional states into lists of 2D Tensors.
       for key in keys_to_split:
@@ -341,7 +368,8 @@ def _one_cycle(
       # `additional_states` consists of both additional state keys and helper
       # var keys.
       additional_states = dict(
-          (key, state[key]) for key in additional_keys + helper_var_keys)
+          (key, state[key]) for key in additional_keys + helper_var_keys
+      )
       essential_states = dict((key, state[key]) for key in essential_keys)
 
       # Perform a preprocessing step, if configured.
@@ -349,13 +377,14 @@ def _one_cycle(
         with tf.name_scope('preprocess_update'):
           essential_states, additional_states = _process_at_step_id(
               process_fn=functools.partial(
-                  params.preprocessing_states_update_fn,
-                  **common_kwargs),
+                  params.preprocessing_states_update_fn, **common_kwargs
+              ),
               essential_states=essential_states,
               additional_states=additional_states,
               step_id=step_id,
               process_step_id=params.preprocess_step_id,
-              is_periodic=params.preprocess_periodic)
+              is_periodic=params.preprocess_periodic,
+          )
 
       # Perform additional_states update.
       additional_states.update(
@@ -363,7 +392,9 @@ def _one_cycle(
               essential_states=essential_states,
               additional_states=additional_states,
               step_id=step_id,
-              **common_kwargs))
+              **common_kwargs,
+          )
+      )
 
       # Perform one step of the Navier-Stokes model. The updated state should
       # contain both the essential and additional states.
@@ -372,31 +403,38 @@ def _one_cycle(
           replicas=logical_replicas,
           step_id=step_id,
           states=essential_states,
-          additional_states=additional_states)
+          additional_states=additional_states,
+      )
 
       # Perform a postprocessing step, if configured.
       if params.apply_postprocess:
         with tf.name_scope('postprocess_update'):
           # Split the updated_state into essential states and additional states.
           additional_states = _stateless_update_if_present(
-              additional_states, updated_state)
-          essential_states = _stateless_update_if_present(essential_states,
-                                                          updated_state)
+              additional_states, updated_state
+          )
+          essential_states = _stateless_update_if_present(
+              essential_states, updated_state
+          )
 
           essential_states, additional_states = _process_at_step_id(
               process_fn=functools.partial(
-                  params.postprocessing_states_update_fn, **common_kwargs),
+                  params.postprocessing_states_update_fn, **common_kwargs
+              ),
               essential_states=essential_states,
               additional_states=additional_states,
               step_id=step_id,
               process_step_id=params.postprocess_step_id,
-              is_periodic=params.postprocess_periodic)
+              is_periodic=params.postprocess_periodic,
+          )
 
           # Merge the essential states and additional states into updated_state.
-          updated_state = _stateless_update_if_present(updated_state,
-                                                       additional_states)
-          updated_state = _stateless_update_if_present(updated_state,
-                                                       essential_states)
+          updated_state = _stateless_update_if_present(
+              updated_state, additional_states
+          )
+          updated_state = _stateless_update_if_present(
+              updated_state, essential_states
+          )
 
       if SAVE_LAST_VALID_STEP.value:
         if _state_has_nan_inf(updated_state, logical_replicas):
@@ -419,8 +457,8 @@ def _one_cycle(
 
 
 def solver(
-    customized_init_fn: types.InitFn,
-    params_input: Optional[parameters_lib.SwirlLMParameters] = None,
+    customized_init_fn: Union[types.InitFn, Any],
+    params_input: Optional[Union[parameters_lib.SwirlLMParameters, Any]] = None,
 ):
   """Runs the Navier-Stokes Solver with TF2 Distribution strategy.
 
@@ -445,7 +483,8 @@ def solver(
   computation_shape = np.array([params.cx, params.cy, params.cz])
   logging.info('Computation_shape is %s', str(computation_shape))
   strategy = driver_tpu.initialize_tpu(
-      tpu_address=FLAGS.target, computation_shape=computation_shape)
+      tpu_address=FLAGS.target, computation_shape=computation_shape
+  )
   num_replicas = strategy.num_replicas_in_sync
   logging.info('TPU is initialized. Number of replica is %d', num_replicas)
   logical_coordinates = tpu_util.grid_coordinates(computation_shape).tolist()
@@ -471,7 +510,8 @@ def solver(
           'simulation step from a different run, please use a separate '
           'output directory. To have a separate output directory, the '
           'directory portions of --data_load_prefix and --data_dump_prefix '
-          'need to be different.')
+          'need to be different.'
+      )
     # If a loading directory is specified, we check if the step directory to
     # read from exists. The step id for data to read from the input directory is
     # provided by the `loading_step` in `params`. If it exists, we *assume* the
@@ -485,7 +525,8 @@ def solver(
       raise ValueError(
           f'--data_load_prefix was set to {FLAGS.data_load_prefix} and '
           f'loading step is {params.loading_step} but no restart files are '
-          f'found in {loading_subdir}.')
+          f'found in {loading_subdir}.'
+      )
     read_state_from_input_dir = functools.partial(
         driver_tpu.distributed_read_state,
         strategy,
@@ -501,7 +542,8 @@ def solver(
 
   logging.info('Getting checkpoint_manager.')
   ckpt_manager = get_checkpoint_manager(
-      step_id=step_id, output_dir=output_dir, filename_prefix=filename_prefix)
+      step_id=step_id, output_dir=output_dir, filename_prefix=filename_prefix
+  )
 
   # Check if only part of the data will be dumped.
   data_dump_filter = params.states_to_file if params.states_to_file else None
@@ -526,7 +568,8 @@ def solver(
         output_dir=output_dir,
         filename_prefix=filename_prefix,
         step_id=step_id,
-        data_dump_filter=data_dump_filter)
+        data_dump_filter=data_dump_filter,
+    )
 
     # This will block until all replicas are done writing.
     replica_id_write_status = []
@@ -539,7 +582,8 @@ def solver(
       strategy,
       logical_coordinates=logical_coordinates,
       output_dir=output_dir,
-      filename_prefix=filename_prefix)
+      filename_prefix=filename_prefix,
+  )
   logging.info('read_state function created.')
 
   t_start = time.time()
@@ -548,8 +592,10 @@ def solver(
   # Wrapping `init_fn` with tf.function so it is not retraced unnecessarily for
   # every core/device.
   state = driver_tpu.distribute_values(
-      strategy, value_fn=tf.function(init_fn),
-      logical_coordinates=logical_coordinates)
+      strategy,
+      value_fn=tf.function(init_fn),
+      logical_coordinates=logical_coordinates,
+  )
 
   # Accessing the values in state to synchronize the client so the main thread
   # will wait here until the `state` is initialized and all remote operations
@@ -557,8 +603,9 @@ def solver(
   replica_values = state['replica_id'].values
   logging.info('State initialized. Replicas are : %s', str(replica_values))
   t_post_init = time.time()
-  logging.info('Initialization stage done. Took %f secs.',
-               t_post_init - t_start)
+  logging.info(
+      'Initialization stage done. Took %f secs.', t_post_init - t_start
+  )
 
   write_initial_state = False
 
@@ -568,24 +615,33 @@ def solver(
     # to read in the state.
     logging.info('Detected checkpoint. Starting `restore_or_initialize`.')
     if input_dir is not None:
-      logging.info('--data_load_prefix was set to %s but not using it '
-                   'because checkpoint was detected in the data dump '
-                   'directory %s.', FLAGS.data_load_prefix,
-                   FLAGS.data_dump_prefix)
+      logging.info(
+          '--data_load_prefix was set to %s but not using it '
+          'because checkpoint was detected in the data dump '
+          'directory %s.',
+          FLAGS.data_load_prefix,
+          FLAGS.data_dump_prefix,
+      )
     ckpt_manager.restore_or_initialize()
-    state = read_state(state=_local_state(strategy, state),
-                       step_id=step_id_value())
+    state = read_state(
+        state=_local_state(strategy, state), step_id=step_id_value()
+    )
     # This is to sync the client code to the worker execution.
     replica_id_values = state['replica_id'].values
     logging.info(
         '`restoring-checkpoint-if-necessary` stage '
         'done with reading checkpoint. Replicas are: %s',
-        str(replica_id_values))
+        str(replica_id_values),
+    )
   # Override initial state with state from a previous run if requested.
   elif input_dir is not None:
-    logging.info('--data_load_prefix is set to %s, loading from %s at step %s, '
-                 'and overriding the default initialized state.',
-                 FLAGS.data_load_prefix, input_dir, params.loading_step)
+    logging.info(
+        '--data_load_prefix is set to %s, loading from %s at step %s, '
+        'and overriding the default initialized state.',
+        FLAGS.data_load_prefix,
+        input_dir,
+        params.loading_step,
+    )
     state = read_state_from_input_dir(
         state=_local_state(strategy, state),
         step_id=tf.constant(params.loading_step),
@@ -596,44 +652,63 @@ def solver(
     logging.info(
         '`restoring-checkpoint-if-necessary` stage '
         'done with reading from load directory. Replicas are: %s',
-        str(replica_id_values))
+        str(replica_id_values),
+    )
     logging.info('Read states from %s at %i', input_dir, params.loading_step)
   # Use default initial state.
   else:
     write_initial_state = True
-    logging.info('No checkpoint was found and --data_load_prefix was not set. '
-                 'Proceeding with default initializations for all variables.')
+    logging.info(
+        'No checkpoint was found and --data_load_prefix was not set. '
+        'Proceeding with default initializations for all variables.'
+    )
 
   if write_initial_state:
     logging.info('Starting `write_state` for the initial state.')
-    write_status = write_state_and_sync(state=_local_state(strategy, state),
-                                        step_id=step_id_value())
+    write_status = write_state_and_sync(
+        state=_local_state(strategy, state), step_id=step_id_value()
+    )
     ckpt_manager.save()
     logging.info(
         '`restoring-checkpoint-if-necessary` stage '
-        'done with writing initial steps. Write status are: %s', write_status)
+        'done with writing initial steps. Write status are: %s',
+        write_status,
+    )
 
   t_post_restore = time.time()
-  logging.info('restore-if-necessary-or-write took %f secs.',
-               t_post_restore - t_post_init)
+  logging.info(
+      'restore-if-necessary-or-write took %f secs.',
+      t_post_restore - t_post_init,
+  )
 
   if params.num_steps < 0:
-    raise ValueError('`num_steps` should not be negative but it was set to ' +
-                     f'{params.num_steps}.')
-  if (params.num_steps > 0 and
-      (step_id_value() - params.start_step) % params.num_steps != 0):
-    raise ValueError('Incompatible step_id detected. `step_id` is expected '
-                     'to be `start_step` + N * `num_steps` but (step_id: {}, '
-                     'start_step: {}, num_steps: {}) is detected. Maybe the '
-                     'checkpoint step is inconsistent?'.format(
-                         step_id_value(), params.start_step, params.num_steps))
+    raise ValueError(
+        '`num_steps` should not be negative but it was set to'
+        f' {params.num_steps}.'
+    )
+  if (
+      params.num_steps > 0
+      and (step_id_value() - params.start_step) % params.num_steps != 0
+  ):
+    raise ValueError(
+        'Incompatible step_id detected. `step_id` is expected '
+        'to be `start_step` + N * `num_steps` but (step_id: {}, '
+        'start_step: {}, num_steps: {}) is detected. Maybe the '
+        'checkpoint step is inconsistent?'.format(
+            step_id_value(), params.start_step, params.num_steps
+        )
+    )
   logging.info(
       'Simulation iteration starts. Total %d steps, starting from %d, '
-      'with %d steps per cycle.', params.num_steps * params.num_cycles,
-      step_id_value(), params.num_steps)
+      'with %d steps per cycle.',
+      params.num_steps * params.num_cycles,
+      step_id_value(),
+      params.num_steps,
+  )
 
-  while step_id_value() < (params.start_step +
-                           params.num_steps * params.num_cycles):
+  while step_id_value() < (
+      params.start_step + params.num_steps * params.num_cycles
+  ):
     cycle = (step_id_value() - params.start_step) // params.num_steps
     logging.info('Step %d (cycle %d) is starting.', step_id_value(), cycle)
     t0 = time.time()
@@ -642,7 +717,8 @@ def solver(
         init_state=state,
         init_step_id=step_id_value(),
         num_steps=params.num_steps,
-        params=params)
+        params=params,
+    )
 
     # Completed number steps are guaranteed to be identical for all replicas, so
     # we are just taking replica 0 value.
@@ -653,44 +729,65 @@ def solver(
       logging.info(
           'Non-convergence detected. Early exit from cycle %d at step %d.'
           'Starting dumping the last valid state at step %d',
-          cycle, step_id_value() + 1, step_id_value())
-      write_status = write_state_and_sync(_local_state(strategy, state),
-                                          step_id=step_id_value())
-      logging.info('Dumping full state done. Write status are: %s',
-                   write_status)
+          cycle,
+          step_id_value() + 1,
+          step_id_value(),
+      )
+      write_status = write_state_and_sync(
+          _local_state(strategy, state), step_id=step_id_value()
+      )
+      logging.info(
+          'Dumping full state done. Write status are: %s', write_status
+      )
       raise ValueError(
           f'Non-convergence detected. Early exit from cycle {cycle} at step '
           f'{step_id_value() + 1}. The last valid state at step '
-          f'{step_id_value()} has been saved in the specified output path.')
+          f'{step_id_value()} has been saved in the specified output path.'
+      )
 
     replica_id_values = []
     for i in range(num_replicas):
       replica_id_values.append(
-          _local_state(strategy, state)[i]['replica_id'].numpy())
-    logging.info('One cycle computation is done. Replicas are: %s',
-                 str(replica_id_values))
+          _local_state(strategy, state)[i]['replica_id'].numpy()
+      )
+    logging.info(
+        'One cycle computation is done. Replicas are: %s',
+        str(replica_id_values),
+    )
     t1 = time.time()
-    logging.info('Completed total %d steps (%d cycles) so far. Took %f secs '
-                 'for the last cycle (%d steps).',
-                 step_id_value(), cycle + 1, t1 - t0, params.num_steps)
+    logging.info(
+        'Completed total %d steps (%d cycles) so far. Took %f secs '
+        'for the last cycle (%d steps).',
+        step_id_value(),
+        cycle + 1,
+        t1 - t0,
+        params.num_steps,
+    )
 
     # Save checkpoint if the current step, from the start of the simulation,
     # is a multiple of the checkpoint interval, else just record, a possibly
     # shortened version of the current state.
     if (step_id_value() - params.start_step) % checkpoint_interval == 0:
-      write_status = write_state_and_sync(_local_state(strategy, state),
-                                          step_id=step_id_value())
-      logging.info('`Post cycle writing full state done. '
-                   'Write status are: %s', write_status)
+      write_status = write_state_and_sync(
+          _local_state(strategy, state), step_id=step_id_value()
+      )
+      logging.info(
+          '`Post cycle writing full state done. Write status are: %s',
+          write_status,
+      )
       ckpt_manager.save()
     else:
       # Note, the first time this is called retracing will occur for the
       # subgraphs in `distribted_write_state` if data_dump_filter is not `None`.
-      write_status = write_state_and_sync(_local_state(strategy, state),
-                                          step_id=step_id_value(),
-                                          data_dump_filter=data_dump_filter)
-      logging.info('`Post cycle writing filtered state done. '
-                   'Write status are: %s', write_status)
+      write_status = write_state_and_sync(
+          _local_state(strategy, state),
+          step_id=step_id_value(),
+          data_dump_filter=data_dump_filter,
+      )
+      logging.info(
+          '`Post cycle writing filtered state done. Write status are: %s',
+          write_status,
+      )
     t2 = time.time()
     logging.info('Writing output & checkpoint took %f secs.', t2 - t1)
 

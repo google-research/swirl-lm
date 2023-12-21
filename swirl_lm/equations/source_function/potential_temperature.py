@@ -234,44 +234,65 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
           '`water` thermodynamics model is required to consider cloud radiation'
           ' in the potential temperature equation.'
       )
-      halos = [self._params.halo_width] * 3
-      f_r = self._cloud.source_by_radiation(
-          thermo_states['q_l'],
-          states['rho_thermal'],
-          thermo_states['zz'],
-          self._h[self._g_dim],
-          self._g_dim,
-          halos,
-          replica_id,
-          replicas,
-      )
+      if self._params.radiative_transfer is not None:
+        assert 'rad_heat_src' in additional_states, (
+            'The radiative transfer library requires `rad_heat_src` as an'
+            ' additional state.'
+        )
+        radiative_heating_rate = additional_states['rad_heat_src']
+        q_t = thermo_states['q_t']
+        exner_inv = self._thermodynamics.model.exner_inverse(
+            states['rho_thermal'],
+            q_t,
+            thermo_states['T'],
+            thermo_states['zz'],
+            additional_states,
+        )
+        source = tf.nest.map_structure(
+            tf.math.multiply, radiative_heating_rate, exner_inv
+        )
+      # Default to a simplified radiation model that captures only longwave
+      # radiative fluxes as a function of height and liquid water content
+      # (Stevens et al. 2005, https://doi.org/10.1175/MWR2930.1).
+      else:
+        halos = [self._params.halo_width] * 3
+        f_r = self._cloud.source_by_radiation(
+            thermo_states['q_l'],
+            states['rho_thermal'],
+            thermo_states['zz'],
+            self._h[self._g_dim],
+            self._g_dim,
+            halos,
+            replica_id,
+            replicas,
+        )
 
-      radiation_source_fn = lambda rho, f_r: -rho * f_r
+        radiation_source_fn = lambda rho, f_r: -rho * f_r
 
-      rad_src = tf.nest.map_structure(
-          radiation_source_fn, states[common.KEY_RHO], f_r
-      )
-      source = tf.nest.map_structure(
-          lambda f: f / (2.0 * self._h[self._g_dim]),
-          self._grad_central[self._g_dim](rad_src),
-      )
+        rad_src = tf.nest.map_structure(
+            radiation_source_fn, states[common.KEY_RHO], f_r
+        )
+        source = tf.nest.map_structure(
+            lambda f: f / (2.0 * self._h[self._g_dim]),
+            self._grad_central[self._g_dim](rad_src),
+        )
 
-      q_t = thermo_states['q_t']
-      cp_m = self._thermodynamics.model.cp_m(
-          q_t, thermo_states['q_l'], thermo_states['q_i']
-      )
-      cp_m_inv = tf.nest.map_structure(tf.math.reciprocal, cp_m)
-      exner_inv = self._thermodynamics.model.exner_inverse(
-          states['rho_thermal'],
-          q_t,
-          thermo_states['T'],
-          thermo_states['zz'],
-          additional_states,
-      )
-      cp_m_exner_inv = tf.nest.map_structure(
-          tf.math.multiply, cp_m_inv, exner_inv
-      )
-      source = tf.nest.map_structure(tf.math.multiply, cp_m_exner_inv, source)
+        q_t = thermo_states['q_t']
+        cp_m = self._thermodynamics.model.cp_m(
+            q_t, thermo_states['q_l'], thermo_states['q_i']
+        )
+        cp_m_inv = tf.nest.map_structure(tf.math.reciprocal, cp_m)
+        exner_inv = self._thermodynamics.model.exner_inverse(
+            states['rho_thermal'],
+            q_t,
+            thermo_states['T'],
+            thermo_states['zz'],
+            additional_states,
+        )
+        cp_m_exner_inv = tf.nest.map_structure(
+            tf.math.multiply, cp_m_inv, exner_inv
+        )
+        source = tf.nest.map_structure(tf.math.multiply, cp_m_exner_inv, source)
 
     if self._include_subsidence:
       assert isinstance(self._thermodynamics.model, water.Water), (

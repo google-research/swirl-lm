@@ -29,6 +29,7 @@
 
 import abc
 import dataclasses
+import os
 from typing import Dict, Sequence, Tuple
 
 import netCDF4 as nc
@@ -41,10 +42,31 @@ import tensorflow as tf
 class DataLoaderBase(metaclass=abc.ABCMeta):
   """Generic data loader that reads a .nc file and constructs TF tensors."""
 
+  _NETCDF_DATA_DIR = '/tmp/netcdf/data'
+
   @classmethod
   def _create_index(cls, name_arr: Sequence[str]) -> Dict[str, int]:
     """Utility function for generating an index from a sequence of names."""
     return {name: idx for idx, name in enumerate(name_arr)}
+
+  @classmethod
+  def _create_local_file(cls, cns_file_path):
+    """Copies remote files locally so they can be ingested by netCDF reader."""
+    # Create local directory.
+    if os.path.exists(cls._NETCDF_DATA_DIR):
+      assert os.path.isdir(cls._NETCDF_DATA_DIR)
+    else:
+      os.makedirs(cls._NETCDF_DATA_DIR)
+    local_filename = os.path.join(
+        cls._NETCDF_DATA_DIR, os.path.basename(cns_file_path)
+    )
+    # Copy the file from remote location if not already present.
+    if os.path.exists(local_filename):
+      assert os.path.isfile(local_filename)
+    else:
+      with tf.io.gfile.GFile(local_filename, 'w') as local_file:
+        local_file.write(tf.io.gfile.GFile(cns_file_path, mode='rb').read())
+    return local_filename
 
   @classmethod
   def _parse_nc_file(
@@ -54,19 +76,16 @@ class DataLoaderBase(metaclass=abc.ABCMeta):
   ) -> Tuple[nc.Dataset, types.VariableMap, types.DimensionMap]:
     """Utility function for unpacking the RRTMGP files and loading tensors.
 
-    Note that the lookup tables are loaded using `tf.Variable` in order to
-    prevent constant folding, which would easily cause the Tensorflow graph to
-    exceed the Protobuf hard limit of 2GB in a distributed setting.
-
     Args:
-      path: Full path of a zipped netCDF dataset file.
+      path: Full path of the netCDF dataset file.
       exclude_vars: Names of variables that should be skipped.
 
     Returns:
       A 3-tuple of 1) the original netCDF Dataset, 2) a dictionary containing
-      the data as tf.Variable, and 3) a dictionary of dimensions.
+      the data as tf.Tensor, and 3) a dictionary of dimensions.
     """
-    ds = nc.Dataset(path, 'r')
+    local_path = cls._create_local_file(path)
+    ds = nc.Dataset(local_path, 'r')
 
     tensor_dict = {}
     dim_map = {k: v.size for k, v in ds.dimensions.items()}

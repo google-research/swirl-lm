@@ -41,6 +41,8 @@ import tensorflow as tf
 class LookupVolumeMixingRatio(loader.DataLoaderBase):
   """Lookup table of volume mixing ratio profiles of atmospheric gases."""
 
+  # Reference pressure to be used when interpolating the vmr.
+  p_ref: tf.Tensor
   # Volume mixing ratio of water vapor by pressure layer `(n_p_ref)`.
   vmr_h2o: tf.Tensor
   # Volume mixing ratio of Ozone by pressure layer `(n_p_ref)`.
@@ -103,7 +105,10 @@ class LookupVolumeMixingRatio(loader.DataLoaderBase):
     # since, by definition, vmr is normalized by the number of moles of dry air.
     vmr_gm[constants.DRY_AIR_KEY] = constants.DRY_AIR_VMR
 
+    p_ref = ds['pres_layer'][:].data[site_coord, :]
+
     return dict(
+        p_ref=tf.constant(p_ref),
         vmr_h2o=tables['water_vapor'][exp_label, site_coord, :],
         vmr_o3=tables['ozone'][exp_label, site_coord, :],
         vmr_gm=vmr_gm,

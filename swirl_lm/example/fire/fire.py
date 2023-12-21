@@ -347,6 +347,68 @@ FirebenchStatesUpdateFn = Callable[
     types.FlowFieldMap]
 
 
+def get_init_rho_f(ground_elevation: tf.Tensor, fuel_bed_height: float,
+                   fuel_density: float, fuel_start_x: float,
+                   dz: float) -> wildfire_utils.InitFn:
+  """Returns the initializer function for rho_f."""
+
+  # We assume grid coordinates in zz are integer multiples of dz and use +/-0.1
+  # * dz offsets to select cells at specific z coordinates while avoiding
+  # round-off errors. For example, in a grid with dz=2m, to select the grid
+  # points bove z=3.5m, we will first quantize 3.5m with floor(3.5 / 2) * 2 to
+  # 2m, and then filter for 2 < zz - 0.1 * dz.
+
+  # `quantized_ground_elevation` is the z coordinate of the *second* grid point
+  # that is strictly below ground_elevation. We'll put the lowest fuel at the
+  # grid point right above this point, which will have a z-coordinate that
+  # satisties
+  #
+  #   z < ground_elevation <= z + dz
+  #
+  # For example, in a grid with dz=2m, if ground_elevation is in (0, 2],
+  # quantized_ground_elevation will be -2m and the fuel will be placed at the
+  # grid point with z=0. Note that if the ground elevation is 0 than the first
+  # fuel cell will be in the halo.
+
+  quantized_ground_elevation = tf.math.ceil(ground_elevation / dz) * dz - 2 * dz
+  num_full_cells = int(np.floor(fuel_bed_height / dz))
+  # Note that the number of full cells is one more than given by
+  # fuel_bed_height because we also put fuel into the boundary cell (i.e.,
+  # the cell that intersects with the terrain).
+  quantized_full_fuel_height = (quantized_ground_elevation +
+                                (num_full_cells + 1) * dz)
+  rho_f_top_val = fuel_density * (fuel_bed_height - num_full_cells * dz) / dz
+
+  def init_rho_f(xx, yy, zz, lx, ly, lz, coord):
+    """Generates initial `rho_f` field."""
+    del yy, lx, ly, lz, coord
+    # Bottom grid points are fully filled with the given fuel density.
+    rho_f_bottom = tf.compat.v1.where(
+        tf.math.logical_and(
+            zz > quantized_ground_elevation + 0.1 * dz,
+            zz < quantized_full_fuel_height + 0.1 * dz
+        ),
+        fuel_density * tf.ones_like(zz),
+        tf.zeros_like(zz),
+    )
+    # The top grid point is filled proportionally to how much of the remaining
+    # fuel bed height extends into the last grid cell.
+    rho_f_top = tf.where(
+        tf.math.logical_and(
+            zz >= quantized_full_fuel_height + 0.1 * dz,
+            zz < quantized_full_fuel_height + 1.1 * dz
+        ),
+        tf.cast(rho_f_top_val, tf.float32),
+        tf.zeros_like(zz),
+    )
+
+    rho_f = rho_f_bottom + rho_f_top
+
+    return tf.where(tf.less(xx, fuel_start_x), tf.zeros_like(xx), rho_f)
+
+  return init_rho_f
+
+
 class Fire:
   """A library for simulation of flow over a flat surface."""
 
@@ -1100,51 +1162,6 @@ class Fire:
       del xx, yy, lx, ly, lz, coord
       return self.fire_utils.y_o_init * tf.ones_like(zz)
 
-    def init_rho_f(xx, yy, zz, lx, ly, lz, coord):
-      """Generates initial `rho_f` field."""
-      del yy, lx, ly, lz, coord
-      fuel_top_height = ground_elevation + self.fire_utils.fuel_bed_height
-      rho_f_mid = tf.compat.v1.where(
-          tf.math.logical_and(
-              zz < fuel_top_height,
-              zz >= ground_elevation,
-          ),
-          self.fire_utils.fuel_density * tf.ones_like(zz),
-          tf.zeros_like(zz),
-      )
-      rho_f_bc = tf.compat.v1.where(
-          tf.math.logical_and(
-              zz < ground_elevation,
-              zz >= ground_elevation - self.config.dz,
-          ),
-          self.fire_utils.fuel_density * tf.ones_like(zz),
-          tf.zeros_like(zz),
-      )
-      rho_f_sum = tf.reduce_sum(rho_f_mid, axis=2, keepdims=True)
-      rho_f_top_val = tf.maximum(
-          self.fire_utils.fuel_density
-          * self.fire_utils.fuel_bed_height
-          / self.config.dz
-          - rho_f_sum,
-          0.0,
-      )
-      rho_f_top = tf.where(
-          tf.math.logical_and(
-              zz >= fuel_top_height,
-              zz < fuel_top_height + self.config.dz,
-          ),
-          rho_f_top_val,
-          tf.zeros_like(zz),
-      )
-
-      rho_f = tf.clip_by_value(
-          rho_f_bc + rho_f_mid + rho_f_top,
-          clip_value_min=0.0,
-          clip_value_max=self.fire_utils.fuel_density,
-      )
-
-      return tf.where(tf.less(xx, self.fuel_start_x), tf.zeros_like(xx), rho_f)
-
     def init_rho_m(xx, yy, zz, lx, ly, lz, coord):
       """Generates initial moisture `rho_m` field."""
       del xx, yy, lx, ly, lz, coord
@@ -1323,6 +1340,9 @@ class Fire:
       assert (
           'rho_f' in self.config.additional_state_keys
       ), 'Fuel height is none zero but rho_f is not included in the config.'
+      init_rho_f = get_init_rho_f(
+          ground_elevation, self.fire_utils.fuel_bed_height,
+          self.fire_utils.fuel_density, self.fuel_start_x, self.config.dz)
       output.update({
           'rho_f':
               self.fire_utils.states_init(coordinates, init_rho_f, 'CONSTANT'),

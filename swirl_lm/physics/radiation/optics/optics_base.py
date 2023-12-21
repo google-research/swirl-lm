@@ -34,6 +34,8 @@ FlowFieldMap = types.FlowFieldMap
 class OpticsScheme(metaclass=abc.ABCMeta):
   """Abstract base class for optics scheme."""
 
+  _EPSILON = 1e-6
+
   def __init__(
       self,
       params: radiative_transfer_pb2.OpticsParameters,
@@ -44,8 +46,6 @@ class OpticsScheme(metaclass=abc.ABCMeta):
     self._g_dim = g_dim
     self._halos = halos
     self._face_interp_scheme_order = params.face_interp_scheme_order
-    self._kernel_op = kernel_op
-    self._kernel_op.add_kernel({'shift_dn': ([0.0, 0.0, 1.0], 1)})
     self._shift_down_fn = (
         lambda f: kernel_op.apply_kernel_op_x(f, 'shift_dnx'),
         lambda f: kernel_op.apply_kernel_op_y(f, 'shift_dny'),
@@ -60,6 +60,10 @@ class OpticsScheme(metaclass=abc.ABCMeta):
       molecules: FlowFieldVal,
       igpt: tf.Tensor,
       vmr_fields: Optional[Dict[int, FlowFieldVal]] = None,
+      cloud_r_eff_liq: Optional[FlowFieldVal] = None,
+      cloud_path_liq: Optional[FlowFieldVal] = None,
+      cloud_r_eff_ice: Optional[FlowFieldVal] = None,
+      cloud_path_ice: Optional[FlowFieldVal] = None,
   ) -> FlowFieldMap:
     """Computes the monochromatic longwave optical properties.
 
@@ -71,6 +75,12 @@ class OpticsScheme(metaclass=abc.ABCMeta):
       igpt: The spectral interval index, or g-point.
       vmr_fields: An optional dictionary containing precomputed volume mixing
         ratio fields, keyed by gas index, that will overwrite the global means.
+      cloud_r_eff_liq: The effective radius of cloud droplets [m].
+      cloud_path_liq: The cloud liquid water path in each atmospheric grid cell
+        [kg/m²].
+      cloud_r_eff_ice: The effective radius of cloud ice particles [m].
+      cloud_path_ice: The cloud ice water path in each atmospheric grid cell
+        [kg/m²].
 
     Returns:
       A dictionary containing (for a single g-point):
@@ -87,6 +97,10 @@ class OpticsScheme(metaclass=abc.ABCMeta):
       molecules: FlowFieldVal,
       igpt: tf.Tensor,
       vmr_fields: Optional[Dict[int, FlowFieldVal]] = None,
+      cloud_r_eff_liq: Optional[FlowFieldVal] = None,
+      cloud_path_liq: Optional[FlowFieldVal] = None,
+      cloud_r_eff_ice: Optional[FlowFieldVal] = None,
+      cloud_path_ice: Optional[FlowFieldVal] = None,
   ) -> FlowFieldMap:
     """Computes the monochromatic shortwave optical properties.
 
@@ -98,6 +112,12 @@ class OpticsScheme(metaclass=abc.ABCMeta):
       igpt: The spectral interval index, or g-point.
       vmr_fields: An optional dictionary containing precomputed volume mixing
         ratio fields, keyed by gas index, that will overwrite the global means.
+      cloud_r_eff_liq: The effective radius of cloud droplets [m].
+      cloud_path_liq: The cloud liquid water path in each atmospheric grid cell
+        [kg/m²].
+      cloud_r_eff_ice: The effective radius of cloud ice particles [m].
+      cloud_path_ice: The cloud ice water path in each atmospheric grid cell
+        [kg/m²].
 
     Returns:
       A dictionary containing (for a single g-point):
@@ -256,3 +276,50 @@ class OpticsScheme(metaclass=abc.ABCMeta):
         outermost_valid_top_layer,
     )
     return f_bottom, f_top
+
+  def combine_optical_properties(
+      self,
+      optical_props_1: FlowFieldMap,
+      optical_props_2: FlowFieldMap,
+  ) -> FlowFieldMap:
+    """Combines the optical properties from two separate parameterizations."""
+    tau = tf.nest.map_structure(
+        tf.math.add,
+        optical_props_1['optical_depth'],
+        optical_props_2['optical_depth'],
+    )
+
+    def combine_ssa(tau1, ssa1, tau2, ssa2) -> tf.Tensor:
+      return tau1 * ssa1 + tau2 * ssa2
+
+    ssa_unnormalized = tf.nest.map_structure(
+        combine_ssa,
+        optical_props_1['optical_depth'],
+        optical_props_1['ssa'],
+        optical_props_2['optical_depth'],
+        optical_props_2['ssa'],
+    )
+
+    def divide(x: tf.Tensor, y: tf.Tensor) -> tf.Tensor:
+      return tf.math.divide(x, tf.maximum(y, self._EPSILON))
+
+    def combine_asymmetry_factor(
+        tau1, ssa1, g1, tau2, ssa2, g2, ssa_tot
+    ) -> tf.Tensor:
+      return divide(tau1 * ssa1 * g1 + tau2 * ssa2 * g2, ssa_tot)
+
+    g = tf.nest.map_structure(
+        combine_asymmetry_factor,
+        optical_props_1['optical_depth'],
+        optical_props_1['ssa'],
+        optical_props_1['asymmetry_factor'],
+        optical_props_2['optical_depth'],
+        optical_props_2['ssa'],
+        optical_props_2['asymmetry_factor'],
+        ssa_unnormalized,
+    )
+    return {
+        'optical_depth': tau,
+        'ssa': tf.nest.map_structure(divide, ssa_unnormalized, tau),
+        'asymmetry_factor': g,
+    }

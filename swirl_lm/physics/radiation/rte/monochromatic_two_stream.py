@@ -85,9 +85,6 @@ class MonochromaticTwoStreamSolver:
     self.halos = params.halo_width
     self.g_dim = g_dim
     self.rte_utils = utils.RTEUtils(params)
-    self._kernel_op = kernel_op
-    self._kernel_op.add_kernel({'shift_up': ([1.0, 0.0, 0.0], 1)})
-    self._kernel_op.add_kernel({'shift_dn': ([0.0, 0.0, 1.0], 1)})
     self._shift_up_fn = (
         lambda f: kernel_op.apply_kernel_op_x(f, 'shift_upx'),
         lambda f: kernel_op.apply_kernel_op_y(f, 'shift_upy'),
@@ -563,7 +560,9 @@ class MonochromaticTwoStreamSolver:
     )
 
     # Direct-beam flux incident on the surface.
-    flux_down_sfc = self.rte_utils.slice(flux_down_direct, self.g_dim, 2, 0)
+    flux_down_sfc = self.rte_utils.slice(
+        flux_down_direct, self.g_dim, self.halos, 0
+    )
     core_idx = common_ops.get_core_coordinate(replicas, replica_id)[self.g_dim]
 
     def sfc_src_fn(flux_dn_0: tf.Tensor, sfc_albedo: tf.Tensor) -> tf.Tensor:

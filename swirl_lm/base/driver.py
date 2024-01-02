@@ -617,6 +617,7 @@ def solver(
   # are done.
   replica_values = state['replica_id'].values
   logging.info('State initialized. Replicas are : %s', str(replica_values))
+  t_post_init = time.time()
 
   write_initial_state = False
 

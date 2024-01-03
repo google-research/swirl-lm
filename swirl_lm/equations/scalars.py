@@ -105,25 +105,16 @@ class Scalars(object):
     # Get functions that computes terms in tranport equations for all scalars.
     self._scalar_model = {}
     for scalar_name in self._params.transport_scalars_names:
+      args = (self._kernel_op, self._params, scalar_name, self.thermodynamics)
       if scalar_name in potential_temperature.POTENTIAL_TEMPERATURE_VARNAME:
-        scalar_model = potential_temperature.PotentialTemperature
+        scalar_model = potential_temperature.PotentialTemperature(*args)
       elif scalar_name in humidity.HUMIDITY_VARNAME:
-        scalar_model = humidity.Humidity
+        scalar_model = humidity.Humidity(*args)
       elif scalar_name == 'e_t':
-        scalar_model = total_energy.TotalEnergy
+        scalar_model = total_energy.TotalEnergy(*args)
       else:
-        scalar_model = scalar_generic.ScalarGeneric
-
-      self._scalar_model.update(
-          {
-              scalar_name: scalar_model(
-                  self._kernel_op,
-                  self._params,
-                  scalar_name,
-                  self.thermodynamics,
-              )
-          }
-      )
+        scalar_model = scalar_generic.ScalarGeneric(*args)
+      self._scalar_model[scalar_name] = scalar_model
 
   def _exchange_halos(self, f, bc_f, replica_id, replicas):
     """Performs halo exchange for the variable f."""

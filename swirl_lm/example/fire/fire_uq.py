@@ -95,7 +95,8 @@ class FireUQSampler:
     if _MODIFY_INDIVIDUAL.value:
       return 4
     elif _READ_UQ_FILE.value:
-      return 20
+      uq_values = np.load(_UQ_FILENAME.value)
+      return uq_values.shape[0]
     else:
       return _N_SAMPLES_UQ.value
 

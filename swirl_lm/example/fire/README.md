@@ -9,7 +9,7 @@ This example simulates the Tubbs Fire.
    ```sh
    gcloud compute tpus tpu-vm create $TPU --project=$PROJECT \
       --zone=$ZONE \
-      --accelerator-type=$TYPE --version=tpu-vm-tf-2.11.0-pod \
+      --accelerator-type=$TYPE --version=tpu-vm-tf-2.12.0-pod \
       --metadata="tensorflow-env-vars=-e LIBTPU_INIT_ARGS=$TPU_FLAGS"
    ```
 

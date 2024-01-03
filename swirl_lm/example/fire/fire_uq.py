@@ -159,12 +159,6 @@ def main(_):
   uq_params = np.stack((fd_samples, md_samples, ws_samples)).T
   print(uq_params)
   np.save('uq_simulation_parameters.npy', uq_params)
-  # print("Fueld")
-  # print(np.mean(fd_samples))
-  # print("Moistd")
-  # print(np.mean(md_samples))
-  # print("Wind speed")
-  # print(np.mean(ws_samples))
 
 
 if __name__ == "__main__":

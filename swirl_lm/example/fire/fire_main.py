@@ -95,7 +95,7 @@ The ignition kernel is a sphere with its boundary smoothed by a tanh function.
 - `ignition_scale`: The smoothness factor of the tanh function.
 """
 
-from absl import app, flags, logging
+from absl import app, flags
 from swirl_lm.base import driver
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.example.fire import fire

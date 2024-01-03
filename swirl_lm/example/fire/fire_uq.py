@@ -12,20 +12,15 @@ _N_SAMPLES_UQ = flags.DEFINE_integer(
   100,
   'The number of samples collected for uncertainty quantification.'
 )
-_FUEL_LOAD_LB = flags.DEFINE_float(
-  'fuel_load_lb',
-  0.5,
-  'Lower bound of fuel load for uncertainty quantification.'
+_FUEL_DENSITY_LB = flags.DEFINE_float(
+  'fuel_density_lb',
+  0.2,
+  'Lower bound of fuel density for uncertainty quantification.'
 )
-_FUEL_LOAD_UB = flags.DEFINE_float(
-  'fuel_load_ub',
-  2.25,
-  'Upper bound of fuel load for uncertainty quantification.'
-)
-_LARGE_SCALE_FUEL_BED_HEIGHT = flags.DEFINE_float(
-  'large_scale_fuel_bed_height',
-  9.785,
-  'fuel_bed_height of the large scale simulation'
+_FUEL_DENSITY_UB = flags.DEFINE_float(
+  'fuel_density_ub',
+  3.0,
+  'Upper bound of fuel density for uncertainty quantification.'
 )
 _MOISTURE_CONTENT_LB = flags.DEFINE_float(
   'moisture_content_lb',
@@ -118,9 +113,9 @@ class FireUQSampler:
       wind_speed_samples = np.float32(uq_values[:, 2])
     else:
       if _MODIFY_INDIVIDUAL.value:
-        fuel_load_samples = np.ones(4) * _FUEL_LOAD_LB.value
-        fuel_load_samples[1] = _FUEL_LOAD_UB.value
-        fuel_density_samples = fuel_load_samples / _LARGE_SCALE_FUEL_BED_HEIGHT.value
+        fuel_density_samples = np.ones(4) * _FUEL_DENSITY_LB.value
+        fuel_density_samples[1] = _FUEL_DENSITY_UB.value
+        fuel_density_samples = fuel_density_samples
         moisture_content_samples = np.ones(4) * _MOISTURE_CONTENT_LB.value
         moisture_content_samples[2] = _MOISTURE_CONTENT_UB.value
         moisture_density_samples = moisture_content_samples * fuel_density_samples
@@ -128,10 +123,9 @@ class FireUQSampler:
         wind_speed_samples[3] = _WIND_SPEED_UB.value
       else:
         norm_samples = self._get_norm_samples(_N_SAMPLES_UQ.value, 3)
-        fuel_load_samples = self._shift_scale(
-            _FUEL_LOAD_LB.value, _FUEL_LOAD_UB.value, norm_samples[:, 0]
+        fuel_density_samples = self._shift_scale(
+            _FUEL_DENSITY_LB.value, _FUEL_DENSITY_UB.value, norm_samples[:, 0]
         )
-        fuel_density_samples = fuel_load_samples / _LARGE_SCALE_FUEL_BED_HEIGHT.value
         moisture_content_samples = self._shift_scale(
           _MOISTURE_CONTENT_LB.value,
           _MOISTURE_CONTENT_UB.value,
@@ -158,7 +152,7 @@ def main(_):
   fd_samples, md_samples, ws_samples = uq_sampler.generate_samples()
   uq_params = np.stack((fd_samples, md_samples, ws_samples)).T
   print(uq_params)
-  np.save('uq_simulation_parameters.npy', uq_params)
+  np.savetxt('uq_simulation_parameters.csv', uq_params, delimiter=',', fmt='%.7e')
 
 
 if __name__ == "__main__":

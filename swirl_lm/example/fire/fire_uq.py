@@ -14,7 +14,7 @@ _N_SAMPLES_UQ = flags.DEFINE_integer(
 )
 _FUEL_LOAD_LB = flags.DEFINE_float(
   'fuel_load_lb',
-  0.09,
+  0.5,
   'Lower bound of fuel load for uncertainty quantification.'
 )
 _FUEL_LOAD_UB = flags.DEFINE_float(
@@ -82,14 +82,18 @@ class FireUQSampler:
         'parameter). Ignores n_samples_uq flag.'
       )
     pass
+  
+  def _get_norm_samples(self, n_samples, n_uq_vars=3):
+    norm_samples = self.sampler.random(size=(n_samples, n_uq_vars), dtype=np.float32)
+    return norm_samples
 
-  def _uniform(self, lower_bound, upper_bound, n_samples):
+  def _shift_scale(self, lower_bound, upper_bound, norm_samples):
     """
-    Returns random numbers sampled uniformly in [lower_bound, uppber_bound].
+    Shift and scales norm_samples to the interval [lower_bound, uppber_bound].
     We do not use `self.sampler.uniform` for compatibility with previous
-    version of random number generation.
+    version of random number generation and for keeping the first n uq-samples
+    the same.
     """
-    norm_samples = self.sampler.random(size=(n_samples,), dtype=np.float32)
     return (upper_bound - lower_bound) * norm_samples + lower_bound
 
   def number_of_samples(self):
@@ -123,18 +127,19 @@ class FireUQSampler:
         wind_speed_samples = np.ones(4) * _WIND_SPEED_LB.value
         wind_speed_samples[3] = _WIND_SPEED_UB.value
       else:
-        fuel_load_samples = self._uniform(
-          _FUEL_LOAD_LB.value, _FUEL_LOAD_UB.value, _N_SAMPLES_UQ.value
+        norm_samples = self._get_norm_samples(_N_SAMPLES_UQ.value, 3)
+        fuel_load_samples = self._shift_scale(
+            _FUEL_LOAD_LB.value, _FUEL_LOAD_UB.value, norm_samples[:, 0]
         )
         fuel_density_samples = fuel_load_samples / _LARGE_SCALE_FUEL_BED_HEIGHT.value
-        moisture_content_samples = self._uniform(
+        moisture_content_samples = self._shift_scale(
           _MOISTURE_CONTENT_LB.value,
           _MOISTURE_CONTENT_UB.value,
-          _N_SAMPLES_UQ.value
+          norm_samples[:, 1]
         )
         moisture_density_samples = moisture_content_samples * fuel_density_samples
-        wind_speed_samples = self._uniform(
-          _WIND_SPEED_LB.value, _WIND_SPEED_UB.value, _N_SAMPLES_UQ.value
+        wind_speed_samples = self._shift_scale(
+          _WIND_SPEED_LB.value, _WIND_SPEED_UB.value, norm_samples[:, 2]
         )
     return fuel_density_samples, moisture_density_samples, wind_speed_samples
 
@@ -151,12 +156,15 @@ class FireUQSampler:
 def main(_):
   uq_sampler = FireUQSampler()
   fd_samples, md_samples, ws_samples = uq_sampler.generate_samples()
-  print("Fueld")
-  print(np.mean(fd_samples))
-  print("Moistd")
-  print(np.mean(md_samples))
-  print("Wind speed")
-  print(np.mean(ws_samples))
+  uq_params = np.stack((fd_samples, md_samples, ws_samples)).T
+  print(uq_params)
+  np.save('uq_simulation_parameters.npy', uq_params)
+  # print("Fueld")
+  # print(np.mean(fd_samples))
+  # print("Moistd")
+  # print(np.mean(md_samples))
+  # print("Wind speed")
+  # print(np.mean(ws_samples))
 
 
 if __name__ == "__main__":

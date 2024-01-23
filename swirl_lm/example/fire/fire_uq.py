@@ -64,12 +64,18 @@ _UQ_START_ID = flags.DEFINE_integer(
   0,
   'The start id for uq.'
 )
+_UQ_END_ID = flags.DEFINE_integer(
+  'uq_end_id',
+  19,
+  'The end id for uq.'
+)
 
 
 class FireUQSampler:
   def __init__(self):
     self.sampler = np.random.default_rng(_RANDOM_SEED_UQ.value)
     self.start_id = _UQ_START_ID.value
+    self.end_id = _UQ_END_ID.value
     if _MODIFY_INDIVIDUAL.value:
       logging.warn(
         'Modifying uncertain parameters one at a time. Only generating 4'
@@ -153,7 +159,8 @@ def main(_):
   fd_samples, md_samples, ws_samples = uq_sampler.generate_samples()
   uq_params = np.stack((fd_samples, md_samples, ws_samples)).T
   print(uq_params)
-  np.savetxt('uq_simulation_parameters.csv', uq_params, delimiter=',', fmt='%.7e')
+  # np.savetxt('uq_simulation_parameters.csv', uq_params, delimiter=',', fmt='%.7e')
+  # np.save('uq_small_wind_cases.npy', uq_params)
 
 
 if __name__ == "__main__":

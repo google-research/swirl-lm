@@ -120,7 +120,7 @@ def main(_):
   params.postprocessing_states_update_fn = simulation.post_simulation_update_fn
   strategy, logical_coordinates = driver.strategy_and_coordinates(params)
 
-  for i in range(uq_sampler.start_id, uq_sampler.number_of_samples()):
+  for i in range(uq_sampler.start_id, uq_sampler.end_id):
     fire_utils.fuel_density = fd_samples[i]
     fire_utils.moisture_density = md_samples[i]
     fire_utils.update_wind_speed(ws_samples[i])

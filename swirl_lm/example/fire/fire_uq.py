@@ -1,5 +1,7 @@
 import numpy as np
-from absl import flags, logging, app
+from absl import flags
+from absl import logging
+from absl import app
 
 
 _RANDOM_SEED_UQ = flags.DEFINE_integer(

@@ -1,4 +1,5 @@
 import numpy as np
+import tensorflow as tf
 from absl import flags
 from absl import logging
 from absl import app
@@ -72,6 +73,10 @@ _UQ_END_ID = flags.DEFINE_integer(
   'The end id for uq.'
 )
 
+def load_uq_values_from_file():
+  with tf.io.gfile.GFile(_UQ_FILENAME.value, 'rb') as f:
+    return np.load(f)
+
 
 class FireUQSampler:
   def __init__(self):
@@ -103,7 +108,7 @@ class FireUQSampler:
     if _MODIFY_INDIVIDUAL.value:
       return 4
     elif _READ_UQ_FILE.value:
-      uq_values = np.load(_UQ_FILENAME.value)
+      uq_values = load_uq_values_from_file()
       return uq_values.shape[0]
     else:
       return _N_SAMPLES_UQ.value
@@ -116,7 +121,7 @@ class FireUQSampler:
       fuel_density_samples, moisture_density_samples, wind_speed_samples
     """
     if _READ_UQ_FILE.value:
-      uq_values = np.load(_UQ_FILENAME.value)
+      uq_values = load_uq_values_from_file()
       fuel_density_samples = np.float32(uq_values[:, 0])
       moisture_density_samples = np.float32(uq_values[:, 1])
       wind_speed_samples = np.float32(uq_values[:, 2])

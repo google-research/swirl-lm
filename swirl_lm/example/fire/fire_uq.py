@@ -158,9 +158,7 @@ def main(_):
   uq_sampler = FireUQSampler()
   fd_samples, md_samples, ws_samples = uq_sampler.generate_samples()
   uq_params = np.stack((fd_samples, md_samples, ws_samples)).T
-  print(uq_params)
-  # np.savetxt('uq_simulation_parameters.csv', uq_params, delimiter=',', fmt='%.7e')
-  # np.save('uq_small_wind_cases.npy', uq_params)
+  logging.info(f'New uq-samples created as follows.\n {uq_params}')
 
 
 if __name__ == "__main__":

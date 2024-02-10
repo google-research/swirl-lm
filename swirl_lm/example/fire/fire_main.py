@@ -97,6 +97,7 @@ The ignition kernel is a sphere with its boundary smoothed by a tanh function.
 
 from absl import app
 from absl import flags
+from absl import logging
 from swirl_lm.base import driver
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.example.fire import fire
@@ -125,6 +126,10 @@ def main(_):
     fire_utils.fuel_density = fd_samples[i]
     fire_utils.moisture_density = md_samples[i]
     fire_utils.update_wind_speed(ws_samples[i])
+    logging.info(f'Start UQ Case {i}')
+    logging.info(f'Current fuel density: {fd_samples[i]}')
+    logging.info(f'Current moisture density: {md_samples[i]}')
+    logging.info(f'Current wind speed: {ws_samples[i]}')
     flags.FLAGS.data_dump_prefix = data_dump_prefixes[i]
 
     # Redefinition of simulation-variable necessary so wind-speed gets updated

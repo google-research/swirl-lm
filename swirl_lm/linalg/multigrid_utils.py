@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -612,7 +612,7 @@ def prolong_restrict_matrices(
 
   log_full_grid_shapes_from_ps(ps)
 
-  return (ps, rs)
+  return (ps, rs)  # pytype: disable=bad-return-type
 
 
 def full_1d_grid_size_pairs(

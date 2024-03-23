@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -69,8 +69,10 @@ class SimulatedTurbulentInflow():
   def __init__(self, params: parameters_lib.SwirlLMParameters):
     """Initializes the inflow library."""
     self._params = params
-
-    self._model_params = self._params.boundary_models.simulated_inflow
+    assert (
+        boundary_models := params.boundary_models
+    ) is not None, '`boundary_models` must be set in the config.'
+    self._model_params = boundary_models.simulated_inflow
 
     # Get the inflow dimension (in order x-y-z) and inflow axis
     # (in order z-x-y). The inflow dimension refers to the physical dimension,

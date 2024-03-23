@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -271,8 +271,9 @@ class MonochromaticTwoStreamSolver:
     Args:
       optical_depth: The pointwise optical depth.
       ssa: The pointwise single-scattering albedo.
-      level_src_bottom: The Planck source at the top cell face [W / m^2 / sr].
-      level_src_top: The Planck source at the bottom cell face [W / m^2 / sr].
+      level_src_bottom: The Planck source at the bottom cell face
+        [W / m^2 / sr].
+      level_src_top: The Planck source at the top cell face [W / m^2 / sr].
       asymmetry_factor: The pointwise asymmetry factor.
 
     Returns:
@@ -483,7 +484,6 @@ class MonochromaticTwoStreamSolver:
       toa_flux: FlowFieldVal,
       sfc_albedo_direct: FlowFieldVal,
       zenith: float,
-      parallel: bool = False,
   ) -> FlowFieldMap:
     """Computes monochromatic shortwave direct-beam flux and diffuse source.
 
@@ -497,8 +497,6 @@ class MonochromaticTwoStreamSolver:
       toa_flux: The top of atmosphere incoming flux represented by a 2D plane.
       sfc_albedo_direct: The surface albedo with respect to direct radiation.
       zenith: The zenith solar angle.
-      parallel: A boolean indicating whether the direct-beam flux computation
-        should be executed in parallel.
 
     Returns:
       A dictionary containing the following items:
@@ -525,25 +523,14 @@ class MonochromaticTwoStreamSolver:
     # bottom cell face unraveling from the top of the atmosphere down to the
     # surface. The recurrence follows the simple relation:
     # flux_down_direct[i] = T_no_scatter[i] * flux_down_direct[i + 1]
-    if parallel:
-      flux_down_direct = self.rte_utils.cumulative_recurrent_affine_op_parallel(
-          replica_id,
-          replicas,
-          w=t_noscat,
-          b=tf.nest.map_structure(tf.zeros_like, optical_depth),
-          x0=flux_down_direct_bc,
-          dim=self.g_dim,
-          forward=False,
-      )
-    else:
-      op = lambda w, x0: w * x0
-      kwargs = {
-          'w': t_noscat,
-          'x0': flux_down_direct_bc,
-      }
-      flux_down_direct = self.rte_utils.cumulative_recurrent_op(
-          replica_id, replicas, op, kwargs, dim=self.g_dim, forward=False
-      )
+    op = lambda w, x0: w * x0
+    kwargs = {
+        'w': t_noscat,
+        'x0': flux_down_direct_bc,
+    }
+    flux_down_direct = self.rte_utils.cumulative_recurrent_op(
+        replica_id, replicas, op, kwargs, dim=self.g_dim, forward=False
+    )
 
     # Upward source from direct-beam reflection at the cell center.
     src_up = tf.nest.map_structure(
@@ -596,8 +583,6 @@ class MonochromaticTwoStreamSolver:
       top_flux_down: FlowFieldVal,
       sfc_emission: FlowFieldVal,
       sfc_reflectance: FlowFieldVal,
-      single_scattering: bool = False,
-      parallel: bool = False,
       ) -> FlowFieldMap:
     r"""Solves the monochromatic two-stream radiative transfer equation.
 
@@ -623,16 +608,6 @@ class MonochromaticTwoStreamSolver:
       sfc_emission: The upward surface emission. This corresponds to the bottom
         face of the bottom fluid layer in the grid.
       sfc_reflectance: The surface reflectance.
-      single_scattering: A boolean indicating whether to assume a single
-        reflection event in the flux computation. This removes the nonlinear
-        dependencies in the two-stream radiative transfer recurrence relations
-        and enables a fully parallel algorithm for accumulating the fluxes
-        vertically if `parallel` is set to True.
-      parallel: A boolean indicating whether the two-stream solver should be
-        executed in parallel. This can only be set if `single_scattering` is set
-        to `True`, since the single-scattering approximation eliminates the
-        nonlinear dependencies in the radiative transfer recurrence relations
-        and enables parallelism across cores.
 
     Returns:
       A dictionary containing fluxes at the bottom cell face:
@@ -640,40 +615,20 @@ class MonochromaticTwoStreamSolver:
       'flux_down' -> The downwelling radiative flux.
       'flux_net' -> The net radiative flux.
     """
-    if parallel and not single_scattering:
-      raise ValueError(
-          'The two-stream solver can only be executed in parallel when the'
-          ' single-scattering approximation is enabled.'
-      )
-
-    # Single layer affine transformation.
-    affine_op = lambda w, b, x0: w * x0 + b
 
     def global_recurrent_op(
         kwargs: FlowFieldMap,
         forward: bool,
-        is_parallel: bool,
         op: Optional[Callable[..., FlowFieldVal]] = None,
     ) -> FlowFieldVal:
-      if is_parallel:
-        return self.rte_utils.cumulative_recurrent_affine_op_parallel(
-            replica_id,
-            replicas,
-            w=kwargs['w'],
-            b=kwargs['b'],
-            x0=kwargs['x0'],
-            dim=self.g_dim,
-            forward=forward,
-        )
-      else:
-        return self.rte_utils.cumulative_recurrent_op(
-            replica_id,
-            replicas,
-            op,
-            kwargs,
-            dim=self.g_dim,
-            forward=forward,
-        )
+      return self.rte_utils.cumulative_recurrent_op(
+          replica_id,
+          replicas,
+          op,
+          kwargs,
+          dim=self.g_dim,
+          forward=forward,
+      )
 
     # Global recurrent accumulation for the albedo of the atmosphere below a
     # certain level, computed from the surface all the way to the top boundary.
@@ -687,24 +642,14 @@ class MonochromaticTwoStreamSolver:
       beta = tf.math.reciprocal(1.0 - r_diff * albedo_below)
       return r_diff + t_diff**2 * beta * albedo_below
 
-    if single_scattering:
-      kwargs = {
-          'w': tf.nest.map_structure(tf.math.multiply, t_diff, t_diff),
-          'b': r_diff,
-          'x0': sfc_reflectance,
-      }
-      albedo = global_recurrent_op(
-          kwargs, forward=True, is_parallel=parallel, op=affine_op
-      )
-    else:
-      albedo_vars = {
-          'r_diff': r_diff,
-          't_diff': t_diff,
-          'x0': sfc_reflectance,
-      }
-      albedo = global_recurrent_op(
-          albedo_vars, forward=True, is_parallel=False, op=albedo_op
-      )
+    albedo_vars = {
+        'r_diff': r_diff,
+        't_diff': t_diff,
+        'x0': sfc_reflectance,
+    }
+    albedo = global_recurrent_op(
+        albedo_vars, forward=True, op=albedo_op
+    )
 
     # Global recurrent accumulation for the aggregate upwelling source emission
     # computed from the surface all the way to the top of the atmosphere.
@@ -722,34 +667,17 @@ class MonochromaticTwoStreamSolver:
       beta = tf.math.reciprocal(1.0 - r_diff * albedo)
       return src_up + t_diff * beta * (emission_from_below + src_down * albedo)
 
-    if single_scattering:
-      emiss_up_b = tf.nest.map_structure(
-          lambda src_up, t, alb, src_dn: src_up + t * alb * src_dn,
-          src_up,
-          t_diff,
-          self._shift_up_fn(albedo),
-          src_down,
-      )
-      kwargs = {
-          'w': t_diff,
-          'b': emiss_up_b,
-          'x0': sfc_emission,
-      }
-      emiss_up = global_recurrent_op(
-          kwargs, forward=True, is_parallel=parallel, op=affine_op
-      )
-    else:
-      emission_vars = {
-          'src_up': src_up,
-          'src_down': src_down,
-          't_diff': t_diff,
-          'r_diff': r_diff,
-          'albedo': self._shift_up_fn(albedo),
-          'x0': sfc_emission,
-      }
-      emiss_up = global_recurrent_op(
-          emission_vars, forward=True, is_parallel=False, op=upward_emission_op
-      )
+    emission_vars = {
+        'src_up': src_up,
+        'src_down': src_down,
+        't_diff': t_diff,
+        'r_diff': r_diff,
+        'albedo': self._shift_up_fn(albedo),
+        'x0': sfc_emission,
+    }
+    emiss_up = global_recurrent_op(
+        emission_vars, forward=True, op=upward_emission_op
+    )
 
     # Global recurrent accumulation for the downwelling radiative flux solution
     # at the bottom face, unravelling from the top of the atmosphere down to the
@@ -767,33 +695,17 @@ class MonochromaticTwoStreamSolver:
       beta = tf.math.reciprocal(1.0 - r_diff * albedo)
       return (t_diff * flux_dn_from_above + r_diff * emiss_up + src_down) * beta
 
-    if single_scattering:
-      flux_down_b = tf.nest.map_structure(
-          lambda r, emis, src_dn: r * emis + src_dn,
-          r_diff,
-          self._shift_up_fn(emiss_up),
-          src_down,
-      )
-      kwargs = {
-          'w': t_diff,
-          'b': flux_down_b,
-          'x0': top_flux_down,
-      }
-      flux_down = global_recurrent_op(
-          kwargs, forward=False, is_parallel=parallel, op=affine_op
-      )
-    else:
-      flux_down_vars = {
-          'emiss_up': self._shift_up_fn(emiss_up),
-          'src_down': src_down,
-          't_diff': t_diff,
-          'r_diff': r_diff,
-          'albedo': self._shift_up_fn(albedo),
-          'x0': top_flux_down,
-      }
-      flux_down = global_recurrent_op(
-          flux_down_vars, forward=False, is_parallel=False, op=flux_down_op
-      )
+    flux_down_vars = {
+        'emiss_up': self._shift_up_fn(emiss_up),
+        'src_down': src_down,
+        't_diff': t_diff,
+        'r_diff': r_diff,
+        'albedo': self._shift_up_fn(albedo),
+        'x0': top_flux_down,
+    }
+    flux_down = global_recurrent_op(
+        flux_down_vars, forward=False, op=flux_down_op
+    )
 
     # The upwelling radiative flux at the bottom face can now be computed
     # directly from the cumulative upward emissions, the cumulative albedo of
@@ -821,8 +733,6 @@ class MonochromaticTwoStreamSolver:
       top_flux_down: FlowFieldVal,
       sfc_src: FlowFieldVal,
       sfc_emissivity: FlowFieldVal,
-      single_scattering: bool = False,
-      parallel: bool = False,
       ) -> FlowFieldMap:
     """Computes the monochromatic longwave diffusive flux of the atmosphere.
 
@@ -846,19 +756,6 @@ class MonochromaticTwoStreamSolver:
       top_flux_down: The downward flux at the top boundary of the atmosphere.
       sfc_src: The surface Planck source.
       sfc_emissivity: The surface emissivity.
-      single_scattering: A boolean indicating whether to assume a single
-        reflection event in the flux computation. This removes the nonlinear
-        dependencies in the two-stream radiative transfer recurrence relations
-        and enables a fully parallel algorithm for accumulating the fluxes
-        vertically if `parallel` is set to True. The potential speedup from this
-        simplification comes at the expense of greater memory overhead,
-        increased TPU communication, and a negative bias in the solution that
-        can lead to relative errors greater than 2% in the computed fluxes.
-      parallel: A boolean indicating whether the two-stream solver should be
-        executed in parallel. This can only be set if `single_scattering` is set
-        to `True`, since the single-scattering approximation eliminates the
-        nonlinear dependencies in the radiative transfer recurrence relations
-        and enables parallelism across cores.
 
     Returns:
       A dictionary containing fluxes at the bottom cell face [W/m^2]:
@@ -884,8 +781,6 @@ class MonochromaticTwoStreamSolver:
             top_flux_down,
             sfc_emission,
             sfc_reflectance,
-            single_scattering,
-            parallel,
         )
     )
     fluxes.update(
@@ -908,8 +803,6 @@ class MonochromaticTwoStreamSolver:
       sfc_src: FlowFieldVal,
       sfc_albedo: FlowFieldVal,
       flux_down_dir: FlowFieldVal,
-      single_scattering: bool = False,
-      parallel: bool = False,
       ) -> FlowFieldMap:
     """Computes the monochromatic shortwave fluxes in a layered atmosphere.
 
@@ -937,19 +830,6 @@ class MonochromaticTwoStreamSolver:
       sfc_albedo: The surface albedo.
       flux_down_dir: A 3D variable for the solved downwelling direct-beam
         radiative flux at the bottom cell face.
-      single_scattering: A boolean indicating whether to assume a single
-        reflection event in the flux computation. This removes the nonlinear
-        dependencies in the two-stream radiative transfer recurrence relations
-        and enables a fully parallel algorithm for accumulating the fluxes
-        vertically if `parallel` is set to True. The potential speedup from this
-        simplification comes at the expense of greater memory overhead,
-        increased TPU communication, and a negative bias in the solution that
-        can lead to relative errors greater than 2% in the computed fluxes.
-      parallel: A boolean indicating whether the two-stream solver should be
-        executed in parallel. This can only be set if `single_scattering` is set
-        to `True`, since the single-scattering approximation eliminates the
-        nonlinear dependencies in the radiative transfer recurrence relations
-        and enables parallelism across cores.
 
     Returns:
       A dictionary containing fluxes at the bottom cell face:
@@ -969,8 +849,6 @@ class MonochromaticTwoStreamSolver:
             tf.nest.map_structure(tf.zeros_like, sfc_src),
             sfc_src,
             sfc_albedo,
-            single_scattering,
-            parallel,
         )
     )
 

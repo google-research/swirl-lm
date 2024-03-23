@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 
 """Updates flow field variables and source terms by combustion."""
 
+import dataclasses
 from typing import Callable
 
 from absl import logging
@@ -26,6 +27,33 @@ from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import types
 import tensorflow as tf
+
+
+@dataclasses.dataclass
+class IgnitionWithHotKernel():
+  """Defines parameters for the high-temperature ignition kernel."""
+  # The temperature of the ignition kernel.
+  ignition_temperature: float = 800.0
+
+
+@dataclasses.dataclass
+class IgnitionWithHeatSource():
+  """Defines parameters for heat-source ignition."""
+  # The peak magnitude of the ignition heat source. It has a unit of J/m^3/s if
+  # the prognostic variable is in forms of energy, and the unit s K/s if the
+  # prognostic variable is in forms of temperature. Default value corresponds to
+  # fuel with heat of combustion being 20e6 J/kg, fuel bulk density 0.25 kg/m^3,
+  # with a burning rate of 0.01 1/s.
+  heat_source_magnitude: float = 50.0
+  # Define the duration of the heat source to be positioned in the flow field.
+  # The procedure for the source term enforcement is shown as follows:
+  # t_0 < t <= t_1: src(t) = (t - t_0) / (t_1 - t_0) * src_max;
+  # t_1 < t <= t_2: src(t) = src_max;
+  # t_2 < t <= t_3: src(t) = (t_3 - t) / (t_3 - t_2) * src_max;
+  t_0: float = 0.0
+  t_1: float = 300.0
+  t_2: float = 2100.0
+  t_3: float = 2400.0
 
 
 def combustion_step(
@@ -136,7 +164,7 @@ def combustion_step(
   return additional_states_combustion
 
 
-def ignition_step_fn(
+def ignition_with_hot_kernel(
     energy_varname: str,
     ignition_temperature: float,
     params: parameters_lib.SwirlLMParameters,
@@ -266,3 +294,118 @@ def ignition_step_fn(
     return output
 
   return ignition_step
+
+
+def ramp_up_down_function(
+    t_0: float,
+    t_1: float,
+    t_2: float,
+    t_3: float,
+) -> Callable[[tf.Tensor], tf.Tensor]:
+  """Returns the value of the ramp up/down function at time `t`.
+
+  The function is defined as:
+    t <= t_0: 0
+    t_0 < t <= t_1: linearly ramp up from 0 to 1
+    t_1 < t <= t_2: 1
+    t_2 < t <= t_3: linearly ramp down from 1 to 0
+    t > t_3: 0
+
+  Args:
+    t_0: Time at the start of the ramp up.
+    t_1: Time at the end of the ramp up.
+    t_2: Time at the start of the ramp down.
+    t_3: Time at the end of the ramp down.
+
+  Returns:
+    A function that takes time as the input, and returns a scaling factor
+    following the ramp function.
+  """
+  assert t_0 <= t_1 <= t_2 <= t_3, (
+      '`t_0`, `t_1`, `t_2`, and `t_3` has to be in the ascending order, but '
+      f'got {t_0}, {t_1} {t_2}, {t_3}'
+  )
+
+  def scaling_factor(t: tf.Tensor) -> tf.Tensor:
+    """Computes the scaling factor following the ramp up and down function.
+
+    Args:
+      t: Time `t` at which to evaluate the function.
+
+    Returns:
+      The scaling factor at `t` following the ramp function.
+    """
+    t_0_to_t_1 = (
+        lambda: (t - t_0) / (t_1 - t_0) if t_1 > 0.0 else tf.ones_like(t)
+    )
+    t_1_to_t_2 = lambda: tf.constant(1.0, dtype=types.TF_DTYPE)
+    t_2_to_t_3 = lambda: (t - t_3) / (t_2 - t_3)
+    outside_intervals = lambda: tf.constant(0.0, dtype=types.TF_DTYPE)
+
+    t_interval = lambda t_l, t_r: tf.logical_and(
+        tf.greater(t, t_l), tf.less_equal(t, t_r)
+    )
+
+    return tf.cond(
+        t_interval(t_0, t_1),
+        t_0_to_t_1,
+        lambda: tf.cond(
+            t_interval(t_1, t_2),
+            t_1_to_t_2,
+            lambda: tf.cond(
+                t_interval(t_2, t_3),
+                t_2_to_t_3,
+                outside_intervals,
+            ),
+        ),
+    )
+
+  return scaling_factor
+
+
+def ignition_with_heat_source(
+    heat_source_magnitude: float,
+    heat_source_coeff_fn: Callable[[tf.Tensor], tf.Tensor],
+) -> Callable[[types.FlowFieldVal, tf.Tensor], types.FlowFieldVal]:
+  """Generates a function that produces a heat source for ignition.
+
+  The shape of the source term is prescribed by a helper variable named
+  `ignition_kernel`. A source term will be added to the energy equation
+  with the following procedure defined `by heat_source_coeff_fn`, i.e. the
+  magnitude of the heat source added to the energy equation is the product of
+  `heat_source_magnitude` and the scaling factor obtained from the
+  `heat_source_coeff_fn`.
+
+  Args:
+    heat_source_magnitude: The maximum value of the heat source. It has a unit
+      of J/m^3/s if the prognostic variable is in forms of energy, and the unit
+      is K/s if the prognostic variable is in forms of temperature.
+    heat_source_coeff_fn: A function that computes a scaling factor for the
+      heat source at a specific time.
+
+  Returns:
+    A function that takes a 3D tensor that represents the ignition kernel, and a
+    `tf.Tensor` representing the time as input, returns a heat source for
+    ignition.
+  """
+
+  def heat_source_update_fn(
+      ignition_kernel: types.FlowFieldVal,
+      t: tf.Tensor,
+  ) -> types.FlowFieldVal:
+    """Computes the heat source at `t` given x, y, z.
+
+    Args:
+      ignition_kernel: A 3D tensor of binary floating point values (0 and 1),
+        with 1 specifying the ignition location.
+      t: The time at the current step, in units of s.
+
+    Returns:
+      The heat source at time `t`.
+    """
+    coeff = heat_source_coeff_fn(t)
+    return tf.nest.map_structure(
+        lambda mask: coeff * heat_source_magnitude * mask, ignition_kernel
+    )
+
+  return heat_source_update_fn

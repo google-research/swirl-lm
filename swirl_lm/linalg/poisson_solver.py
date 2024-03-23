@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -656,14 +656,14 @@ def validate_cg_config(solver_option: poisson_solver_pb2.PoissonSolver) -> None:
 
 
 def poisson_solver_factory(
-    params: grid_parametrization.GridParametrization,
+    params: parameters_lib.SwirlLMParameters,
     kernel_op: get_kernel_fn.ApplyKernelOp,
     solver_option: poisson_solver_pb2.PoissonSolver,
 ) -> PoissonSolver:
   """Constructs an object handler for the Poisson solver.
 
   Args:
-    params: The grid parametrization.
+    params: The SwirlLM parameters.
     kernel_op: An object holding a library of kernel operations.
     solver_option: The option of the selected solver to be used to solve the
       Poisson equation.
@@ -675,7 +675,7 @@ def poisson_solver_factory(
     ValueError: If the Poisson solver field is not found.
   """
   if solver_option.HasField('jacobi'):
-    return jacobi_solver.JacobiSolver(params, kernel_op, solver_option)
+    return jacobi_solver.jacobi_solver_factory(params, kernel_op, solver_option)
   elif solver_option.HasField('fast_diagonalization'):
     return FastDiagonalization(params, kernel_op, solver_option)
   elif solver_option.HasField('conjugate_gradient'):

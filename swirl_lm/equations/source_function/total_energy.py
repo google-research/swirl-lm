@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -362,12 +362,12 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
 
     if self._include_subsidence:
       src_subsidence = eq_utils.source_by_subsidence_velocity(
-          self._kernel_op,
+          self._deriv_lib,
           rho,
           thermo_states['zz'],
-          self._h[self._g_dim],
           thermo_states['h_t'],
           self._g_dim,
+          additional_states,
       )
       source = tf.nest.map_structure(tf.math.add, source, src_subsidence)
 

@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -98,12 +98,6 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
                 microphysics_model_name, self._params, self._thermodynamics
             )
         )
-
-    self._grad_central = [
-        lambda f: self._kernel_op.apply_kernel_op_x(f, 'kDx'),
-        lambda f: self._kernel_op.apply_kernel_op_y(f, 'kDy'),
-        lambda f: self._kernel_op.apply_kernel_op_z(f, 'kDz', 'kDzsh'),
-    ]
 
   def _get_thermodynamic_variables(
       self,
@@ -272,9 +266,8 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
         rad_src = tf.nest.map_structure(
             radiation_source_fn, states[common.KEY_RHO], f_r
         )
-        source = tf.nest.map_structure(
-            lambda f: f / (2.0 * self._h[self._g_dim]),
-            self._grad_central[self._g_dim](rad_src),
+        source = self._deriv_lib.deriv_centered(
+            rad_src, self._g_dim, additional_states
         )
 
         q_t = thermo_states['q_t']
@@ -321,12 +314,12 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
             f' {self._scalar_name} is provided.'
         )
       src_subsidence = eq_utils.source_by_subsidence_velocity(
-          self._kernel_op,
+          self._deriv_lib,
           states[common.KEY_RHO],
           thermo_states['zz'],
-          self._h[self._g_dim],
           theta_li,
           self._g_dim,
+          additional_states,
       )
       source = tf.nest.map_structure(tf.math.add, source, src_subsidence)
 

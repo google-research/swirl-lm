@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -79,10 +79,18 @@ class MoninObukhovSimilarityTheory(object):
     """Initializes the library."""
     self.params = params
     self.nu = params.nu
-    self.height = (params.dx, params.dy, params.dz)[vertical_dim]
     self.halo_width = params.halo_width
 
-    most_params = params.boundary_models.most
+    # Store the height of the first fluid layer above the ground.
+    # Under a uniform grid assumption, because the wall is at the mid-point
+    # face between the first fluid layer and the halo layers, the height of
+    # the first fluid layer above the ground is half of the grid spacing.
+    self.height = 0.5 * (params.dx, params.dy, params.dz)[vertical_dim]
+
+    assert (
+        boundary_models := params.boundary_models
+    ) is not None, '`boundary_models` must be provided in `params`.'
+    most_params = boundary_models.most
     self.z_0 = most_params.z_0
     self.z_t = most_params.z_t
     self.u_star = most_params.u_star
@@ -440,11 +448,7 @@ class MoninObukhovSimilarityTheory(object):
         common_ops.get_face(states['theta'], self.vertical_dim, 0,
                             self.halo_width)[0])
 
-    # Because the wall is at the mid-point face between the first fluid layer
-    # and the halo layers, the height of the first fluid layer above the ground
-    # is half of the grid spacing.
-    return self._surface_shear_stress_and_heat_flux(theta, u1, u2,
-                                                    self.height / 2.0)
+    return self._surface_shear_stress_and_heat_flux(theta, u1, u2, self.height)
 
   def _exchange_coefficient(
       self,
@@ -534,14 +538,11 @@ class MoninObukhovSimilarityTheory(object):
         common_ops.get_face(states['phi'], self.vertical_dim, 0,
                             self.halo_width - 1)[0])
 
-    # Because the wall is at the mid-point face between the first fluid layer
-    # and the halo layers, the height of the first fluid layer above the ground
-    # is half of the grid spacing.
     # Note that if an exchange coefficient is provided in the config, it will
     # override the MOST model (not computed).
     c_h = self.exchange_coeff.get(
-        varname,
-        self._exchange_coefficient(theta, u1, u2, self.height / 2.0, varname))
+        varname, self._exchange_coefficient(theta, u1, u2, self.height, varname)
+    )
 
     def scalar_flux(
         rho_i: tf.Tensor,
@@ -594,6 +595,13 @@ class MoninObukhovSimilarityTheory(object):
       params: grid_parametrization.GridParametrization,
   ) -> FlowFieldMap:
     """Computes the Neumann BC for all variables.
+
+    Note: While this function is still used in geophysical_flow.py, it only sets
+    values in halos, so that the gradient computed from these values is
+    consistent with the shear stress/flux obtained from the MO similarity model.
+    However, its functionality has been superseded by the preceding functions
+    that set the diffusive fluxes directly. So in effect, this function is no
+    longer necessary and could be removed and deprecated.
 
     Args:
       kernel_op: An object holding a library of kernel operations.
@@ -707,7 +715,7 @@ class MoninObukhovSimilarityTheory(object):
       bc.append(grad_phi)
 
       additional_states_new.update(
-          {bc_key: tensor_op(tf.math.multiply, bc, self.height)})
+          {bc_key: tensor_op(tf.math.multiply, bc, self.height * 2.0)})
 
     return additional_states_new
 
@@ -1274,7 +1282,10 @@ def monin_obukhov_similarity_theory_factory(
     AssertionError: If the first fluid layer is below the tolerated surface
       roughness.
   """
-  if not params.boundary_models.HasField('most'):
+  assert (
+      boundary_models := params.boundary_models
+  ) is not None, '`boundary_models` must be provided in `params`.'
+  if not boundary_models.HasField('most'):
     raise ValueError(
         'Parameters for the Monin-Obukhov boundary layer model are not defined '
         'in the config.'
@@ -1301,10 +1312,7 @@ def monin_obukhov_similarity_theory_factory(
   # roughness, the wall is considered resolved, and a non-slip wall should be
   # used without the MOST model.
   height = 0.5 * (params.dx, params.dy, params.dz)[vertical_dim]
-  z_0 = (
-      _HEIGHT_TO_SURFACE_ROUGHNESS_RATIO_THRESHOLD
-      * params.boundary_models.most.z_0
-  )
+  z_0 = _HEIGHT_TO_SURFACE_ROUGHNESS_RATIO_THRESHOLD * boundary_models.most.z_0
   assert height > z_0, (
       f'The height of the first fluid layer ({height} m) is below the tolerated'
       f' surface roughness ({z_0} m). MOST model should be disabled and'

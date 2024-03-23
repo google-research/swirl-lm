@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -50,7 +50,9 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
     }
     self._p_thermal = params.p_thermal
 
-    model_params = params.thermodynamics
+    assert (
+        model_params := params.thermodynamics
+    ) is not None, 'Thermodynamics must be set in the config.'
     self._t_s = model_params.ideal_gas_law.t_s
     w_inert = (
         self._molecular_weights[INERT_SPECIES] if INERT_SPECIES
@@ -61,8 +63,10 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
     self._height = model_params.ideal_gas_law.height
     self._delta_t = model_params.ideal_gas_law.delta_t
     self._const_theta = (
-        model_params.ideal_gas_law.const_theta
-        if model_params.ideal_gas_law.HasField('const_theta') else None)
+        tf.constant(model_params.ideal_gas_law.const_theta)
+        if model_params.ideal_gas_law.HasField('const_theta')
+        else None
+    )
 
   @staticmethod
   def density_by_ideal_gas_law(

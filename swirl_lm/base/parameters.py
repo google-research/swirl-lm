@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,7 +18,6 @@ import copy
 import os
 import os.path
 from typing import Callable, List, Mapping, Optional, Sequence, Tuple
-
 from absl import flags
 from absl import logging
 import numpy as np
@@ -27,8 +26,10 @@ from swirl_lm.base import physical_variable_keys_manager
 from swirl_lm.boundary_condition import boundary_condition_utils
 from swirl_lm.boundary_condition import boundary_conditions_pb2
 from swirl_lm.communication import halo_exchange
+from swirl_lm.numerics import derivatives
 from swirl_lm.numerics import numerics_pb2
 from swirl_lm.physics.thermodynamics import thermodynamics_pb2
+from swirl_lm.physics.turbulent_combustion import turbulent_combustion
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import grid_parametrization_pb2
@@ -171,7 +172,7 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
 
   def __init__(
       self,
-      config,
+      config: parameters_pb2.SwirlLMParameters,
       grid_params: Optional[
           grid_parametrization_pb2.GridParametrization] = None,
   ):
@@ -228,6 +229,21 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     self.combustion = config.combustion if config.HasField(
         'combustion') else None
 
+    turbulent_combustion_params = (
+        config.turbulent_combustion
+        if config.HasField('turbulent_combustion')
+        else None
+    )
+    if turbulent_combustion_params is not None:
+      assert (
+          self.combustion is not None
+      ), 'A turbulent combustion model is defined without a combustion model.'
+    self.turbulent_combustion = (
+        turbulent_combustion.turbulent_combustion_model_factory(
+            turbulent_combustion_params
+        )
+    )
+
     self.additional_state_keys = config.additional_state_keys
     self.helper_var_keys = config.helper_var_keys
     self.states_from_file = config.states_from_file
@@ -238,6 +254,13 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     self.use_sgs = config.use_sgs
     self.sgs_model = config.sgs_model
     self.use_3d_tf_tensor = config.use_3d_tf_tensor
+
+    self.deriv_lib = derivatives.Derivatives(
+        self.kernel_op,
+        self.use_3d_tf_tensor,
+        self.grid_spacings,
+        self.use_stretched_grid,
+    )
 
     # Initialize the direction vector of gravitational force. Set to 0 if
     # gravity is not defined in the simulation.
@@ -348,7 +371,7 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     # Allocate a space for a function that postprocesses `states`.
     self._postprocessing_states_update_fn = None
 
-    # Get the option for density upadte.
+    # Get the option for density update.
     self.density_update_option = config.density_update_option
 
     # Get the information required for sponge layers if applied.
@@ -563,13 +586,15 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     bc = [[None, None], [None, None], [None, None]]
     bc_params = [[None, None], [None, None], [None, None]]
     for bc_info in boundary_conditions:
-      (bc[bc_info.dim][bc_info.location],
-       bc_params[bc_info.dim][bc_info.location]) = self._parse_boundary_info(
-           bc_info)
+      (
+          bc[bc_info.dim][bc_info.location],
+          bc_params[bc_info.dim][bc_info.location],
+      ) = self._parse_boundary_info(bc_info)
     return bc, bc_params
 
-  @staticmethod
+  @classmethod
   def config_from_text_proto(
+      cls,
       text_proto: str,
       grid_params: Optional[
           grid_parametrization_pb2.GridParametrization] = None,
@@ -579,7 +604,6 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
 
     # Sanity check for the solver procedure.
     if config.solver_procedure not in (SolverProcedure.SEQUENTIAL,
-                                       SolverProcedure.PREDICTOR_CORRECTOR,
                                        SolverProcedure.VARIABLE_DENSITY):
       raise NotImplementedError(
           'Solver procedure needs to be specified for a simulation.')
@@ -592,10 +616,11 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
         TimeIntegrationScheme.TIME_SCHEME_UNKNOWN):
       raise NotImplementedError('Time integration scheme is not specified.')
 
-    return SwirlLMParameters(config, grid_params)
+    return cls(config, grid_params)
 
-  @staticmethod
+  @classmethod
   def config_from_proto(
+      cls,
       config_filepath: str,
       grid_params: Optional[
           grid_parametrization_pb2.GridParametrization] = None,
@@ -607,7 +632,7 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
         text_proto = f.read()
       logging.info('Loaded config file `%s` from file.', config_filepath)
 
-    return SwirlLMParameters.config_from_text_proto(text_proto, grid_params)
+    return cls.config_from_text_proto(text_proto, grid_params)
 
   @property
   def num_cycles(self) -> int:

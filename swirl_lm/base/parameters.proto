@@ -25,6 +25,7 @@ import "swirl_lm/numerics/numerics.proto";
 import "swirl_lm/physics/combustion/combustion.proto";
 import "swirl_lm/physics/radiation/config/radiative_transfer.proto";
 import "swirl_lm/physics/thermodynamics/thermodynamics.proto";
+import "swirl_lm/physics/turbulent_combustion/turbulent_combustion.proto";
 import "swirl_lm/utility/grid_parametrization.proto";
 import "swirl_lm/utility/monitor.proto";
 import "swirl_lm/utility/probe.proto";
@@ -205,7 +206,7 @@ message SubGridScaleModel {
 }
 
 // Stores the parameters required by an incompressible Navier-Stokes simulation.
-// Next id: 38
+// Next id: 39
 message SwirlLMParameters {
   // Defines the type of the simulation procedure to be used in the solver.
   enum SolverProcedureType {
@@ -214,11 +215,11 @@ message SwirlLMParameters {
     UNKNOWN = 0;
     // The sequential procedure that first updates pressure then velocity.
     SEQUENTIAL = 1;
-    // The predictor-corrector approach which enforces the divergence free
-    // condition in a finite number of subiterations.
-    PREDICTOR_CORRECTOR = 2;
     // The variable-density low Mach number solver.
     VARIABLE_DENSITY = 3;
+
+    // Deprecated/Removed fields.
+    reserved 2;
   }
 
   // Defines the method types for density update. This will be deprecated and
@@ -345,6 +346,15 @@ message SwirlLMParameters {
   optional Thermodynamics thermodynamics = 22;
   // Information required by combustion models.
   optional Combustion combustion = 26;
+  // Information required by the turbulent-combustion model. The turbulent-
+  // combustion model is a closure model for combustion. It does not provide the
+  // reaction source terms due to combustion. It should only be used when
+  // a combustion model is defined.
+  // Note that the turbulent combustion model is a closure model for combustion
+  // in the context of large-eddy simulation. It does not consider the modeling
+  // of source terms due to chemical reaction, thus is configured independently
+  // from the combustion model.
+  optional TurbulentCombustion turbulent_combustion = 38;
   // A filter of variable names to be loaded from files if the filter is used.
   // The option for using this filter will be set by a command line flag.
   repeated string states_from_file = 17;

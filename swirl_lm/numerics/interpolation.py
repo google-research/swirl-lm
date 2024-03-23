@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,11 +15,47 @@
 """A library for the interpolation schemes."""
 
 import functools
-from typing import Sequence, Tuple
+from typing import Sequence, Tuple, TypeAlias
 
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import types
 import tensorflow as tf
+
+FlowFieldVal: TypeAlias = types.FlowFieldVal
+
+
+def centered_node_to_face(
+    v_node: FlowFieldVal,
+    dim: int,
+    kernel_op: get_kernel_fn.ApplyKernelOp,
+) -> FlowFieldVal:
+  """Performs centered 2nd-order interpolation from nodes to faces.
+
+  * An array evaluated on nodes has index i <==> coordinate location x_i
+  * An array evaluated on faces has index i <==> coordinate location x_{i-1/2}
+
+  E.g., interpolating in dim 0:
+    v_face[i, j, k] = 0.5 * (v_node[i, j, k] + v_node[i-1, j, k])
+
+  Args:
+    v_node: A 3D tensor, evaluated on nodes.
+    dim: The dimension along with the interpolation is performed.
+    kernel_op: Kernel operation library.
+
+  Returns:
+    A 3D tensor interpolated from `v_node`, which is evaluted on faces in
+    dimension `dim`, and evaluated on nodes in other dimensions.
+  """
+  if dim == 0:
+    sum_backward_v = kernel_op.apply_kernel_op_x(v_node, 'ksx')
+  elif dim == 1:
+    sum_backward_v = kernel_op.apply_kernel_op_y(v_node, 'ksy')
+  elif dim == 2:
+    sum_backward_v = kernel_op.apply_kernel_op_z(v_node, 'ksz', 'kszsh')
+  else:
+    raise ValueError(f'Unsupported dim: {dim}.  `dim` must be 0, 1, or 2.')
+  v_face = tf.nest.map_structure(lambda x: 0.5 * x, sum_backward_v)
+  return v_face
 
 
 def _get_weno_kernel_op(
@@ -239,13 +275,23 @@ def _interpolate_with_weno_weights(
     if isinstance(v, tf.Tensor):
       v_neg = tf.concat([v[:, :1, :], v_neg[:, :-1, :]], 1)
     else:  # v and v_neg are lists.
-      v_neg = tf.nest.map_structure(
-          lambda u, v: tf.concat([v[:1, :], u[:-1, :]], 0), v_neg, v
-      )
+      def update_x0(v_n, v_0):
+        res = tf.roll(v_n, 1, axis=0)
+        return tf.tensor_scatter_nd_update(res, [[0]], [v_0[0, :]])
+
+      v_neg = tf.nest.map_structure(update_x0, v_neg, v)
   elif dim == 'y':
-    v_neg = tf.nest.map_structure(
-        lambda u, v: tf.concat([v[..., :1], u[..., :-1]], -1), v_neg, v
-    )
+    if isinstance(v, tf.Tensor):
+      v_neg = tf.concat([v[:, :, :1], v_neg[:, :, :-1]], 2)
+    else:  # v and v_neg are lists.
+      def update_y0(v_n, v_0):
+        res = tf.roll(v_n, 1, axis=1)
+        res_t = tf.tensor_scatter_nd_update(
+            tf.transpose(res), [[0]], [v_0[:, 0]]
+        )
+        return tf.transpose(res_t)
+
+      v_neg = tf.nest.map_structure(update_y0, v_neg, v)
   else:  # dim == 'z':
     if isinstance(v, tf.Tensor):
       v_neg = tf.concat([v[:1, ...], v_neg[:-1, ...]], 0)
@@ -279,4 +325,3 @@ def weno(
                                                 dim, k)
 
   return v_neg, v_pos
-

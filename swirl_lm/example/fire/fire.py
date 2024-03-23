@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -799,10 +799,17 @@ class Fire:
       be rescaled for momentum conservation.
     """
 
-    if self.include_fire and self.ignite and self.igniter is None:
-      output = self.fire_utils.ignition_step_fn(
+    if (
+        self.include_fire
+        and self.ignite
+        and self.igniter is None
+        and self.fire_utils.ignition_with_hot_kernel is not None
+    ):
+      output = self.fire_utils.ignition_with_hot_kernel(
           kernel_op, replica_id, replicas, states, additional_states, params
       )
+    else:
+      output = {}
 
     return output
 
@@ -837,6 +844,14 @@ class Fire:
     additional_states_updated = {}
     additional_states_updated.update(additional_states)
 
+    # Clear source terms computed from the previous step.
+    for varname in additional_states_updated:
+      if not varname.startswith('src_'):
+        continue
+      additional_states_updated[varname] = tf.nest.map_structure(
+          tf.zeros_like, additional_states_updated
+      )
+
     if self.probe is not None:
       additional_states_updated.update(
           self.probe.additional_states_update_fn(kernel_op, replica_id,
@@ -868,6 +883,16 @@ class Fire:
               additional_states_updated,
               self.config,
           )
+      )
+
+    if self.fire_utils.ignition_with_heat_source is not None:
+      t = self.config.dt * tf.cast(step_id, types.TF_DTYPE)
+      heat_source = self.fire_utils.ignition_with_heat_source(
+          additional_states['ignition_kernel'], t
+      )
+      src_name = f'src_{self.fire_utils.t_var}'
+      additional_states_updated[src_name] = tf.nest.map_structure(
+          tf.math.add, additional_states_updated[src_name], heat_source
       )
 
     if self.inflow_update_fn is not None:
@@ -1388,8 +1413,10 @@ class Fire:
 
       # Add additional states required if moisture is considered in the
       # vegetation.
-      if self.config.combustion.wood.WhichOneof(
-          'combustion_model_option') == 'moist_wood':
+      assert (
+          combustion := self.config.combustion
+      ) is not None, 'Combustion must be set in the config.'
+      if combustion.wood.WhichOneof('combustion_model_option') == 'moist_wood':
         output.update({
             'rho_m':
                 self.fire_utils.states_init(coordinates, init_rho_m,

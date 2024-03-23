@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ from typing import Callable, Mapping, Optional
 
 from absl import flags
 from absl import logging
+import fancyflags as ff
 import numpy as np
 from swirl_lm.base import initializer
 from swirl_lm.base import parameters as parameters_lib
@@ -65,6 +66,10 @@ class IgnitionKernelType(enum.Enum):
   # This option constructs multiple slant line ignition kernels with random
   # orientations.
   MULTI_LINE = 3
+  # This ignition kernel is an arc defined by its center, radius, start and end
+  # angles. It is widened into an arc of a ring of given width with cosine
+  # squared.
+  ARC = 4
 
 
 class VelocityInitAndInflowOption(enum.Enum):
@@ -208,8 +213,8 @@ _IGNITION_CENTER_X = flags.DEFINE_float(
     0.0,
     (
         'The x coordinate of the center of the ignition kernel. '
-        'Used only when `ignition_option` is `IgnitionKernelType.SPHERE` or '
-        '`IgnitionKernelType.SLANT_LINE`.'
+        'Used only when `ignition_option` is `IgnitionKernelType.SPHERE`, '
+        '`IgnitionKernelType.SLANT_LINE` or `IgnitionKernelType.ARC`.'
     ),
     allow_override=True,
 )
@@ -218,8 +223,8 @@ _IGNITION_CENTER_Y = flags.DEFINE_float(
     0.0,
     (
         'The y coordinate of the center of the ignition kernel. '
-        'Used only when `ignition_option` is `IgnitionKernelType.SPHERE` or '
-        '`IgnitionKernelType.SLANT_LINE`.'
+        'Used only when `ignition_option` is `IgnitionKernelType.SPHERE` '
+        '`IgnitionKernelType.SLANT_LINE` or `IgnitionKernelType.ARC`.'
     ),
     allow_override=True,
 )
@@ -236,8 +241,8 @@ _IGNITION_RADIUS = flags.DEFINE_float(
     'ignition_radius',
     0.0,
     (
-        'The radius of the ignition kernel. Used only when `ignition_option` is'
-        ' `IgnitionKernelType.SPHERE`.'
+        'The radius of the ignition kernel. Used only when `ignition_option` '
+        'is `IgnitionKernelType.SPHERE` or `IgnitionKernelType.ARC`. '
     ),
     allow_override=True,
 )
@@ -247,6 +252,33 @@ _IGNITION_SCALE = flags.DEFINE_float(
     (
         'The smoothness factor at the edge of the ignition kernel. '
         'Used only when `ignition_option` is `IgnitionKernelType.SPHERE`.'
+    ),
+    allow_override=True,
+)
+_IGNITION_ARC_THETA_0 = flags.DEFINE_float(
+    'ignition_arc_theta_0',
+    -180.0,
+    (
+        'Start angle of the arc in degrees. Used only when `ignition_option` '
+        'is `IgnitionKernelType.ARC`.'
+    ),
+    allow_override=True,
+)
+_IGNITION_ARC_THETA_1 = flags.DEFINE_float(
+    'ignition_arc_theta_1',
+    180.0,
+    (
+        'End angle of the arc in degrees. Used only when `ignition_option` '
+        'is `IgnitionKernelType.ARC`.'
+    ),
+    allow_override=True,
+)
+_IGNITION_ARC_WIDTH = flags.DEFINE_float(
+    'ignition_arc_width',
+    0.0,
+    (
+        'Width of the arc kernel. Used only when `ignition_option` is '
+        '`IgnitionKernelType.ARC`.'
     ),
     allow_override=True,
 )
@@ -324,12 +356,20 @@ _IGNITION_LINES_ANGLE = flags.DEFINE_list(
     ),
     allow_override=True,
 )
-_IGNITION_TEMPERATURE = flags.DEFINE_float(
-    'ignition_temperature',
-    800.0,
-    'The temperature of the ignition kernel.',
-    allow_override=True,
+
+_IGNITION_METHOD = flags.DEFINE_enum(
+    'ignition_method',
+    'hot_kernel',
+    ['hot_kernel', 'heat_source'],
+    'The method of ignition.',
 )
+_IGNITION_WITH_HOT_KERNEL = ff.DEFINE_auto(
+    'ignition_with_hot_kernel', combustion.IgnitionWithHotKernel
+)
+_IGNITION_WITH_HEAT_SOURCE = ff.DEFINE_auto(
+    'ignition_with_heat_source', combustion.IgnitionWithHeatSource
+)
+
 # Flags for synthetic turbulent inflow.
 _INFLOW_SEED = flags.DEFINE_list(
     'turbulent_inflow_seed',
@@ -399,7 +439,115 @@ _USE_GEOPOTENTIAL = flags.DEFINE_bool(
     allow_override=True)
 
 
-class WildfireUtils():
+def _angle_to_point(
+    xx: initializer.TensorOrArray,
+    yy: initializer.TensorOrArray,
+    point_x: float,
+    point_y: float,
+) -> initializer.TensorOrArray:
+  """Computes the angle in radians from mesh points in `xx`, `yy` to a point."""
+  return tf.math.atan2(yy - point_y, xx - point_x)
+
+
+def _distance_to_point(
+    xx: initializer.TensorOrArray,
+    yy: initializer.TensorOrArray,
+    point_x: float,
+    point_y: float,
+) -> initializer.TensorOrArray:
+  """Computes the distance from mesh points in `xx`, `yy` to a point."""
+  return tf.math.sqrt(
+      tf.math.pow(xx - point_x, 2) + tf.math.pow(yy - point_y, 2)
+  )
+
+
+def _point_on_circle(
+    center_x: float, center_y: float, radius: float, theta_radians: float
+) -> tuple[float, float]:
+  """Returns the point on the given circle at the given `theta_radians`."""
+  return (
+      center_x + radius * tf.math.cos(theta_radians),
+      center_y + radius * tf.math.sin(theta_radians),
+  )
+
+
+def _between_angles(
+    x_radians: initializer.TensorOrArray, theta_0_radians: float,
+    theta_1_radians: float
+) -> initializer.TensorOrArray:
+  """Returns true if `x_radians` lies between the given angles.
+
+  More specifically, `x_radians` lies between `theta_0_radians` and
+  `theta_1_radians` if it is in the (extended) sector formed by sweeping
+  a ray from `theta_0_radians` to `theta_1_radians` in a counter-clockwise
+  direction.
+
+  For example: `_between_angles(45°, 0°, 90°)` is true but
+  `_between_angles(45°, 90°, 0°)` is not because in the latter case the ray
+  sweeps from 90° to 180°, then to -90°, and finally to 0°.
+
+  Args:
+    x_radians: Angle to check.
+    theta_0_radians: Start angle.
+    theta_1_radians: End angle.
+
+  Returns:
+    A boolean array with the same shape as `x_radians`.
+  """
+  pi2 = 2 * np.pi
+  x = x_radians % pi2
+  theta_0, theta_1 = theta_0_radians % pi2, theta_1_radians % pi2
+  if theta_0 < theta_1:
+    return (theta_0 <= x) & (x <= theta_1)
+  else:
+    return (x >= theta_0) | (x <= theta_1)
+
+
+def _distance_to_arc(
+    xx: initializer.TensorOrArray,
+    yy: initializer.TensorOrArray,
+    center_x: float,
+    center_y: float,
+    radius: float,
+    theta_0: float,
+    theta_1: float,
+) -> initializer.TensorOrArray:
+  """Returns the distance from mesh points in `xx`, `yy` to an arc.
+
+  The distance from a point to an arc is the distance to a point on the arc
+  if the point lies in the sector defined by the arc, where the point on the
+  arc is on the line from the given point to the center of the circle.
+  Otherwise it is the distance to the nearest endpoint of the arc.
+
+  Args:
+    xx: Mesh coordinates.
+    yy: Mesh coordinates.
+    center_x: Center of the arc.
+    center_y: Center of the arc.
+    radius: Radius of the arc.
+    theta_0: Start angle of the arc in radians.
+    theta_1: End angle of the arc in radians.
+
+  Returns:
+    The distances from the points in the mesh to the arc.
+  """
+
+  distance_to_circle = tf.math.abs(
+      _distance_to_point(xx, yy, center_x, center_y) - radius
+  )
+  p1 = _point_on_circle(center_x, center_y, radius, theta_0)
+  p2 = _point_on_circle(center_x, center_y, radius, theta_1)
+  distance_to_p1 = _distance_to_point(xx, yy, *p1)
+  distance_to_p2 = _distance_to_point(xx, yy, *p2)
+  angle = _angle_to_point(xx, yy, center_x, center_y)
+  return tf.where(
+      _between_angles(angle, theta_0, theta_1),
+      distance_to_circle,
+      tf.minimum(distance_to_p1, distance_to_p2),
+  )
+
+
+class WildfireUtils:
   """A library of utilities that are useful for wildfire simulations."""
 
   def __init__(
@@ -427,11 +575,6 @@ class WildfireUtils():
                        'represent the vertical coordinates when the height-'
                        'dependent geopotential is used.')
     self.t_var = 'theta' if self.use_geo else 'T'
-
-    # The update function for igntion.
-    self.ignition_step_fn = combustion.ignition_step_fn(
-        self.t_var, _IGNITION_TEMPERATURE.value, self.config
-    )
 
     # Parameters for the initial conditions is set to the same as the inflow
     # boundary condition. Note that this assumes that the inflow is on the lower
@@ -533,6 +676,13 @@ class WildfireUtils():
       self.ignition_center_z = _IGNITION_CENTER_Z.value
       self.ignition_radius = _IGNITION_RADIUS.value
       self.ignition_scale = _IGNITION_SCALE.value
+    elif self.ignition_option == IgnitionKernelType.ARC:
+      self.ignition_center_x = _IGNITION_CENTER_X.value
+      self.ignition_center_y = _IGNITION_CENTER_Y.value
+      self.ignition_radius = _IGNITION_RADIUS.value
+      self.ignition_arc_theta_0 = _IGNITION_ARC_THETA_0.value
+      self.ignition_arc_theta_1 = _IGNITION_ARC_THETA_1.value
+      self.ignition_arc_width = _IGNITION_ARC_WIDTH.value
     elif self.ignition_option == IgnitionKernelType.SLANT_LINE:
       self.ignition_line = SlantLine(
           center_x=_IGNITION_CENTER_X.value,
@@ -554,7 +704,40 @@ class WildfireUtils():
           for i in range(len(_IGNITION_CENTERS_X.value))
       ]
 
-    self.ignition_temperature = _IGNITION_TEMPERATURE.value
+    # The update function for igntion.
+    self.ignition_method = _IGNITION_METHOD.value
+    if self.ignition_method == 'hot_kernel':
+      self.ignition_temperature = (
+          _IGNITION_WITH_HOT_KERNEL.value().ignition_temperature
+      )
+      logging.info(
+          'Ignition with hot kernel at temperature %f K.',
+          self.ignition_temperature,
+      )
+      self.ignition_with_hot_kernel = combustion.ignition_with_hot_kernel(
+          self.t_var, self.ignition_temperature, self.config
+      )
+    else:
+      self.ignition_temperature = 800.0
+      self.ignition_with_hot_kernel = None
+
+    if self.ignition_method == 'heat_source':
+      ignition_model_params = _IGNITION_WITH_HEAT_SOURCE.value()
+      logging.info(
+          'Ignition with heat source parameters %r.',
+          ignition_model_params,
+      )
+      coeff_fn = combustion.ramp_up_down_function(
+          ignition_model_params.t_0,
+          ignition_model_params.t_1,
+          ignition_model_params.t_2,
+          ignition_model_params.t_3,
+      )
+      self.ignition_with_heat_source = combustion.ignition_with_heat_source(
+          ignition_model_params.heat_source_magnitude, coeff_fn
+      )
+    else:
+      self.ignition_with_heat_source = None
 
     # Parameters for the sponge layer.
     self.use_sponge = bool(self.config.sponge)
@@ -892,6 +1075,44 @@ class WildfireUtils():
         tf.math.tanh(self.ignition_scale * (rr + self.ignition_radius)) -
         tf.math.tanh(self.ignition_scale * (rr - self.ignition_radius)))
 
+  def init_arc_ignition_kernel_init_fn(
+      self,
+      fuel_top_elevation: tf.Tensor,
+      ground_elevation: tf.Tensor,
+  ) -> InitFn:
+    """Generates an init function for arc ignition."""
+    if self.ignition_option != IgnitionKernelType.ARC:
+      raise ValueError(
+          'Arc ignition kernel is only available for '
+          '`IgnitionKernelType.ARC`. {} is not feasible.'.format(
+              self.ignition_option
+          )
+      )
+
+    def init_fn(xx, yy, zz, lx, ly, lz, coord):
+      del lx, ly, lz, coord
+      d = _distance_to_arc(
+          xx,
+          yy,
+          self.ignition_center_x,
+          self.ignition_center_y,
+          self.ignition_radius,
+          self.ignition_arc_theta_0 * np.pi / 180,
+          self.ignition_arc_theta_1 * np.pi / 180,
+      )
+      arc = tf.where(
+          tf.math.less_equal(d, 0.5 * self.ignition_arc_width),
+          tf.math.cos(d * np.pi / self.ignition_arc_width) ** 2,
+          tf.zeros_like(d),
+      )
+      location_z = tf.math.logical_and(
+          tf.less_equal(zz, fuel_top_elevation),
+          tf.greater_equal(zz, ground_elevation))
+      return tf.where(location_z, arc,
+                      tf.zeros_like(arc, dtype=tf.float32))
+
+    return init_fn
+
   def ignition_kernel_init_fn(
       self,
       fuel_top_elevation: tf.Tensor,
@@ -916,6 +1137,10 @@ class WildfireUtils():
       )
     elif self.ignition_option == IgnitionKernelType.SPHERE:
       ignition_shape_fn = self.init_spherical_ignition_kernel
+    elif self.ignition_option == IgnitionKernelType.ARC:
+      ignition_shape_fn = self.init_arc_ignition_kernel_init_fn(
+          fuel_top_elevation, ground_elevation
+      )
     elif self.ignition_option == IgnitionKernelType.SLANT_LINE:
       ignition_shape_fn = self.slant_line_ignition_kernel_init_fn(
           fuel_top_elevation, ground_elevation
@@ -924,6 +1149,13 @@ class WildfireUtils():
       ignition_shape_fn = self.multi_line_ignition_kernel_init_fn(
           fuel_top_elevation, ground_elevation
       )
+    else:
+      raise NotImplementedError(
+          f'{self.ignition_option.name} is not a valid ignition kernel option.'
+          ' Supported options are:'
+          f' {[kernel.name for kernel in IgnitionKernelType]}.'
+      )
+
     return ignition_shape_fn
 
   def states_init(

@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,8 +22,7 @@ This library supports the following pairs of prognostic variables:
 4. 'theta_v' (virtual potential temperature) and 'q_t' (total humidity)
 """
 import enum
-
-from typing import Optional, Sequence, Text
+from typing import Optional, Sequence, Text, cast
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.numerics import root_finder
 from swirl_lm.physics import constants
@@ -65,9 +64,9 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     """Initializes parameters for the water thermodynamics."""
     super(Water, self).__init__(params)
 
-    model_params = params.thermodynamics
-    assert model_params is not None, 'Thermodynamics model is not defined.'
-
+    assert (
+        model_params := params.thermodynamics
+    ) is not None, 'Thermodynamics model is not defined.'
     model_type = model_params.WhichOneof('thermodynamics_type')
     assert model_type == 'water', (
         '`Water` requires the thermodynamics model to be of type `water` but '
@@ -83,6 +82,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     self._t_triple = model_params.water.t_triple
     self._t_icenuc = model_params.water.t_icenuc
     self._p_triple = model_params.water.p_triple
+    self._p00 = model_params.water.p00
     self._e_int_v0 = model_params.water.e_int_v0
     self._e_int_i0 = model_params.water.e_int_i0
     self._lh_v0 = model_params.water.lh_v0
@@ -359,23 +359,29 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     """
     def pressure_with_geo_static(z: tf.Tensor) -> tf.Tensor:
       """Computes the reference pressure."""
+      ref_state = cast(
+          thermodynamics_pb2.Water.GeoStaticReferenceState, self._ref_state
+      )
       # Compute the fractional temperature drop.
-      delta_t_frac = self._ref_state.delta_t / self._ref_state.t_s
+      delta_t_frac = ref_state.delta_t / ref_state.t_s
 
       # Compute the density scale height at the surface.
-      h_sfc = _R_D * self._ref_state.t_s / constants.G
+      h_sfc = _R_D * ref_state.t_s / constants.G
 
       return self._p_thermal * tf.math.exp(
-          -(z + self._ref_state.height * delta_t_frac *
+          -(z + ref_state.height * delta_t_frac *
             (tf.math.log(1.0 - delta_t_frac *
-                         tf.math.tanh(z / self._ref_state.height)) -
-             tf.math.log(1.0 + tf.math.tanh(z / self._ref_state.height)) +
-             z / self._ref_state.height)) / h_sfc / (1.0 - delta_t_frac**2))
+                         tf.math.tanh(z / ref_state.height)) -
+             tf.math.log(1.0 + tf.math.tanh(z / ref_state.height)) +
+             z / ref_state.height)) / h_sfc / (1.0 - delta_t_frac**2))
 
     def pressure_with_const_theta(z: tf.Tensor) -> tf.Tensor:
       """Computes the reference pressure for constant potential temperature."""
+      ref_state = cast(
+          thermodynamics_pb2.Water.ConstThetaReferenceState, self._ref_state
+      )
       return (self._p_thermal *
-              (1.0 - constants.G * z / self.cp_d / self._ref_state.theta)
+              (1.0 - constants.G * z / self.cp_d / ref_state.theta)
               **(self.cp_d / _R_D))
 
     def pressure_with_constant(z: tf.Tensor) -> tf.Tensor:
@@ -423,25 +429,31 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
     def temperature_with_geo_static() -> FlowFieldVal:
       """Computes the reference temperature following the presumed profile."""
+      ref_state = cast(
+          thermodynamics_pb2.Water.GeoStaticReferenceState, self._ref_state
+      )
       return tf.nest.map_structure(
-          lambda z: self._ref_state.t_s  # pylint: disable=g-long-lambda
-          - self._ref_state.delta_t * tf.math.tanh(z / self._ref_state.height),
+          lambda z: ref_state.t_s  # pylint: disable=g-long-lambda
+          - ref_state.delta_t * tf.math.tanh(z / ref_state.height),
           zz,
       )
 
     def temperature_with_const_theta() -> FlowFieldVal:
       """Computes reference temperature for constant potential temperature."""
+      ref_state = cast(
+          thermodynamics_pb2.Water.ConstThetaReferenceState, self._ref_state
+      )
       theta = tf.nest.map_structure(
-          lambda z: self._ref_state.theta * tf.ones_like(z), zz
+          lambda z: ref_state.theta * tf.ones_like(z), zz
       )
       q_t = tf.nest.map_structure(
-          lambda z: self._ref_state.q_t * tf.ones_like(z), zz
+          lambda z: ref_state.q_t * tf.ones_like(z), zz
       )
       q_l = tf.nest.map_structure(
-          lambda z: self._ref_state.q_l * tf.ones_like(z), zz
+          lambda z: ref_state.q_l * tf.ones_like(z), zz
       )
       q_i = tf.nest.map_structure(
-          lambda z: self._ref_state.q_i * tf.ones_like(z), zz
+          lambda z: ref_state.q_i * tf.ones_like(z), zz
       )
       # Additional states is not used here by intention because no helper
       # variables are required for this type of reference state.
@@ -450,8 +462,11 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
     def temperature_with_constant() -> FlowFieldVal:
       """Provides a constant temperature as the reference state."""
+      ref_state = cast(
+          thermodynamics_pb2.Water.ConstReferenceState, self._ref_state
+      )
       return tf.nest.map_structure(
-          lambda z: self._ref_state.t_ref * tf.ones_like(z), zz
+          lambda z: ref_state.t_ref * tf.ones_like(z), zz
       )
 
     if self._ref_state_type == 'geo_static_reference_state':
@@ -552,7 +567,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       The exner function as a function of height.
     """
     return tf.nest.map_structure(
-        lambda p: tf.pow(p / self._p_thermal, _R_D / self.cp_d),
+        lambda p: tf.pow(p / self._p00, _R_D / self.cp_d),
         self.p_ref(zz, additional_states),
     )
 
@@ -572,7 +587,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     """
     p_ref = self.p_ref(zz, additional_states)
     return tf.nest.map_structure(
-        lambda p: tf.pow(p / self._p_thermal, -_R_D / self.cp_d), p_ref)
+        lambda p: tf.pow(p / self._p00, -_R_D / self.cp_d), p_ref)
 
   def exner(
       self,
@@ -600,7 +615,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     r_m = self.r_m(t, rho, q_t)
     cp_m = self.cp_m(q_t, q_l, q_i)
     return tf.nest.map_structure(
-        lambda p, r, cp: tf.pow(p / self._p_thermal, r / cp), p_ref, r_m, cp_m)
+        lambda p, r, cp: tf.pow(p / self._p00, r / cp), p_ref, r_m, cp_m)
 
   def exner_inverse(
       self,
@@ -628,7 +643,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     r_m = self.r_m(t, rho, q_t)
     cp_m = self.cp_m(q_t, q_l, q_i)
     return tf.nest.map_structure(
-        lambda p, r, cp: tf.pow(p / self._p_thermal, -r / cp), p_ref, r_m, cp_m)
+        lambda p, r, cp: tf.pow(p / self._p00, -r / cp), p_ref, r_m, cp_m)
 
   def air_temperature(
       self,
@@ -1429,7 +1444,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
     p_ref = self.p_ref(zz, additional_states)
     exner_inv = tf.nest.map_structure(
-        lambda p, r, cp: tf.pow(p / self._p_thermal, -r / cp), p_ref, r_m, cp_m)
+        lambda p, r, cp: tf.pow(p / self._p00, -r / cp), p_ref, r_m, cp_m)
 
     theta_li = tf.nest.map_structure(
         lambda t_k, q_l_k, q_i_k, cp_m_k, exner_inv_k:  # pylint: disable=g-long-lambda
@@ -1489,7 +1504,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
     p_ref = self.p_ref(zz, additional_states)
     exner = tf.nest.map_structure(
-        lambda p, r, cp: tf.pow(p / self._p_thermal, r / cp), p_ref, r_m, cp_m)
+        lambda p, r, cp: tf.pow(p / self._p00, r / cp), p_ref, r_m, cp_m)
 
     if theta_name == PotentialTemperature.THETA.value:
       t = tf.nest.map_structure(tf.math.multiply, theta, exner)
@@ -1558,7 +1573,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
     p_ref = self.p_ref(zz, additional_states)
     exner = tf.nest.map_structure(
-        lambda p, r, cp: tf.pow(p / self._p_thermal, r / cp), p_ref, r_m, cp_m)
+        lambda p, r, cp: tf.pow(p / self._p00, r / cp), p_ref, r_m, cp_m)
 
     if theta_name == PotentialTemperature.THETA.value:
       theta = tf.nest.map_structure(tf.math.divide, temperature, exner)

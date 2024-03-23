@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -57,14 +57,6 @@ flags.DEFINE_string(
     '--data_dump_prefix.',
     allow_override=True,
 )
-flags.DEFINE_bool(
-    'apply_data_load_filter',
-    False,
-    'If True, only variables with names provided in field `states_from_file` '
-    'in the config file will be loaded from files (at step specified by flag '
-    '`loading_step`.',
-    allow_override=True,
-)
 RESTART_DUMP_CYCLE = flags.DEFINE_integer(
     'restart_dump_cycle',
     1,
@@ -75,14 +67,27 @@ RESTART_DUMP_CYCLE = flags.DEFINE_integer(
 SAVE_LAST_VALID_STEP = flags.DEFINE_bool(
     'save_last_valid_step',
     False,
-    'If `True`, the solver will record and output the last non-NAN step before '
+    'If true, the solver will record and output the last non-NAN step before '
     'crashing. Default is `False` as this might have some performance impacts.',
+    allow_override=True,
+)
+
+SAVE_MAX_UVW_AND_CFL = flags.DEFINE_bool(
+    'save_max_uvw_and_cfl',
+    False,
+    'If true, the solver will record and output max values of abs(u)/dx, '
+    'abs(v)/dy and abs(w)/dz as well as '
+    'max(sum(abs(u)/dx + abs(v)/dy + abs(w)/dz)) for each timestep. The output '
+    'will be written as a [num_steps, 4] tensor named max_uvw_cfl at the end '
+    'of each cycle. Note that currently it is not possible to restart a '
+    'simulation with a flipped value for this flag.',
     allow_override=True,
 )
 
 FLAGS = flags.FLAGS
 
 CKPT_DIR_FORMAT = '{filename_prefix}-ckpts/'
+_MAX_UVW_CFL = 'max_uvw_cfl'
 
 Array = Any
 PerReplica = Any
@@ -189,6 +194,16 @@ def _init_fn(
     )
     if poisson_solver_helper_var_fn is not None:
       states.update(poisson_solver_helper_var_fn(replica_id, coordinates))
+
+    # Helper variable for CFL tracking.
+    if SAVE_MAX_UVW_AND_CFL.value:
+      # Initialize max_uvw_cfl as a tensor of zeros of length equal to the
+      # number of steps in a cycle. At the end of each step, we'll update the
+      # entries corresponding to that step with the computed values. The
+      # tensor will be written to disk together with the rest of the state
+      # at the end of each cycle.
+      states[_MAX_UVW_CFL] = tf.zeros((params.num_steps, 4),
+                                      dtype=types.TF_DTYPE)
 
     # Apply the user defined `init_fn` in the end to allow it to override
     # default initializations.
@@ -310,6 +325,52 @@ def _state_has_nan_inf(state: PerReplica, replicas: Array) -> bool:
   return has_nan_inf
 
 
+def _compute_max_uvw_and_cfl(
+    state: PerReplica, grid_spacings: tuple[float, float, float],
+    use_stretched_grid: tuple[bool, bool, bool], additional_states,
+    replicas: Array) -> tf.Tensor:
+  """Computes global maximum values of abs(u_i)/d_i and sum(abs(u_i)/d_i).
+
+  Maximum value (across cells) of sum(abs(u_i)/d_i) is used in computing CFL as
+  in:
+
+  https://en.wikipedia.org/wiki/Courant%E2%80%93Friedrichs%E2%80%93Lewy_condition#The_two_and_general_n-dimensional_case
+
+  Args:
+    state: State dictionary container per-replica values.
+    grid_spacings: Coordinate grid spacing for each dimension.
+    use_stretched_grid: Whether to use a stretched grid in each of the three
+      dimensions.
+    additional_states: The additional states, which should contain the stretched
+      grid parameters if using a stretched grid.
+    replicas: Mapping from grid coordinates to replica id numbers.
+
+  Returns:
+    A tensor of length 4 with maximum values for abs(u)/dx, abs(v)/dy and
+    abs(w)/dz, and sum(abs(u_i)/d_i).
+  """
+  del additional_states  # Needed for the stretched grid.
+  if any(use_stretched_grid):
+    raise NotImplementedError('CFL for stretched grid is not yet implemented.')
+
+  out = []
+  for u, d in zip(['u', 'v', 'w'], grid_spacings):
+    out.append(common_ops.global_reduce(
+        tf.math.abs(state[u]) / d,
+        tf.math.reduce_max,
+        replicas.reshape([1, -1]),
+    ))
+
+  dx, dy, dz = grid_spacings
+  out.append(common_ops.global_reduce(
+      (tf.math.abs(state['u']) / dx + tf.math.abs(state['v']) / dy +
+       tf.math.abs(state['w']) / dz),
+      tf.math.reduce_max,
+      replicas.reshape([1, -1]),
+  ))
+  return tf.convert_to_tensor(out)
+
+
 @tf.function
 def _one_cycle(
     strategy: tf.distribute.Strategy,
@@ -317,6 +378,7 @@ def _one_cycle(
     init_step_id: Array,
     num_steps: Array,
     params: Union[parameters_lib.SwirlLMParameters, Any],
+    model: Any,
 ) -> Tuple[PerReplica, PerReplica]:
   """Runs one cycle of the Navier-Stokes solver.
 
@@ -328,6 +390,8 @@ def _one_cycle(
       start the cycle.
     num_steps: An integer scalar; the number of steps to run in the cycle.
     params: The solver configuration.
+    model: The underlying model where the simulation calculation procedures are
+      defined.
 
   Returns:
     A 2-tuple of the final state at the end of the cycle and the completed
@@ -343,7 +407,6 @@ def _one_cycle(
   ).reshape(computation_shape)
 
   kernel_op = params.kernel_op
-  model = _get_model(kernel_op, params)
 
   def step_fn(state):
     # Common keyword arguments to various step functions.
@@ -360,6 +423,9 @@ def _one_cycle(
       # Split essential/additional states into lists of 2D Tensors.
       for key in keys_to_split:
         state[key] = tf.unstack(state[key])
+
+    if SAVE_MAX_UVW_AND_CFL.value:
+      state[_MAX_UVW_CFL] = tf.zeros_like(state[_MAX_UVW_CFL])
 
     cycle_step_id = 0
     for _ in tf.range(num_steps):
@@ -436,6 +502,18 @@ def _one_cycle(
               updated_state, essential_states
           )
 
+      if SAVE_MAX_UVW_AND_CFL.value:
+        updated_state[_MAX_UVW_CFL] = tf.tensor_scatter_nd_add(
+            state[_MAX_UVW_CFL],
+            tf.convert_to_tensor([[cycle_step_id, 0],
+                                  [cycle_step_id, 1],
+                                  [cycle_step_id, 2],
+                                  [cycle_step_id, 3]]),
+            _compute_max_uvw_and_cfl(updated_state, params.grid_spacings,
+                                     params.use_stretched_grid,
+                                     additional_states, logical_replicas),
+        )
+
       if SAVE_LAST_VALID_STEP.value:
         if _state_has_nan_inf(updated_state, logical_replicas):
           # Detected nan/inf, skip the update of state by early-exiting from the
@@ -462,6 +540,57 @@ def solver(
 ):
   """Runs the Navier-Stokes Solver with TF2 Distribution strategy.
 
+  Initialization of `state`:
+
+     1) The solver initializes `state` with internal variables (e.g., those
+        needed by the poisson solver). Additional variables are added by the
+        custom initialization function passed into the solver. The solver then
+        adds variables related to nonreflecting boundaries.
+
+    2a) If a checkpoint is found, `state` is updated with values read from the
+        checkpoint. Only the variables already initialized in step 1 above will
+        be loaded from the checkpoint. The simulation will fail with an error if
+        any variable is not found in the checkpoint (which could happen if code
+        or config is modified before a restart). The data in the checkpoint will
+        override the values from step 1.
+
+    2b) If no checkpoint is found and the flags `--data_load_prefix` and
+        `--loading_step` are specified, some variables are loaded from the given
+        step. The set of variables to be loaded is determined by the repeated
+        field `states_from_file` in the config. If `states_from_file` is empty,
+        the set of variables initialized in step 1 is loaded from the loading
+        step overwriting the initialization values; otherwise only the subset in
+        `states_from_file` is loaded. The simulation will fail with an error if
+        any variable that needs to be loaded is not found in the loading
+        step. Note that if a simulation is restarted with `--loading_step`
+        (either manually or because of a preemption), the new run will start
+        from the checkpoint saved in the initial run and will not load data
+        again from `--data_load_prefix`.
+
+    2c) If no checkpoint is found and `--data_load_prefix` is not specified,
+        then the simulation starts with variables initialized in step 1 above.
+
+  Saving of `state` to disk:
+
+    `state` is saved to disk at the end of each cycle except that in a newly
+    started simulation (i.e., that is not restarting from a checkpoint), it is
+    also saved after initialization just before starting the first cycle.
+
+    Some (by default all) cycles are saved as checkpoints. At a checkpoint,
+    all variables in `state` are saved so that the simulation can be restarted
+    from the saved data. How often this happens is controlled by the flag
+    `--restart_dump_cycle`, e.g., setting it to 3 will cause every third cycle
+    to be saved as a checkpoint. The initial `state` is always saved as a
+    checkpoint.
+
+    If a cycle is not a checkpoint, then only some of the variables will be
+    saved. The set of variables that are saved are determined by the repeated
+    field `states_to_file` in the config.
+
+    When a simulation is started with a `--loading_step`, the initial run is
+    considered a new simulation and will save its `state` after initialization
+    as a checkpoint.
+
   Args:
     customized_init_fn: The function that initializes the flow field. The
       function needs to be replica dependent.
@@ -486,7 +615,7 @@ def solver(
       tpu_address=FLAGS.target, computation_shape=computation_shape
   )
   num_replicas = strategy.num_replicas_in_sync
-  logging.info('TPU is initialized. Number of replica is %d', num_replicas)
+  logging.info('TPU is initialized. Number of replicas is %d.', num_replicas)
   logical_coordinates = tpu_util.grid_coordinates(computation_shape).tolist()
   # In order to save and restore from the filesystem, we use tf.train.Checkpoint
   # on the step id. The `step_id` Variable should be placed on the TPU device so
@@ -518,9 +647,7 @@ def solver(
     # needed files are there and will proceed to read (if it turns out files are
     # missing, the job will just fail).
     loading_subdir = os.path.join(input_dir, str(params.loading_step))
-    states_from_file = (
-        list(params.states_from_file) if params.states_from_file else None
-    )
+    states_from_file = list(params.states_from_file)
     if not tf.io.gfile.exists(loading_subdir):
       raise ValueError(
           f'--data_load_prefix was set to {FLAGS.data_load_prefix} and '
@@ -546,7 +673,7 @@ def solver(
   )
 
   # Check if only part of the data will be dumped.
-  data_dump_filter = params.states_to_file if params.states_to_file else None
+  data_dump_filter = list(params.states_to_file)
   checkpoint_interval = RESTART_DUMP_CYCLE.value * params.num_steps
   logging.info('Got checkpoint_manager.')
 
@@ -668,12 +795,15 @@ def solver(
     write_status = write_state_and_sync(
         state=_local_state(strategy, state), step_id=step_id_value()
     )
-    ckpt_manager.save()
     logging.info(
         '`restoring-checkpoint-if-necessary` stage '
         'done with writing initial steps. Write status are: %s',
         write_status,
     )
+    # Only after the logging, which forces the `write_status` to be
+    # materialized, we can guarantee that the actual write actions are
+    # completed, and we update the saved completed step here.
+    ckpt_manager.save()
 
   t_post_restore = time.time()
   logging.info(
@@ -706,6 +836,14 @@ def solver(
       params.num_steps,
   )
 
+  kernel_op = params.kernel_op
+
+  # Get the model that defines the concrete simulation calculation procedures.
+  # Since we are allowing some model object's methods to be decorated with
+  # `tf.function`, calling `_get_model` outside the loop ensures that these
+  # methods are traced only once.
+  model = _get_model(kernel_op, params)
+
   while step_id_value() < (
       params.start_step + params.num_steps * params.num_cycles
   ):
@@ -718,6 +856,7 @@ def solver(
         init_step_id=step_id_value(),
         num_steps=params.num_steps,
         params=params,
+        model=model,
     )
 
     # Completed number steps are guaranteed to be identical for all replicas, so
@@ -739,6 +878,11 @@ def solver(
       logging.info(
           'Dumping full state done. Write status are: %s', write_status
       )
+      # Save checkpoint to update the completed step.
+      # Note: Only after the logging, which forces the `write_status` to be
+      # materialized, we can guarantee that the actual write actions are
+      # completed, and we update the saved completed step here.
+      ckpt_manager.save()
       raise ValueError(
           f'Non-convergence detected. Early exit from cycle {cycle} at step '
           f'{step_id_value() + 1}. The last valid state at step '
@@ -775,6 +919,9 @@ def solver(
           '`Post cycle writing full state done. Write status are: %s',
           write_status,
       )
+      # Only after the logging, which forces the `write_status` to be
+      # materialized, we can guarantee that the actual write actions are
+      # completed, and we update the saved completed step here.
       ckpt_manager.save()
     else:
       # Note, the first time this is called retracing will occur for the

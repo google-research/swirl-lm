@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ from typing import Optional, Tuple
 
 from swirl_lm.base import initializer
 from swirl_lm.utility import init_fn as init_fn_lib
+from swirl_lm.utility import types
 import tensorflow as tf
 
 # These prime numbers are used to space the seeding of the random number
@@ -80,3 +81,36 @@ def perturbed_constant_init_fn(
         tf.less(height, cloud_base), pert_val, mean_val)
 
   return init_fn
+
+
+def reorder_vertical_horizontal_coordinates_to_xyz(
+    vertical: types.FlowFieldVal,
+    horizontal_0: types.FlowFieldVal,
+    horizontal_1: types.FlowFieldVal,
+    vertical_dim: int,
+) -> Tuple[types.FlowFieldVal | None, ...]:
+  """Changes the coordinates to follow the x-y-z order.
+
+  Args:
+    vertical: The vertical coordinates.
+    horizontal_0: The horizontal coordinates along the dimension that has a
+      smaller index.
+    horizontal_1: The horizontal coordinates along the dimension that has a
+      larger index.
+    vertical_dim: The dimension of the vertical coordinates.
+
+  Returns:
+    A tuple of coordinates oriented in x-y-z order.
+  """
+  if vertical_dim not in (0, 1, 2):
+    raise ValueError(f'{vertical_dim} is not a valid dimension.')
+
+  horizontal_dims = [0, 1, 2]
+  del horizontal_dims[vertical_dim]
+
+  coordinates = [None, None, None]
+  coordinates[vertical_dim] = vertical
+  coordinates[horizontal_dims[0]] = horizontal_0
+  coordinates[horizontal_dims[1]] = horizontal_1
+
+  return tuple(coordinates)

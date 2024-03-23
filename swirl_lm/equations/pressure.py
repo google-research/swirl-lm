@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -123,10 +123,9 @@
 
 import collections
 import functools
-from typing import Any, Dict, Mapping, Text, Tuple
+from typing import Any, Dict, Mapping, Optional, Text, Tuple
 
 from absl import logging
-import attr
 import numpy as np
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.base import physical_variable_keys_manager
@@ -136,6 +135,7 @@ from swirl_lm.equations import pressure_pb2
 from swirl_lm.equations import utils as eq_utils
 from swirl_lm.linalg import poisson_solver
 from swirl_lm.numerics import filters
+from swirl_lm.numerics import interpolation
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import thermodynamics_pb2
 from swirl_lm.utility import common_ops
@@ -218,22 +218,6 @@ _FIELD_MAP = {
 _B_TERM_DIV = 'b-term-div'
 _B_TERM_DRHO_DT = 'b-term-drho-dt'
 _B_TERM_SOURCE_RHO = 'b-term-source-rho'
-
-
-class DensityInfo(object):
-  """The base class for density information in the pressure solver."""
-
-
-@attr.s
-class ConstantDensityInfo(DensityInfo):
-  """Density information used in the pressure solver for constant density."""
-  rho = attr.ib()
-
-
-@attr.s
-class VariableDensityInfo(DensityInfo):
-  """Density information used in the pressure solver for variable density."""
-  drho_dt = attr.ib()
 
 
 def _supported_convergence_norms() -> Dict[Text, _NormType]:
@@ -421,6 +405,7 @@ class Pressure(object):
     """Initializes the pressure library."""
     self._kernel_op = kernel_op
     self._params = params
+    self._deriv_lib = params.deriv_lib
     self._thermodynamics = thermodynamics
     self.monitor = monitor_lib
 
@@ -449,7 +434,7 @@ class Pressure(object):
 
     self._source = {'rho': None}
 
-    self._src_manager = (physical_variable_keys_manager.SourceKeysHelper())
+    self._src_manager = physical_variable_keys_manager.SourceKeysHelper()
 
   def _exchange_halos(
       self,
@@ -469,14 +454,123 @@ class Pressure(object):
         bc_f,
         width=self._params.halo_width)
 
+  def _compute_divergence_term(
+      self,
+      rho_u: FlowFieldVal,
+      rho_v: FlowFieldVal,
+      rho_w: FlowFieldVal,
+      dt: float,
+      additional_states: FlowFieldMap,
+  ) -> FlowFieldVal:
+    """Computes ∇·(ρu)/dt, needed for the RHS of the Poisson equation."""
+    d_rho_u_dx = self._deriv_lib.deriv_centered(rho_u, 0, additional_states)
+    d_rho_v_dy = self._deriv_lib.deriv_centered(rho_v, 1, additional_states)
+    d_rho_w_dz = self._deriv_lib.deriv_centered(rho_w, 2, additional_states)
+    return tf.nest.map_structure(
+        lambda t0, t1, t2: (t0 + t1 + t2) / dt,
+        d_rho_u_dx,
+        d_rho_v_dy,
+        d_rho_w_dz,
+    )
+
+  def _rhie_chow_numerical_consistency_correction(
+      self, p: FlowFieldVal, grid_spacings: tuple[float, float, float]
+  ) -> FlowFieldVal:
+    """Computes the Rhie-Chow correction to the pressure correction equation."""
+    if any(self._params.use_stretched_grid):
+      raise NotImplementedError(
+          'Stretched grids are not yet supported for the Rhie-Chow correction.'
+      )
+
+    def multiply_by_scalar(f: FlowFieldVal, scalar: float):
+      return tf.nest.map_structure(lambda f: f * scalar, f)
+
+    d4p_dx4 = self._kernel_op.apply_kernel_op_x(p, 'k4d2x')
+    d4p_dy4 = self._kernel_op.apply_kernel_op_y(p, 'k4d2y')
+    d4p_dz4 = self._kernel_op.apply_kernel_op_z(p, 'k4d2z', 'k4d2zsh')
+
+    px = multiply_by_scalar(d4p_dx4, 1 / (4 * grid_spacings[0] ** 2))
+    py = multiply_by_scalar(d4p_dy4, 1 / (4 * grid_spacings[1] ** 2))
+    pz = multiply_by_scalar(d4p_dz4, 1 / (4 * grid_spacings[2] ** 2))
+    return tf.nest.map_structure(lambda t1, t2, t3: t1 + t2 + t3, px, py, pz)
+
+  def _numerical_consistency_correction_pressure_only(
+      self,
+      dp: FlowFieldVal,
+      rho: FlowFieldVal,
+      additional_states: FlowFieldMap,
+  ) -> FlowFieldVal:
+    """Computes numerical consistency term (non-Rhie-Chow type).
+
+    Computes the numerical consistency term using the strategy described in the
+    appendix to Chammas et al., Accelerating Large-Eddy Simulations of Clouds
+    With Tensor Processing Units, Journal of Advances in Modeling Earth
+    Systems (2023).
+
+    This function is compatible with both Low Mach and Anelastic modes. This
+    function is not called when the Rhie-Chow correction is enabled.
+
+    Args:
+      dp: The pressure correction.
+      rho: The reference density, used for the anelastic mode.
+      additional_states: A dictionary that holds helper variables, used here for
+        optional stretched grid variables.
+
+    Returns:
+      The numerical consistency term.
+    """
+    anelastic = (
+        self._thermodynamics.solver_mode
+        == thermodynamics_pb2.Thermodynamics.ANELASTIC
+    )
+    multiply = lambda a, b: tf.nest.map_structure(tf.multiply, a, b)
+
+    if anelastic:
+      # For anelastic, `dp` represents α₀ δp through the end of this function.
+      dp = tf.nest.map_structure(tf.divide, dp, rho)
+
+    # Compute the one-grid-spacing derivative terms.
+    derivs_1h = []
+    for dim in (0, 1, 2):
+      inner_deriv = self._deriv_lib.deriv_node_to_face(
+          dp, dim, additional_states
+      )
+      if anelastic:
+        rho_face = interpolation.centered_node_to_face(
+            rho, dim, self._kernel_op
+        )
+        inner_deriv = multiply(rho_face, inner_deriv)
+      outer_deriv = self._deriv_lib.deriv_face_to_node(
+          inner_deriv, dim, additional_states
+      )
+      derivs_1h.append(outer_deriv)
+
+    # Compute the two-grid-spacing derivative terms.
+    derivs_2h = []
+    for dim in (0, 1, 2):
+      inner_deriv = self._deriv_lib.deriv_centered(dp, dim, additional_states)
+      if anelastic:
+        inner_deriv = multiply(rho, inner_deriv)
+      outer_deriv = self._deriv_lib.deriv_centered(
+          inner_deriv, dim, additional_states
+      )
+      derivs_2h.append(outer_deriv)
+
+    # Compute and return the correction term.
+    sum_terms = lambda t1, t2, t3: t1 + t2 + t3
+    div_2h = tf.nest.map_structure(sum_terms, *derivs_2h)
+    div_h = tf.nest.map_structure(sum_terms, *derivs_1h)
+    return tf.nest.map_structure(tf.math.subtract, div_2h, div_h)
+
   def _pressure_corrector_update(
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
       states: FlowFieldMap,
       additional_states: FlowFieldMap,
-      rho_info: DensityInfo,
-      subiter: tf.Tensor = None,
+      drho_dt: FlowFieldVal,
+      subiter: Optional[tf.Tensor] = None,
+      step_id: Optional[tf.Tensor] = None,
   ) -> Tuple[FlowFieldVal, monitor.MonitorDataType]:  # pytype: disable=annotation-type-mismatch
     """Updates the pressure correction.
 
@@ -502,28 +596,22 @@ class Pressure(object):
         prediction.
       additional_states: A dictionary that holds helper variables required by
         the Poisson solver.
-      rho_info: The density information required the pressure solver. For
-        constant density, `rho_info` is an instance of `ConstantDensityInfo`
-        which contains the value of the density as a float. For variable
-        density, `rho_info` is the rate of change of density, as a 3D tensor.
+      drho_dt: Rate of change of density, as a 3D field. Used for the pressure
+        solver in Low Mach solver mode. For anelastic mode, this field consists
+        of zeros.
       subiter: A scalar Tensor of the integer type that represents the
         subiteration count. Default to `None`, and when it is not `None` and
         corresponding monitor variable `MONITOR_pressure_subiter_convergence` is
         specified in the config, the norm of the pressure residual will be
         stored separately for each subiteration.
+      step_id: A `tf.Tensor` denoting the current step id. Default to `None`. It
+        is used in logging of pressure solver residual when it is not `None`.
 
     Returns:
       A Tuple with two elements: The first one is the pressure correction for
         the next time step. The second element is a dictionary for the monitor
         related metrics.
-
-    Raises:
-      ValueError if `rho_info` is not one of `ConstantDensityInfo` or
-        `VariableDensityInfo`.
     """
-    dx = self._params.dx
-    dy = self._params.dy
-    dz = self._params.dz
     dt = self._params.dt
     inv_dt = 1.0 / dt
     halo_width = self._params.halo_width
@@ -537,89 +625,40 @@ class Pressure(object):
       """Builds the right hand side function of the pressure Poisson equation.
 
       The right hand side expression of Poisson equations is:
-        lap(p) = rho / dt * (du/dx + dv/dy + dw/dz)
+          ∇·(ρu)/dt + (∂ρ/∂t)/dt + (src term) + (numerical consistency term)
 
       Returns:
         A list of tf.Tensor with the right hand side values for the pressure
         Poisson equation of the present time step.
       """
+      def multiply_by_scalar(f: FlowFieldVal, scalar: float):
+        return tf.nest.map_structure(lambda f: f * scalar, f)
+      b_terms = {_B_TERM_SOURCE_RHO: multiply_by_scalar(src_rho, inv_dt)}
+      divergence_term = self._compute_divergence_term(
+          states['rho_u'],
+          states['rho_v'],
+          states['rho_w'],
+          dt,
+          additional_states,
+      )
 
-      def div(
-          coeff_rho,
-          momentum_x,
-          momentum_y,
-          momentum_z,
-      ):
-        """Computes the divergence of the velocity field."""
-        # Compute the fourth order derivative of the pressure for the face
-        # velocity correction.
-        p_corr = (
-            states['p']
-            if self._params.enable_rhie_chow_correction else states['dp'])
-        d4p_dx4 = self._kernel_op.apply_kernel_op_x(p_corr, 'k4d2x')
-        d4p_dy4 = self._kernel_op.apply_kernel_op_y(p_corr, 'k4d2y')
-        d4p_dz4 = self._kernel_op.apply_kernel_op_z(p_corr, 'k4d2z',
-                                                    'k4d2zsh')
-
-        # Compute velocity gradient based on interpolated values on cell faces.
-        coeff_x = dt / (4. * coeff_rho * dx**2)
-        du = self._kernel_op.apply_kernel_op_x(momentum_x, 'kDx')
-        du_dx = tf.nest.map_structure(
-            lambda du_i, d4p_dx4_i: du_i / (2. * dx) + coeff_x * d4p_dx4_i,
-            du, d4p_dx4)
-
-        coeff_y = dt / (4. * coeff_rho * dy**2)
-        dv = self._kernel_op.apply_kernel_op_y(momentum_y, 'kDy')
-
-        dv_dy = tf.nest.map_structure(
-            lambda dv_i, d4p_dy4_i: dv_i / (2. * dy) + coeff_y * d4p_dy4_i,
-            dv, d4p_dy4)
-
-        coeff_z = dt / (4. * coeff_rho * dz**2)
-        dw = self._kernel_op.apply_kernel_op_z(momentum_z, 'kDz', 'kDzsh')
-        dw_dz = tf.nest.map_structure(
-            lambda dw_i, d4p_dz4_i: dw_i / (2. * dz) + coeff_z * d4p_dz4_i,
-            dw, d4p_dz4)
-
-        return tf.nest.map_structure(
-            lambda du_dx_i, dv_dy_i, dw_dz_i: du_dx_i + dv_dy_i + dw_dz_i,
-            du_dx, dv_dy, dw_dz)
-
-      def add_factor(
-          v,
-          factor,
-      ):
-        return tf.nest.map_structure(lambda v_i: factor * v_i, v)
-
-      b_terms = {
-          _B_TERM_SOURCE_RHO: add_factor(src_rho, inv_dt),
-      }
-      if isinstance(rho_info, ConstantDensityInfo):
-        b_terms.update({
-            _B_TERM_DIV:
-                add_factor(
-                    div(rho_info.rho, states['u'], states['v'], states['w']),
-                    inv_dt * rho_info.rho),
-            _B_TERM_DRHO_DT: tf.nest.map_structure(tf.zeros_like, src_rho),
-        })
-
-      elif isinstance(rho_info, VariableDensityInfo):
-        b_terms.update({
-            _B_TERM_DIV:
-                add_factor(
-                    div(1.0, states['rho_u'], states['rho_v'], states['rho_w']),
-                    inv_dt),
-            _B_TERM_DRHO_DT:
-                add_factor(rho_info.drho_dt, inv_dt),
-        })
-
-      else:
-        raise ValueError(
-            '`rho_info` has to be either `ConstantDensityInfo` or '
-            f'`VariableDensityInfo`, but {rho_info} is provided.'
+      if self._params.enable_rhie_chow_correction:
+        numerical_consistency_correction = (
+            self._rhie_chow_numerical_consistency_correction(
+                states['p'], self._params.grid_spacings
+            )
         )
+      else:
+        numerical_consistency_correction = (
+            self._numerical_consistency_correction_pressure_only(
+                states['dp'], states['rho'], additional_states
+            )
+        )
+      b_terms[_B_TERM_DIV] = tf.nest.map_structure(
+          tf.add, divergence_term, numerical_consistency_correction
+      )
+      b_terms[_B_TERM_DRHO_DT] = multiply_by_scalar(drho_dt, inv_dt)
 
-      # pylint: disable=g-long-lambda
       return (
           tf.nest.map_structure(
               lambda div_i, drho_dt_i, src_rho_i: (
@@ -631,7 +670,6 @@ class Pressure(object):
           ),
           b_terms,
       )
-      # pylint: enable=g-long-lambda
 
     def dp_exchange_halos(dpr,):
       """Updates halos and applies the homogeneoues boundary condition."""
@@ -712,6 +750,7 @@ class Pressure(object):
       )
       debug_print.log_mean_min_max(
           common_ops.strip_halos(residual_raw, [halo_width] * 3),
+          step_id,
           replica_id=replica_id,
           message='Pressure solver local residual: ',
           log_level=_DEBUG_PRINT_LOG_LEVEL,
@@ -719,6 +758,7 @@ class Pressure(object):
       for i, norm_type in enumerate(norm_types):
         debug_print.log_mean_min_max(
             norms[i],
+            step_id,
             replica_id=replica_id,
             message=f'Pressure solver global residual {norm_type} norm: ',
             log_level=_DEBUG_PRINT_LOG_LEVEL,
@@ -933,7 +973,8 @@ class Pressure(object):
       states: FlowFieldMap,
       states_0: FlowFieldMap,
       additional_states: FlowFieldMap,
-      subiter: tf.Tensor = None,
+      subiter: Optional[tf.Tensor] = None,
+      step_id: Optional[tf.Tensor] = None,
   ) -> FlowFieldMap:  # pytype: disable=annotation-type-mismatch
     """Updates the pressure and its correction for the current subiteration.
 
@@ -949,13 +990,23 @@ class Pressure(object):
       subiter: A scalar Tensor of the integer type that represents the
         subiteration count. Default to `None`, and when it is not `None` the
         pressure residual will be stored separately.
+      step_id: A `tf.Tensor` denoting the current step id. Default to `None`.
+        It is used in logging of pressure solver residual when it is not `None`.
 
     Returns:
       A dictionary with the updated pressure and pressure corrector.
     """
-    drho_dt = tf.nest.map_structure(tf.zeros_like, states['rho'])
-    if (self._thermodynamics.solver_mode ==
-        thermodynamics_pb2.Thermodynamics.LOW_MACH):
+
+    # Determine drho_dt based on solver mode.
+    if (
+        self._thermodynamics.solver_mode
+        == thermodynamics_pb2.Thermodynamics.ANELASTIC
+    ):
+      drho_dt = tf.nest.map_structure(tf.zeros_like, states['rho'])
+    elif (
+        self._thermodynamics.solver_mode
+        == thermodynamics_pb2.Thermodynamics.LOW_MACH
+    ):
       exchange_halos = functools.partial(
           self._exchange_halos,
           bc_f=[[(halo_exchange.BCType.NEUMANN, 0.0)] * 2] * 3,
@@ -983,30 +1034,39 @@ class Pressure(object):
       ):
         """The body function for drho filtering."""
         return i + 1, exchange_halos(
-            filters.filter_op(self._kernel_op, drho_i, order=2))
+            filters.filter_op(self._kernel_op, drho_i, order=2)
+        )
 
       i0 = tf.constant(0)
-      _, drho = tf.while_loop(
-          cond=drho_filter_cond,
-          body=drho_filter_fn,
-          loop_vars=(i0, drho_0),
-          back_prop=False)
-
-      drho_dt = tf.nest.map_structure(lambda drho_i: drho_i / self._params.dt,
-                                      drho)
-    elif (self._thermodynamics.solver_mode ==
-          thermodynamics_pb2.Thermodynamics.ANELASTIC):
-      drho_dt = tf.nest.map_structure(tf.zeros_like, states['rho'])
-
-    rho_info = VariableDensityInfo(drho_dt)
+      _, drho = tf.nest.map_structure(
+          tf.stop_gradient,
+          tf.while_loop(
+              cond=drho_filter_cond,
+              body=drho_filter_fn,
+              loop_vars=(i0, drho_0),
+          ),
+      )
+      drho_dt = tf.nest.map_structure(
+          lambda drho_i: drho_i / self._params.dt, drho
+      )
+    else:
+      raise ValueError(
+          f'Unknown solver mode: {self._thermodynamics.solver_mode}'
+      )
 
     dp, monitor_vars = self._pressure_corrector_update(
-        replica_id, replicas, states, additional_states, rho_info, subiter
+        replica_id,
+        replicas,
+        states,
+        additional_states,
+        drho_dt,
+        subiter,
+        step_id,
     )
 
     states_updated = {
         'p': tf.nest.map_structure(lambda p_, dp_: p_ + dp_, states['p'], dp),
-        'dp': dp
+        'dp': dp,
     }
     states_updated.update(monitor_vars)
     return states_updated

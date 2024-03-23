@@ -10,6 +10,7 @@ thermodynamics {
     t_freeze: 273.15
     t_triple: 273.16
     p_triple: 611.7
+    p00: 1.013e5
     e_int_v0: 2.132e6
     e_int_i0: 3.34e5
     lh_v0: 2.258e6

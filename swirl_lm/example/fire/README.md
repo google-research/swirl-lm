@@ -9,7 +9,7 @@ This example simulates the Tubbs Fire.
    ```sh
    gcloud compute tpus tpu-vm create $TPU --project=$PROJECT \
       --zone=$ZONE \
-      --accelerator-type=$TYPE --version=tpu-vm-tf-2.12.0-pod \
+      --accelerator-type=$TYPE --version=tpu-vm-tf-2.14.0-pod \
       --metadata="tensorflow-env-vars=-e LIBTPU_INIT_ARGS=$TPU_FLAGS"
    ```
 
@@ -50,7 +50,7 @@ This example simulates the Tubbs Fire.
 
    ```sh
    python3 swirl-lm/swirl_lm/example/fire/fire_main.py \
-     --apply_data_load_filter=False --apply_postprocess=True \
+     --apply_postprocess=True \
      --apply_preprocess=False \
      --c_d=0.01 --dt=0.025 \
      --flat_surface_ignite=True --flat_surface_include_fire=True \

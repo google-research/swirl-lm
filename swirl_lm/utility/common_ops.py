@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
 """Library for common operations."""
 import enum
 import functools
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Text, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, Mapping, Sequence, Text, Tuple
 
 import numpy as np
 from swirl_lm.utility import types
@@ -29,7 +29,7 @@ TensorMap = types.TensorMap
 MutableTensorMap = types.MutableTensorMap
 
 _DTYPE = types.TF_DTYPE
-_TensorEquivalent = Union[tf.Tensor, List[int], List[float], np.ndarray]
+_TensorEquivalent = tf.Tensor | list[int] | list[float] | np.ndarray
 
 
 def _is_state_variable(variable: FlowFieldVal) -> bool:
@@ -50,11 +50,21 @@ class NormType(enum.Enum):
   L_INF = 2
 
 
+def get_shape(tensor: FlowFieldVal) -> Tuple[int, int, int]:
+  """Gets the shape of a z-x-y oriented tensor following (nx, ny, nz) order."""
+  if isinstance(tensor, tf.Tensor):
+    nz, nx, ny = tensor.shape
+  else:
+    nz = len(tensor)
+    nx, ny = tensor[0].shape
+  return (nx, ny, nz)
+
+
 def tensor_scatter_1d_update(
     tensor: FlowFieldVal,
     dim: int,
     index: int,
-    updates: Union[FlowFieldVal, float],
+    updates: FlowFieldVal | float,
 ) -> FlowFieldVal:
   """Updates a plane in a 3D tensor (as a 3D or a list of 2D `tf.Tensor`).
 
@@ -132,7 +142,7 @@ def tensor_scatter_1d_update(
 
   def update_tensor(
       data: tf.Tensor,
-      update_val: Union[tf.Tensor, float],
+      update_val: tf.Tensor | float,
   ) -> tf.Tensor:
     """Updates `data` at `index` in dimension `dim`."""
     if dim not in (0, 1):
@@ -155,7 +165,7 @@ def tensor_scatter_1d_update(
     if dim == 1:
       data = tf.transpose(data)
 
-    data = tf.tensor_scatter_nd_update(data, tf.constant([[index]]),
+    data = tf.tensor_scatter_nd_update(data, [[tf.cast(index, dtype=tf.int32)]],
                                        update_val[tf.newaxis, ...])
 
     return tf.transpose(data) if dim == 1 else data
@@ -181,11 +191,12 @@ def tensor_scatter_1d_update_global(
     dim: int,
     core_index: int,
     plane_index: int,
-    updates: Union[FlowFieldVal, float],
+    updates: FlowFieldVal | float,
 ) -> FlowFieldVal:
-  """Updates a plane in a 3D tensor represented as a list of `tf.Tensor`.
+  """Updates a plane in a 3D field.
 
-  This is not an in-place update. A new tensor will be created.
+  Note that the 3D field is represented as a `tf.Tensor` or list of `tf.Tensor`.
+  Also, this is not an in-place update. A new tensor will be created.
 
   Args:
     replica_id: The index of the current TPU replica.
@@ -278,7 +289,7 @@ def get_range_results(
     keyed_queue_elements: TensorMap,
     state: TensorMap,
     replicas: np.ndarray,
-) -> Tuple[tf.Tensor, TensorMap]:
+) -> tuple[tf.Tensor, TensorMap]:
   """Get the slices of a specific range from the sequence of Tensor slices."""
   _ = inputs
   _ = keyed_queue_elements
@@ -290,7 +301,7 @@ def get_field(
     state: TensorMap,
     field_name: Text,
     nz: int,
-) -> List[tf.Tensor]:
+) -> list[tf.Tensor]:
   return [state[get_tile_name(field_name, i)] for i in range(nz)]
 
 
@@ -357,9 +368,9 @@ def get_slice(
 
 
 def group_replicas(
-    replicas: np.ndarray,
-    axis: Optional[Union[Sequence[int], int]] = None,
-) -> np.ndarray:
+    replicas: np.ndarray | tf.Tensor,
+    axis: Sequence[int] | int | None = None,
+) -> np.ndarray | tf.Tensor:
   """Obtains all the replica groups along direction `axis` in the compute grid.
 
   The `axis` can either be a single dimension or a tuple of dimensions. If all
@@ -375,12 +386,16 @@ def group_replicas(
     axis: The axis or axes to group the replicas by.
 
   Returns:
-    A 2D numpy array for the group assignment. Each row corresponds to a group
-    of replicas aligned in the `axis` dimension(s).
+    A 2D numpy array or tf.Tensor for the group assignment. Each row corresponds
+    to a group of replicas aligned in the `axis` dimension(s).
   """
+  reshape = np.reshape if isinstance(replicas, np.ndarray) else tf.reshape
+  transpose = (np.transpose if isinstance(replicas, np.ndarray)
+               else tf.transpose)
+
   if axis is None:
     # Returns a single group with all the replica id's.
-    return replicas.reshape([1, -1])
+    return reshape(replicas, [1, -1])
 
   if isinstance(axis, int):
     axis = [axis]
@@ -392,10 +407,10 @@ def group_replicas(
   # Transpose `replicas` so the dimensions in `axis` occur last.
   remaining_axis = list(set([0, 1, 2]) - set(axis))
   transpose_axes = remaining_axis + axis
-  transposed_replicas = replicas.transpose(transpose_axes)
+  transposed_replicas = transpose(replicas, transpose_axes)
   # Flatten replica slices.
   slice_size = np.prod([replicas.shape[dim] for dim in axis])
-  return transposed_replicas.reshape([-1, slice_size])
+  return reshape(transposed_replicas, [-1, slice_size])
 
 
 def prep_step_by_chunk_fn(
@@ -406,7 +421,7 @@ def prep_step_by_chunk_fn(
     keyed_queue_elements: TensorMap,
     state: MutableTensorMap,
     replicas: np.ndarray,
-) -> Tuple[List[tf.Tensor], MutableTensorMap]:
+) -> tuple[list[tf.Tensor], MutableTensorMap]:
   """Does an in-place update of replica states.
 
   Run once per-field and per-chunk. The necessary init values passed are in
@@ -435,6 +450,7 @@ def prep_step_by_chunk_fn(
   return outputs, state
 
 
+@tf.function
 def apply_op_x(
     tile_list: FlowFieldVal,
     mulop: tf.Tensor,
@@ -450,18 +466,22 @@ def apply_op_x(
         'apply_op_x requires a square mulop. mulop shape is {}.'.format(
             mulop.shape))
   kernel_size = mulop.shape.as_list()[0]
-  result = []
-  for t in tile_list:
-    x_size = t.shape.as_list()[0]
-    if x_size % kernel_size:
+
+  def op_one_tile(tile):
+    x_size = tile.shape.as_list()[0]
+    if x_size % kernel_size != 0:
       raise RuntimeError(
           'apply_op_x needs the tensor dim 0 size to be '
           'divisible by mulop size {}. Tensor shape is {}.'.format(
-              mulop.shape.as_list()[1], t.shape))
-    result.append(tf.matmul(mulop, t))
+              mulop.shape.as_list()[1], tile.shape))
+    return tf.matmul(mulop, tile)
+
+  result = tf.nest.map_structure(op_one_tile, tile_list)
+
   return result
 
 
+@tf.function
 def apply_op_y(
     tile_list: FlowFieldVal,
     mulop: tf.Tensor,
@@ -477,22 +497,24 @@ def apply_op_y(
         'apply_op_y requires a square mulop. mulop shape is {}.'.format(
             mulop.shape))
   kernel_size = mulop.shape.as_list()[0]
-  result = []
-  for t in tile_list:
-    y_size = t.shape.as_list()[1]
-    if y_size % kernel_size:
+
+  def op_one_tile(tile):
+    y_size = tile.shape.as_list()[1]
+    if y_size % kernel_size != 0:
       raise RuntimeError(
           'apply_op_y needs the tensor dim 1 size to be '
           'divisible by mulop size {}. Tensor shape is {}.'.format(
-              mulop.shape.as_list()[1], t.shape))
-    result.append(tf.matmul(t, mulop))
+              mulop.shape.as_list()[1], tile.shape))
+    return tf.matmul(tile, mulop)
+
+  result = tf.nest.map_structure(op_one_tile, tile_list)
   return result
 
 
 def apply_op_z(
     tile_list: FlowFieldVal,
     z_op_list: Sequence[tf.Tensor],
-    shift: Optional[Sequence[int]] = None,
+    shift: Sequence[int] | None = None,
 ) -> FlowFieldVal:
   """Apply op in z."""
   if len(z_op_list) != len(shift):
@@ -521,16 +543,16 @@ def apply_op_z(
                        'than or equal to z_op_list length ({}).'.format(
                            z_len, len(z_op_list)))
 
-  out_list = []
-  for i in range(len(tile_list)):
-    new_tile = tf.zeros_like(tile_list[i])
-    for s, op in zip(shift, z_op_list):
+  out_list = tf.nest.map_structure(tf.zeros_like, tile_list)
+  for s, op in zip(shift, z_op_list):
+    for i in range(len(tile_list)):
       if i + s >= 0 and i + s < z_len:
-        new_tile += op * tile_list[i + s]
-    out_list.append(new_tile)
+        out_list[i] += op * tile_list[i + s]
+
   return out_list
 
 
+@tf.function
 def apply_convolutional_op_x(
     tiles: FlowFieldVal,
     convop: tf.Operation,
@@ -581,11 +603,14 @@ def apply_convolutional_op_x(
   """
   kernel_size = convop.shape.as_list()
   if kernel_size[-1] != kernel_size[-2]:
-    raise ValueError('Kernel must be squared-shaped.')
+    raise ValueError('Kernel must be squared-shaped but its shape is '
+                     f'{kernel_size}.')
 
   def do_convol_x(tile, x_size, perm, shape_in, shape_out):
     if x_size % kernel_size[-1] != 0:
-      raise ValueError('Kernel size must divide tensor size evenly.')
+      raise ValueError(
+          'Kernel size must divide tensor size evenly but '
+          f'tensor x size is {x_size} and kernel size is {kernel_size[-1]}.')
     reshaped_transposed_input = tf.reshape(
         tf.transpose(tile, perm=perm), shape_in)
     convolved_output = tf.nn.conv1d(
@@ -605,19 +630,19 @@ def apply_convolutional_op_x(
         shape_out=[z_size, y_size, -1])
 
   # Below handles the case when the input tile is a list of 2D `tf.Tensor`.
-  result = []
-  for tile in tiles:
+  def op_one_tile(tile):
     x_size, y_size = tile.shape.as_list()
-    result.append(
-        do_convol_x(
-            tile,
-            x_size,
-            perm=[1, 0],
-            shape_in=[y_size, -1, kernel_size[-1]],
-            shape_out=[y_size, -1]))
+    return do_convol_x(
+        tile,
+        x_size,
+        perm=[1, 0],
+        shape_in=[y_size, -1, kernel_size[-1]],
+        shape_out=[y_size, -1])
+  result = tf.nest.map_structure(op_one_tile, tiles)
   return result
 
 
+@tf.function
 def apply_convolutional_op_y(
     tiles: FlowFieldVal,
     convop: tf.Operation,
@@ -638,11 +663,14 @@ def apply_convolutional_op_y(
   """
   kernel_size = convop.shape.as_list()
   if kernel_size[-1] != kernel_size[-2]:
-    raise ValueError('Kernel must be squared-shaped.')
+    raise ValueError('Kernel must be squared-shaped but its shape is '
+                     f'{kernel_size}.')
 
   def do_convol_y(tile, y_size, shape_in, shape_out):
     if y_size % kernel_size[-1] != 0:
-      raise ValueError('Kernel size must divide tensor size evenly.')
+      raise ValueError(
+          'Kernel size must divide tensor size evenly but '
+          f'tensor y size is {y_size} and kernel size is {kernel_size[-1]}.')
     reshaped_input = tf.reshape(tile, shape_in)
     convolved_output = tf.nn.conv1d(
         reshaped_input, filters=convop, stride=1, padding='SAME')
@@ -659,33 +687,34 @@ def apply_convolutional_op_y(
         shape_out=[z_size, x_size, -1])
 
   # Below handles the case where the input is a liost of 2D `tf.Tensor`.
-  result = []
-  for tile in tiles:
+  def op_one_tile(tile):
     x_size, y_size = tile.shape.as_list()
-    result.append(
-        do_convol_y(
-            tile,
-            y_size,
-            shape_in=[x_size, -1, kernel_size[-1]],
-            shape_out=[x_size, -1]))
+    return do_convol_y(
+        tile,
+        y_size,
+        shape_in=[x_size, -1, kernel_size[-1]],
+        shape_out=[x_size, -1])
+  result = tf.nest.map_structure(op_one_tile, tiles)
   return result
 
 
+@tf.function
 def _apply_slice_op(
     tiles: FlowFieldVal,
     op: Callable[[Iterable[tf.Tensor]], tf.Tensor],
-) -> List[tf.Tensor]:
+) -> list[tf.Tensor]:
   """Helper to apply a slice op."""
   if isinstance(tiles, tf.Tensor):
     return tf.map_fn(op, tiles)
   else:
-    return [op(tile) for tile in tiles]
+    return tf.nest.map_structure(op, tiles)
 
 
+@tf.function
 def apply_slice_op_x(
     tiles: FlowFieldVal,
     sliceop: Callable[[Iterable[tf.Tensor]], tf.Tensor],
-) -> List[tf.Tensor]:
+) -> list[tf.Tensor]:
   """Apply slice op in x.
 
   Args:
@@ -701,10 +730,11 @@ def apply_slice_op_x(
   return _apply_slice_op(tiles, sliceop)
 
 
+@tf.function
 def apply_slice_op_y(
     tiles: FlowFieldVal,
     sliceop: Callable[[Iterable[tf.Tensor]], tf.Tensor],
-) -> List[tf.Tensor]:
+) -> list[tf.Tensor]:
   """Apply slice op in y.
 
   Args:
@@ -843,8 +873,8 @@ def global_mean(
     f: FlowFieldVal,
     replicas: np.ndarray,
     halos: Sequence[int] = (0, 0, 0),
-    axis: Optional[Union[Sequence[int], int]] = None,
-    partition_axis: Optional[Union[Sequence[int], int]] = None,
+    axis: Sequence[int] | int | None = None,
+    partition_axis: Sequence[int] | int | None = None,
 ) -> FlowFieldVal:
   """Computes the mean of the tensor in a distributed setting.
 
@@ -1050,7 +1080,7 @@ def get_core_coordinate(
     replicas: np.ndarray,
     replica_id: tf.Tensor,
     dtype: tf.dtypes.DType = tf.int32,
-) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
   """Get the coordinate for the core with `replica_id`.
 
   Args:
@@ -1099,7 +1129,7 @@ def validate_fields(
                          (v_nx, v_ny)), w_nz, str((w_nx, w_nz))))
 
 
-def get_field_shape(u: FlowFieldVal) -> Tuple[int, int, int]:
+def get_field_shape(u: FlowFieldVal) -> tuple[int, int, int]:
   """Gets the 3D volume shape of the sequence of Tensor represents."""
   if isinstance(u, tf.Tensor):
     nz, nx, ny = u.shape.as_list()
@@ -1196,7 +1226,7 @@ def get_spectral_index_grid(
   }
 
 
-def get_tensor_shape(state: Sequence[tf.Tensor]) -> Tuple[int, int, int]:
+def get_tensor_shape(state: Sequence[tf.Tensor]) -> tuple[int, int, int]:
   """Retrieves the shape of a 3D tensor represented as a stack of 2D tf.Tensor.
 
   Args:
@@ -1228,7 +1258,7 @@ def integration_in_dim(
     f: FlowFieldVal,
     h: float,
     dim: int,
-) -> Tuple[FlowFieldVal, FlowFieldVal]:
+) -> tuple[FlowFieldVal, FlowFieldVal]:
   """Computes the integration of `f` along the z dimension.
 
   Integration with definite integrals is performed for `f` along the `dim`
@@ -1406,7 +1436,7 @@ def get_field_inner(
     v: FlowFieldVal,
     w: FlowFieldVal,
     halos: Sequence[int],
-) -> Tuple[FlowFieldVal, FlowFieldVal, FlowFieldVal]:
+) -> tuple[FlowFieldVal, FlowFieldVal, FlowFieldVal]:
   """Validates and removes the halos of the input field components.
 
   All three components can be represented as a list of 2D `tf.Tensor` or a
@@ -1443,7 +1473,7 @@ def get_field_inner(
   return u_inner, v_inner, w_inner
 
 
-def cross_replica_gather(x: tf.Tensor, num_replicas: int) -> List[tf.Tensor]:
+def cross_replica_gather(x: tf.Tensor, num_replicas: int) -> list[tf.Tensor]:
   """Cross-replica gather of tensors.
 
   Args:
@@ -1508,14 +1538,19 @@ def get_face(value: FlowFieldVal,
              scaling_factor: float = 1.) -> FlowFieldVal:
   """Gets the face in `value` that is `index` number of points from boundary.
 
-  This function extracts the requested plane from a 3D tensor represented as a
-  `Sequence[tf.Tensor]`. The returned value depends on `dim`:
+  This function extracts the requested plane from a 3D tensor.
+  * If the 3D tensor is represented as a `Sequence[tf.Tensor]`. The returned
+    value depends on `dim`:
     if `dim` is 0 (x plane): returns a list with length nz, each tensor in the
       list has size 1 x ny;
     if `dim` is 1 (y plane): returns a list with length nz, each tensor in the
       list has size nx x 1;
     if `dim` is 2 (z plane): returns a list with length 1, each tensor in the
       list has size nx x ny.
+  * If the 3D tensor is a 3D `tf.Tensor`, the returned value depends on `dim`:
+    if `dim` is 0 (x plane): returns a 3D `tf.Tensor` with shape (1, ny, nz);
+    if `dim` is 1 (y plane): returns a 3D `tf.Tensor` with shape (nx, 1, nz);
+    if `dim` is 2 (z plane): returns a 3D `tf.Tensor` with shape (nx, ny, 1).
 
   Args:
     value: A list of 2D `tf.Tensor` or a single 3D `tf.Tensor` representing a 3D
@@ -1559,6 +1594,10 @@ def get_face(value: FlowFieldVal,
       start_idx[dim] = index
     elif face == 1:
       start_idx[dim] = n - index - 1
+    else:
+      raise ValueError(
+          f'`face` has to be either 0 or 1. But {face} is provided.'
+      )
     shape[dim] = 1
     bc_value = [
         tf.nest.map_structure(
@@ -1574,12 +1613,20 @@ def get_face(value: FlowFieldVal,
       bc_value = [
           scaling_factor * value[nz - index - 1],
       ]
+    else:
+      raise ValueError(
+          f'`face` has to be either 0 or 1. But {face} is provided.'
+      )
+  else:
+    raise ValueError(
+        f'`dim` has to be one of 0, 1, or 2. But {dim} is provided.'
+    )
 
   return bc_value  # pytype: disable=bad-return-type
 
 
 def meshgrid(xs: _TensorEquivalent, ys: _TensorEquivalent,
-             zs: _TensorEquivalent) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+             zs: _TensorEquivalent) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
   """Generates 3D meshgrid given grid points in xs, ys, zs.
 
   The meshgrid provided in Tensorflow has a large memory usage. We implement

@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -65,6 +65,7 @@ import numpy as np
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.numerics import time_integration
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
+from swirl_lm.physics.turbulent_combustion import turbulent_combustion_generic
 from swirl_lm.utility import composite_types
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
@@ -140,6 +141,9 @@ def _reaction_rate(
     c_f: float,
     t_0_ivf: float,
     t_1_ivf: float,
+    turbulent_combustion_model: Optional[
+        turbulent_combustion_generic.TurbulentCombustionGeneric
+    ] = None,
 ) -> tf.Tensor:
   """Computes the reation rate of the wood combustion.
 
@@ -157,6 +161,8 @@ def _reaction_rate(
     c_f: An empirical scaling coefficient in local fire reaction rates.
     t_0_ivf: Start temperature for the ramp up.
     t_1_ivf: End temperature for the ramp up.
+    turbulent_combustion_model: The turbulence closure for the reaction source
+      term.
 
   Returns:
     The reaction rate due to wood combustion.
@@ -168,19 +174,40 @@ def _reaction_rate(
 
   def psi_s():
     """Computes the ignited volume fraction."""
-    return tf.clip_by_value((temperature - t_0_ivf) / (t_1_ivf - t_0_ivf),
-                            0.0, 1.0)
+    return tf.clip_by_value(
+        (temperature - t_0_ivf) / (t_1_ivf - t_0_ivf), 0.0, 1.0
+    )
 
   def lambda_of():
     """Computes 𝛌of = ϱf ϱo / (ϱf / Nf + ϱo / No)2."""
-    return tf.math.divide_no_nan(rho_f * rho_g * y_o,
-                                 (rho_f / _N_F + rho_g * y_o / _N_O)**2)
+    return tf.math.divide_no_nan(
+        rho_f * rho_g * y_o, (rho_f / _N_F + rho_g * y_o / _N_O) ** 2
+    )
 
   rho_f = _bound_scalar(rho_f, minval=0.0)
   y_o = _bound_scalar(y_o, minval=0.0, maxval=1.0)
 
-  return c_f * rho_f * rho_g * y_o * sigma_cm() * psi_s() * lambda_of() / (
-      _RHO_REF * s_x**2)
+  src = (
+      c_f
+      * rho_f
+      * rho_g
+      * y_o
+      * sigma_cm()
+      * psi_s()
+      * lambda_of()
+      / (_RHO_REF * s_x**2)
+  )
+
+  if turbulent_combustion_model is not None:
+    src = turbulent_combustion_model.update_source_term(src)
+    # The following assertion is required to avoid the "incorrect return type"
+    # error.
+    assert isinstance(src, tf.Tensor), (
+        'Source term dtype changed unexpectedly. A `tf.Tensor` is expected,'
+        f' but got {type(src)}.'
+    )
+
+  return src
 
 
 def _radiative_emission(

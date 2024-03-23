@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -363,7 +363,10 @@ class ImmersedBoundaryMethod(object):
     self._halo_dims = (0, 1, 2)
 
     self._params = params
-    self._ib_params = self._params.boundary_models.ib
+    assert (
+        boundary_models := params.boundary_models
+    ) is not None, '`boundary_models` must be set in the config.'
+    self._ib_params = boundary_models.ib
 
   @property
   def type(self):
@@ -824,7 +827,7 @@ class ImmersedBoundaryMethod(object):
 
     def update_rhs(
         value: FlowFieldVal,
-        target_value: tf.Tensor,
+        target_value: tf.Tensor | float,
         damping_coeff: float,
         rhs: FlowFieldVal,
         mask: FlowFieldVal,
@@ -860,10 +863,13 @@ class ImmersedBoundaryMethod(object):
             'damping_coeff') else self._ib_params.direct_forcing.damping_coeff
 
         rhs_updated.update({
-            rhs_name:
-                update_rhs(value, var_dict[key].value, damping_coeff,
-                           additional_states[rhs_name],
-                           additional_states['ib_interior_mask'])
+            rhs_name: update_rhs(
+                value,
+                var_dict[key].value,
+                damping_coeff,
+                additional_states[rhs_name],
+                additional_states['ib_interior_mask'],
+            )
         })
 
     return rhs_updated

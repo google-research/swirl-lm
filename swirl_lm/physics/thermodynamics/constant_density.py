@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@ class ConstantDensity(thermodynamics_generic.ThermodynamicModel):
       states: FlowFieldMap,
       additional_states: FlowFieldMap,
   ) -> FlowFieldVal:
-    """Updates the density with the ideal gas law."""
+    """Updates the density with the stored constant density."""
     del additional_states
     return tf.nest.map_structure(
         lambda x: self.rho * tf.ones_like(x, dtype=TF_DTYPE),

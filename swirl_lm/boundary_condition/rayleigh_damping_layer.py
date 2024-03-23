@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -446,7 +446,7 @@ class RayleighDampingLayer(object):
     beta_names_not_in_additional_states = (
         set(self._beta_name_by_var.values()) - set(additional_states.keys()))
     if beta_names_not_in_additional_states:
-      raise ValueError(f'{self._beta_names_not_in_additional_states} not found '
+      raise ValueError(f'{beta_names_not_in_additional_states} not found '
                        'in `additional_states.`')
 
     def add_to_additional_states(

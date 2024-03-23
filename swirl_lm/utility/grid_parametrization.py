@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@
 # limitations under the License.
 """Common grid parameterization."""
 
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Literal, Optional, Sequence, Tuple
 
 from absl import flags
 import numpy as np
@@ -67,6 +67,25 @@ flags.DEFINE_integer(
     0,
     'Number of points to be added to each end of the computational domain.',
     allow_override=True)
+_USE_STRETCHED_GRID_IN_DIM_0 = flags.DEFINE_bool(
+    'use_stretched_grid_in_dim_0',
+    False,
+    'Whether to use stretched grid in dim 0.',
+    allow_override=True,
+)
+_USE_STRETCHED_GRID_IN_DIM_1 = flags.DEFINE_bool(
+    'use_stretched_grid_in_dim_1',
+    False,
+    'Whether to use stretched grid in dim 1.',
+    allow_override=True,
+)
+_USE_STRETCHED_GRID_IN_DIM_2 = flags.DEFINE_bool(
+    'use_stretched_grid_in_dim_2',
+    False,
+    'Whether to use stretched grid in dim 2.',
+    allow_override=True,
+)
+
 
 FLAGS = flags.FLAGS
 
@@ -122,6 +141,65 @@ def _get_physical_full_grid_size(
       dim_2=_get_full_grid_size(params.grid_size.dim_2, params.halo_width,
                                 params.computation_shape.dim_2,
                                 params.num_boundary_points))
+
+
+def _get_grid_spacing(
+    full_grid_size, length, num_boundary_points: int = 0
+) -> float | None:
+  """Get the grid spacing between nodes in a equidistant mesh.
+
+  Args:
+    full_grid_size: The total number of nodes in the mesh grid.
+    length: The size of the domain in a particular dimension.
+    num_boundary_points: Deprecated.
+
+  Returns:
+    The distance between two adjacent nodes.
+  """
+  # The following statement is kept to maintain the behavior of Saint Venant
+  # cases.
+  full_grid_size -= 2 * num_boundary_points
+  return length / (full_grid_size - 1) if full_grid_size > 1 else None
+
+
+def _get_stretched_grid_aware_grid_spacing_in_dim(
+    dx_dy_dz: tuple[float | None, float | None, float | None],
+    dim: Literal[0, 1, 2],
+    use_stretched_grid_in_dim: bool,
+) -> float:
+  """Get the stretched-grid-aware grid spacing in a particular dimension.
+
+  Return the grid spacing of the computational mesh, assumed uniform.  When
+  using a stretched grid, the grid spacing will be that of the transformed
+  coordinate, not of the physical Cartesian coordinate values.
+
+  Note: internally, when using a stretched grid where the coordinate levels
+  are passed in, we will treat the grid spacing of the transformed coordinate
+  as equal to 1.0, because the coordinate values of the transformed coordinate
+  never need be referred to directly.
+
+  Args:
+    dx_dy_dz: Tuple of values from GridParametrization.(dx,dy,dz)
+    dim: The dimension for which to get the grid spacing.
+    use_stretched_grid_in_dim: Whether a stretched grid is used in the given
+      dimension.
+
+  Returns:
+    The stretched-grid-aware grid spacing in the given dimension.
+  """
+  if not use_stretched_grid_in_dim:
+    grid_spacing = dx_dy_dz[dim]
+    # Note: GridParametrization.{dx,dy,dz} can return None depending on
+    # parameter input. If this occurs, a None is not supposed to be used in
+    # practice downstream. However, for type checking it is useful to keep the
+    # return type as `float`. Setting the grid spacing to 0.0 in that case
+    # ensures that if it gets inadvertently used there will be an immediate
+    # error.
+    if grid_spacing is None:
+      grid_spacing = 0.0
+  else:
+    grid_spacing = 1.0
+  return grid_spacing
 
 
 def params_from_flags() -> grid_parametrization_pb2.GridParametrization:
@@ -206,6 +284,20 @@ class GridParametrization(object):
     self.input_chunk_size = params.input_chunk_size
     self.num_output_splits = params.num_output_splits
     self.num_boundary_points = params.num_boundary_points
+    self.use_stretched_grid = (
+        _USE_STRETCHED_GRID_IN_DIM_0.value,
+        _USE_STRETCHED_GRID_IN_DIM_1.value,
+        _USE_STRETCHED_GRID_IN_DIM_2.value,
+    )
+    # Get coordinate grid spacings (valid with or without stretched grid). To be
+    # compatible with stretched grids, use these values instead of
+    # self.{dx,dy,dz}.
+    self.grid_spacings: tuple[float, float, float] = tuple(
+        _get_stretched_grid_aware_grid_spacing_in_dim(
+            (self.dx, self.dy, self.dz), dim, self.use_stretched_grid[dim]
+        )
+        for dim in (0, 1, 2)
+    )
 
   @classmethod
   def create_from_flags(cls):
@@ -314,35 +406,20 @@ class GridParametrization(object):
   def core_nz(self) -> Optional[int]:
     return _get_core_n(self.nz, self.halo_width)
 
-  def _get_grid_spacing(self, full_grid_size, length) -> Optional[float]:
-    """Get the grid spacing between nodes in a equidistant mesh.
-
-    Args:
-      full_grid_size: The total number of nodes in the mesh grid.
-      length: The size of the domain in a particular dimension.
-
-    Returns:
-      The distance between two adjacent nodes.
-    """
-    # The following statement is kept to maintain the behavior of Saint Venant
-    # cases.
-    full_grid_size -= 2 * self.num_boundary_points
-    return length / (full_grid_size - 1) if full_grid_size > 1 else None
-
   @property
   def dx(self) -> Optional[float]:
     # Note: The final grid should return an outer halo of width 1 due to
     # boundary conditions, but does not. So for now we ignore that in the dx,
     # dy, dz computations.
-    return self._get_grid_spacing(self.fx, self.lx)
+    return _get_grid_spacing(self.fx, self.lx, self.num_boundary_points)
 
   @property
   def dy(self) -> Optional[float]:
-    return self._get_grid_spacing(self.fy, self.ly)
+    return _get_grid_spacing(self.fy, self.ly, self.num_boundary_points)
 
   @property
   def dz(self) -> Optional[float]:
-    return self._get_grid_spacing(self.fz, self.lz)
+    return _get_grid_spacing(self.fz, self.lz, self.num_boundary_points)
 
   @property
   def fx(self):

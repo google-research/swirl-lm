@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -73,7 +73,7 @@ class PhysicalVariableKeysHelper(object):
         '{} is not processed.'.format(additional_state_key))
 
   def _update_helper_variable_from_additional_states(self, *args):
-    """Retrieves helper variables from `additional_stats`.
+    """Retrieves helper variables from `additional_states`.
 
     This function needs to be implemented in the derived class.
 
@@ -104,7 +104,7 @@ class PhysicalVariableKeysHelper(object):
     return self._parse_key(additional_state_key)
 
   def update_helper_variable_from_additional_states(self, *args):
-    """Retrieves helper variables from `additional_stats`.
+    """Retrieves helper variables from `additional_states`.
 
     Args:
       *args: Inputs to process the helper variables. Exact arguments depend on
@@ -117,7 +117,7 @@ class PhysicalVariableKeysHelper(object):
 
 
 class BoundaryConditionKeysHelper(PhysicalVariableKeysHelper):
-  r"""Processes `additional_states` for boudary conditions.
+  r"""Processes `additional_states` for boundary conditions.
 
   The key is associated with a boundary condition if it follows the naming rule:
     'bc_(\w+)_([0-2])_([0-1])',
@@ -132,7 +132,7 @@ class BoundaryConditionKeysHelper(PhysicalVariableKeysHelper):
           self).__init__(r'bc_(\w+)_([0-2])_([0-1])')
 
   def _parse_key(self, additional_state_key: Text):
-    """Prase the key for boundary conditions.
+    """Parse the key for boundary conditions.
 
     Args:
       additional_state_key: A string that might be the name of a boundary
@@ -158,9 +158,9 @@ class BoundaryConditionKeysHelper(PhysicalVariableKeysHelper):
       halo_width: int,
       bc: Dict[Text, halo_exchange.BoundaryConditionsSpec],
   ) -> Dict[Text, halo_exchange.BoundaryConditionsSpec]:
-    """Retrieves boundary conditions from `additional_stats`.
+    """Retrieves boundary conditions from `additional_states`.
 
-    It is assumed that the updated boundary condition prevserves the type but
+    It is assumed that the updated boundary condition preserves the type but
     with its value being replaced by the additional state.
 
     Args:
@@ -258,7 +258,7 @@ class SourceKeysHelper(PhysicalVariableKeysHelper):
     super(SourceKeysHelper, self).__init__(r'src_(\w+)')
 
   def _parse_key(self, additional_state_key: Text) -> Optional[SourceKeyInfo]:
-    """Prase the key for boundary conditions."""
+    """Parse the key for variable name."""
     key_info = self._parse_key_text_info(additional_state_key)
     return None if key_info is None else key_info[0]
 

@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -304,16 +304,22 @@ class Simulation:
                 'rho': rho_mid,
                 'rho_thermal': states_k['rho_thermal'],
                 'p': states_k['p'],
-            }, additional_states)
+            },
+            additional_states,
+        )
       states_k.update(pressure_update_halo_states)
 
       # Step 4: Update all primitive scalars with the latest density. Boundary
       # conditions are enforced for these scalars.
-      if (self._params.enable_scalar_recorrection and self._params.solver_mode
-          != thermodynamics_pb2.Thermodynamics.ANELASTIC):
+      if (
+          self._params.enable_scalar_recorrection
+          and self._params.solver_mode
+          != thermodynamics_pb2.Thermodynamics.ANELASTIC
+      ):
         with tf.name_scope('scalar_correction'):
           scalar_correction_states = self.scalars.correction_step(
-              replica_id, replicas, states_k, states_0, additional_states)
+              replica_id, replicas, states_k, states_0, additional_states
+          )
         states_k.update(scalar_correction_states)
 
       # Step 5: Time advance the momentum equations to yield provisional
@@ -321,20 +327,29 @@ class Simulation:
       # for velocity components only.
       with tf.name_scope('velocity_prediction'):
         velocity_prediction_states = self.velocity.prediction_step(
-            replica_id, replicas, states_k, states_0, additional_states)
+            replica_id, replicas, states_k, states_0, additional_states
+        )
       states_k.update(velocity_prediction_states)
 
       # Step 6: Get the pressure correction. NB: the boundary condition for
       # density is set to be Neumann everywhere.
       with tf.name_scope('pressure_step'):
         pressure_step_states = self.pressure.step(
-            replica_id, replicas, states_k, states_0, additional_states, i)
+            replica_id,
+            replicas,
+            states_k,
+            states_0,
+            additional_states,
+            i,
+            step_id,
+        )
       states_k.update(pressure_step_states)
 
       # Step 7: Update the velocity and pressure.
       with tf.name_scope('velocity_correction'):
         velocity_correction_states = self.velocity.correction_step(
-            replica_id, replicas, states_k, states_0, additional_states)
+            replica_id, replicas, states_k, states_0, additional_states
+        )
       states_k.update(velocity_correction_states)
 
       return (i + 1, states_k)

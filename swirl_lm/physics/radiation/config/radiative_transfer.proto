@@ -41,31 +41,29 @@ message OpticsParameters {
 }
 
 message AtmosphericState {
-  // Path of NetCDF file containing the volume mixing ratio of relevant gases.
-  optional string atmospheric_state_nc_filepath = 1;
-
-  // The following are the Radiative Forcing Model Intercomparison Project
-  // (RFMIP) experiment identifiers for the atmosphere state and location from
-  // which boundary conditions and volume mixing ratio profiles will be drawn.
-  // RFMIP experiment label. Default experiment corresponds to the present-day
-  // atmosphere.
-  optional int32 rfmip_expt_label = 2 [default = 0];
-  // RFMIP column site index, which uniquely identifies a (latitude, longitude,
-  // time) triplet. Default site corresponds to coordinates 13.5 N, 298.5 E.
-  optional int32 rfmip_site = 3 [default = 9];
-
-  // Setting the following parameters will override those provided by the RFMIP
-  // state.
   // Surface emissivity; the same for all bands.
-  optional float sfc_emis = 4;
+  optional float sfc_emis = 1;
   // Surface albedo; the same for all bands.
-  optional float sfc_alb = 5;
+  optional float sfc_alb = 2;
   // The solar zenith angle (in radians).
-  optional float zenith = 6;
+  optional float zenith = 3;
   // The total solar irradiance (in W/m²).
-  optional float irrad = 7;
+  optional float irrad = 4;
   // The longwave incident flux at the top of the atmosphere (in W/m²).
-  optional float toa_flux_lw = 8 [default = 0.0];
+  optional float toa_flux_lw = 5 [default = 0.0];
+  // Path of a csv file containing volume mixing ratio sounding for particular
+  // gas species on a uniform log scale pressure grid. One column should be
+  // labeled 'p_ref' for the corresponding pressure profile in Pa that will be
+  // used when interpolating to the simulation's pressure field. All other
+  // columns should be labeled with the chemical formula of the gas they
+  // correspond to. Note that the pressure grid under p_ref must be
+  // log-uniformly spaced to ensure accurate interpolation of the profiles.
+  optional string vmr_sounding_filepath = 6;
+  // The path of a json file containing volume mixing ratio global means,
+  // indexed by the gas chemical formula. This should be populated by gas
+  // species that have little variability in the atmosphere. The contents of the
+  // file should be a dictionary in json format.
+  optional string vmr_global_mean_filepath = 7;
 }
 
 message RadiativeTransfer {

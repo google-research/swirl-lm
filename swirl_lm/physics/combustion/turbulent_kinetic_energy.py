@@ -35,16 +35,28 @@ def _update_local_halos(value: FlowFieldVal, halo_width: int) -> FlowFieldVal:
     raise ValueError(
         '`halo_width` has to be greater than 1. {} is provided.'.format(
             halo_width))
-  # pylint: disable=g-complex-comprehension
-  value_xy_valid = [
-      tf.pad(
-          value_i[halo_width:-halo_width, halo_width:-halo_width],
-          paddings=((halo_width, halo_width), (halo_width, halo_width)),
-          mode='SYMMETRIC') for value_i in value[halo_width:-halo_width]
-  ]
-  # pylint: enable=g-complex-comprehension
-  return [value_xy_valid[0]
-         ] * halo_width + value_xy_valid + [value_xy_valid[-1]] * halo_width
+
+  if not isinstance(value, tf.Tensor):
+    # pylint: disable=g-complex-comprehension
+    value_xy_valid = [
+        tf.pad(
+            value_i[halo_width:-halo_width, halo_width:-halo_width],
+            paddings=((halo_width, halo_width), (halo_width, halo_width)),
+            mode='SYMMETRIC') for value_i in value[halo_width:-halo_width]
+    ]
+    # pylint: enable=g-complex-comprehension
+    return [value_xy_valid[0]
+           ] * halo_width + value_xy_valid + [value_xy_valid[-1]] * halo_width
+  else:
+    return tf.pad(
+        value[
+            halo_width:-halo_width,
+            halo_width:-halo_width,
+            halo_width:-halo_width,
+        ],
+        paddings=[(halo_width, halo_width)] * 3,
+        mode='SYMMETRIC',
+    )
 
 
 def _local_box_filter_3d(state: FlowFieldVal) -> FlowFieldVal:
@@ -89,12 +101,9 @@ def constant_tke_update_function(tke_value: float) -> StatesUpdateFn:
     """Updates 'tke' in `additional_states`."""
     del kernel_op, replica_id, replicas, states, params
 
-    tke = [
-        # pytype: disable=attribute-error
-        tke_value * tf.ones_like(tke_i, dtype=tke_i.dtype)
-        for tke_i in additional_states['tke']
-        # pytype: enable=attribute-error
-    ]
+    tke = tf.nest.map_structure(
+        lambda tke_i: tke_value * tf.ones_like(tke_i), additional_states['tke']
+    )
 
     updated_additional_states = {}
     for key, value in additional_states.items():
@@ -134,11 +143,20 @@ def algebraic_tke_update_function() -> StatesUpdateFn:
     v_mean = _local_box_filter_3d(states['v'])
     w_mean = _local_box_filter_3d(states['w'])
 
-    tke = [
-        0.5 * ((u_i - u_mean_i)**2 + (v_i - v_mean_i)**2 + (w_i - w_mean_i)**2)
-        for u_i, u_mean_i, v_i, v_mean_i, w_i, w_mean_i in zip(
-            states['u'], u_mean, states['v'], v_mean, states['w'], w_mean)
-    ]
+    tke = tf.nest.map_structure(
+        lambda u_i, u_mean_i, v_i, v_mean_i, w_i, w_mean_i: 0.5
+        * (
+            (u_i - u_mean_i) ** 2
+            + (v_i - v_mean_i) ** 2
+            + (w_i - w_mean_i) ** 2
+        ),
+        states['u'],
+        u_mean,
+        states['v'],
+        v_mean,
+        states['w'],
+        w_mean,
+    )
 
     updated_additional_states = {}
     for key, value in additional_states.items():
@@ -187,10 +205,10 @@ def turbulent_viscosity_tke_update_function() -> StatesUpdateFn:
                        'compute the TKE.')
 
     delta = np.power(params.dx * params.dy * params.dz, 1.0 / 3.0)
-    tke = [
-        tf.square(nu_t_i / (c_k * delta))
-        for nu_t_i in additional_states['nu_t']
-    ]
+    tke = tf.nest.map_structure(
+        lambda nu_t_i: tf.square(nu_t_i / (c_k * delta)),
+        additional_states['nu_t'],
+    )
 
     updated_additional_states = {}
     for key, value in additional_states.items():

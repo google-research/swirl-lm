@@ -111,7 +111,7 @@ class TwoStreamSolver:
       pressure: FlowFieldVal,
       temperature: FlowFieldVal,
       molecules: FlowFieldVal,
-      vmr_fields: Optional[Dict[int, FlowFieldVal]] = None,
+      vmr_fields: Optional[Dict[str, FlowFieldVal]] = None,
       sfc_temperature: Optional[FlowFieldVal] = None,
       cloud_r_eff_liq: Optional[FlowFieldVal] = None,
       cloud_path_liq: Optional[FlowFieldVal] = None,
@@ -144,7 +144,7 @@ class TwoStreamSolver:
       molecules: The number of molecules in an atmospheric grid cell per area
         [molecules/m²].
       vmr_fields: An optional dictionary containing precomputed volume mixing
-        ratio fields, keyed by gas index.
+        ratio fields, keyed by the chemical formula.
       sfc_temperature: The optional surface temperature represented as either a
         3D `tf.Tensor` or as a list of 2D `tf.Tensor`s but having a single
         vertical dimension [K].
@@ -161,10 +161,21 @@ class TwoStreamSolver:
       `flux_down`: The downwelling longwave radiative flux at face i - 1/2.
       `flux_net`: The net longwave radiative flux at face i - 1/2.
     """
+    # Convert the chemical formulas of the gas species to RRTM-consistent
+    # numerical identifiers.
+    if vmr_fields is not None and self._optics_lib.gas_optics_lw is not None:
+      vmr_fields = {
+          self._optics_lib.gas_optics_lw.idx_gases[k]: v
+          for k, v in vmr_fields.items()
+      }
+
     def step_fn(igpt, cumulative_flux):
       lw_optical_props = dict(
           self._optics_lib.compute_lw_optical_properties(
-              pressure, temperature, molecules, igpt,
+              pressure,
+              temperature,
+              molecules,
+              igpt,
               vmr_fields=vmr_fields,
               cloud_r_eff_liq=cloud_r_eff_liq,
               cloud_path_liq=cloud_path_liq,
@@ -240,7 +251,7 @@ class TwoStreamSolver:
       pressure: FlowFieldVal,
       temperature: FlowFieldVal,
       molecules: FlowFieldVal,
-      vmr_fields: Optional[Dict[int, FlowFieldVal]] = None,
+      vmr_fields: Optional[Dict[str, FlowFieldVal]] = None,
       cloud_r_eff_liq: Optional[FlowFieldVal] = None,
       cloud_path_liq: Optional[FlowFieldVal] = None,
       cloud_r_eff_ice: Optional[FlowFieldVal] = None,
@@ -286,6 +297,14 @@ class TwoStreamSolver:
     """
     def field_like(f: FlowFieldVal, val):
       return tf.nest.map_structure(lambda x: val * tf.ones_like(x), f)
+
+    # Convert the chemical formulas of the gas species to RRTM-consistent
+    # numerical identifiers.
+    if vmr_fields is not None and self._optics_lib.gas_optics_sw is not None:
+      vmr_fields = {
+          self._optics_lib.gas_optics_sw.idx_gases[k]: v
+          for k, v in vmr_fields.items()
+      }
 
     def step_fn(igpt, partial_fluxes):
       sw_optical_props = self._optics_lib.compute_sw_optical_properties(

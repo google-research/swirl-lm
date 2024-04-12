@@ -82,10 +82,15 @@ class MoninObukhovSimilarityTheory(object):
     self.halo_width = params.halo_width
 
     # Store the height of the first fluid layer above the ground.
-    # Under a uniform grid assumption, because the wall is at the mid-point
-    # face between the first fluid layer and the halo layers, the height of
-    # the first fluid layer above the ground is half of the grid spacing.
-    self.height = 0.5 * (params.dx, params.dy, params.dz)[vertical_dim]
+    if params.use_stretched_grid[vertical_dim]:
+      # For a stretched grid, the first non-halo grid point coordinate value is
+      # the height above the ground.
+      self.height = params.global_xyz[vertical_dim][0]
+    else:
+      # Under a uniform grid assumption, because the wall is at the mid-point
+      # face between the first fluid layer and the halo layers, the height of
+      # the first fluid layer above the ground is half of the grid spacing.
+      self.height = 0.5 * params.grid_spacings[vertical_dim]
 
     assert (
         boundary_models := params.boundary_models

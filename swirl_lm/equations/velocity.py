@@ -126,10 +126,8 @@ class Velocity(object):
         ] * 3)
 
     self._use_sgs = self._params.use_sgs
-    filter_widths = (self._params.dx, self._params.dy, self._params.dz)
     if self._use_sgs:
-      self._sgs_model = sgs_model.SgsModel(self._kernel_op, filter_widths,
-                                           params.sgs_model)
+      self._sgs_model = sgs_model.SgsModel(self._kernel_op, params)
 
     self._bc = {
         varname: bc_val
@@ -304,7 +302,6 @@ class Velocity(object):
           _KEY_P: p,
       })
 
-      h = (self._params.dx, self._params.dy, self._params.dz)
       dt = self._params.dt
 
       diff_all = self.diffusion_fn(
@@ -314,7 +311,7 @@ class Velocity(object):
           replicas,
           self._params.diffusion_scheme,
           mu,
-          h,
+          self._params.grid_spacings,
           states,
           additional_states,
           tau_bc_update_fn=self._tau_bc_update_fn,
@@ -340,7 +337,7 @@ class Velocity(object):
                 f,
                 states[_KEYS_MOMENTUM[i]],
                 p_corr[i],
-                h[i],
+                self._params.grid_spacings[i],
                 dt,
                 i,
                 additional_states,
@@ -371,7 +368,7 @@ class Velocity(object):
           dp_dh = self._deriv_lib.deriv_centered(p, dim, additional_states)
 
         # Computes external forcing terms.
-        force = forces[dim] if forces[dim] else (
+        force = forces[dim] if forces[dim] is not None else (
             tf.nest.map_structure(tf.zeros_like, f))
 
         source_fn = self._params.source_update_fn(_KEYS_VELOCITY[dim])

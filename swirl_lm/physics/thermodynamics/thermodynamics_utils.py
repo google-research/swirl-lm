@@ -106,8 +106,8 @@ def compute_mixture_molecular_weight(
     The molecular weight of the mixture.
   """
   w_mix_inv = tf.nest.map_structure(
-      lambda x: tf.zeros_like(x, dtype=TF_DTYPE),
-      list(massfractions.values())[0])
+      tf.zeros_like, list(massfractions.values())[0]
+  )
   for sc_name, w_sc in molecular_weights.items():
     w_mix_inv = tf.nest.map_structure(
         lambda w_mix_inv_i, y_sc: w_mix_inv_i + y_sc / w_sc,  # pylint:disable=cell-var-from-loop

@@ -31,7 +31,14 @@ class ConstantDensity(thermodynamics_generic.ThermodynamicModel):
     """Initializes the constant density object."""
     super(ConstantDensity, self).__init__(params)
 
-    self.rho = params.rho
+    if params.use_3d_tf_tensor:
+      self.rho = params.rho * tf.ones(
+          (params.nz, params.nx, params.ny), dtype=TF_DTYPE
+      )
+    else:
+      self.rho = [
+          params.rho * tf.ones((params.nx, params.ny), dtype=TF_DTYPE)
+      ] * params.nz
 
   def update_density(
       self,
@@ -39,7 +46,5 @@ class ConstantDensity(thermodynamics_generic.ThermodynamicModel):
       additional_states: FlowFieldMap,
   ) -> FlowFieldVal:
     """Updates the density with the stored constant density."""
-    del additional_states
-    return tf.nest.map_structure(
-        lambda x: self.rho * tf.ones_like(x, dtype=TF_DTYPE),
-        list(states.values())[0])
+    del states, additional_states
+    return self.rho

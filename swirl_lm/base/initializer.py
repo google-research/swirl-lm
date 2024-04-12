@@ -15,7 +15,7 @@
 """Library for initializing the variables on TPU cores."""
 
 import enum
-from typing import Callable, List, Optional, Sequence, Text, Tuple, Union
+from typing import Callable, List, Literal, Optional, Sequence, Text, Tuple, Union
 
 import numpy as np
 from swirl_lm.utility import grid_parametrization
@@ -50,7 +50,8 @@ def partial_mesh_for_core(
     perm: Optional[ThreeIntTuple] = DEFAULT_PERMUTATION,
     pad_mode: Optional[Text] = _DEFAULT_PAD_MODE,
     num_boundary_points: int = DEFAULT_NUM_BOUNDARY_POINTS,
-    mesh_choice: MeshChoice = MeshChoice.DERIVED) -> tf.Tensor:
+    mesh_choice: MeshChoice = MeshChoice.DERIVED,
+) -> tf.Tensor:
   """Generates a partial mesh of a given value function for a core.
 
   The full grid spec is provided by `params`. The value function `value_fn`
@@ -68,10 +69,10 @@ def partial_mesh_for_core(
     coordinate: A vector/sequence of integer with length 3 representing the
       logical coordinate of the core in the logical mesh [x, y, z].
     value_fn: A function that takes the local mesh_grid tensor for the core (in
-      order x, y, z), the global characteristic length floats (in order x, y,
-      z) and the local core coordinate, and returns a 3-D tensor representing
-      the value for the local core (without including the margin/overlap between
-      the cores).
+      order x, y, z), the global characteristic length floats (in order x, y, z)
+      and the local core coordinate, and returns a 3-D tensor representing the
+      value for the local core (without including the margin/overlap between the
+      cores).
     perm: A 3-tuple that defines the permutation ordering for the returned
       tensor. The default is (2, 0, 1). If `None`, permutation is not applied.
     pad_mode: Defines the padding applied the returned tensor. Must be
@@ -92,7 +93,7 @@ def partial_mesh_for_core(
     ValueError: If arguments are incorrect.
   """
 
-  def get_slice_in_dim(core_n, length, num_cores, core_id, mesh_from_params):
+  def get_slice_in_dim(core_n, length, num_cores, core_id, provided_mesh):
     """Returns the portion of the (sub) grid in the given dimension.
 
     Note that on each side we pad one grid point regardless of the halo width.
@@ -104,26 +105,28 @@ def partial_mesh_for_core(
       length: The spatial extent of the grid.
       num_cores: The total number of cores.
       core_id: The index of the core in {0, 1, ... num_cores - 1}.
-      mesh_from_params: Mesh directly obtaind from `params`.
+      provided_mesh: Global mesh, provided from `params`.
 
     Returns:
       The subgrid corresponding to the portion of the grid in the given
         dimension assigned to the `core_id`.
-
     """
     if not core_n:
       return [_NP_DTYPE(0.0)]
 
     if mesh_choice == MeshChoice.DERIVED:
-      linspace = tf.linspace(
-          _NP_DTYPE(0.0), _NP_DTYPE(length),
-          num_cores * core_n + num_boundary_points)
+      mesh = tf.linspace(
+          _NP_DTYPE(0.0),
+          _NP_DTYPE(length),
+          num_cores * core_n + num_boundary_points,
+      )
     else:
-      linspace = mesh_from_params
+      mesh = provided_mesh
 
     boundary_offset = num_boundary_points // 2
-    return linspace[core_id * core_n + boundary_offset:(core_id + 1) * core_n +
-                    boundary_offset]
+    start = core_id * core_n + boundary_offset
+    end = start + core_n
+    return mesh[start:end]
 
   lx = params.lx
   ly = params.ly
@@ -168,9 +171,9 @@ def partial_mesh_for_core(
         'Invalid subgrid coordinate specified with z core index. Must be '
         'smaller than total number of core partitioning in z direction.')
 
-  xs = get_slice_in_dim(core_nx, lx, cx, gx, params.x)
-  ys = get_slice_in_dim(core_ny, ly, cy, gy, params.y)
-  zs = get_slice_in_dim(core_nz, lz, cz, gz, params.z)
+  xs = get_slice_in_dim(core_nx, lx, cx, gx, params.global_xyz[0])
+  ys = get_slice_in_dim(core_ny, ly, cy, gy, params.global_xyz[1])
+  zs = get_slice_in_dim(core_nz, lz, cz, gz, params.global_xyz[2])
 
   xx, yy, zz = tf.meshgrid(xs, ys, zs, indexing='ij')
   val = value_fn(xx, yy, zz, _NP_DTYPE(lx), _NP_DTYPE(ly), _NP_DTYPE(lz),  # pytype: disable=wrong-arg-types  # numpy-scalars
@@ -187,6 +190,48 @@ def partial_mesh_for_core(
   if perm:
     val = tf.transpose(val, perm=perm)
   return val
+
+
+def reshape_to_broadcastable(
+    f_1d: tf.Tensor, dim: Literal[0, 1, 2]
+) -> tf.Tensor:
+  """Reshapes a rank-1 tensor to a form broadcastable against 3D fields.
+
+  This function is appropriate for initialization and storing of 1D arrays, to
+  be used later on in the simulation.
+
+  Note: do not use this function inside of `partial_mesh_for_core`. That
+  function expects dimensions to be ordered (x,y,z), whereas this function
+  outputs dimensions with order (z,x,y).
+
+
+  Here, `dim` is 0, 1, or 2, corresponding to dimension x, y, or z respectively.
+  The rank-1 tensor `f_1d` will be reshaped such that it represents a 3D field
+  whose values vary only along dimension `dim`. However, for memory efficiency,
+  the number of elements do not change. The output can be used in operations
+  with 3D fields, with broadcasting occurring.
+
+  The number of elements of `f_1d` must be correct on input (this is NOT
+  checked). That is, if `dim`==0, 1, or 2, then len(f_1d) must equal nx, ny, or
+  nz, respectively, where `nx`, `ny`, `nz` are the corresponding sizes of 3D
+  fields.
+
+  Args:
+    f_1d: A rank-1 tensor.
+    dim: The dimension of variation of the input tensor `f_1d`.
+
+  Returns:
+    The reshaped tensor that can be broadcast against a 3D field.
+  """
+  assert (
+      f_1d.ndim == 1
+  ), f'Expecting rank-1 tensor, got rank-{f_1d.ndim} tensor.'
+  if dim == 0:
+    return f_1d[tf.newaxis, :, tf.newaxis]  # Set tensor shape to (1, nx, 1).
+  elif dim == 1:
+    return f_1d[tf.newaxis, tf.newaxis, :]  # Set tensor shape to (1, 1, ny).
+  else:  # dim == 2
+    return f_1d[:, tf.newaxis, tf.newaxis]  # Set tensor shape to (nz, 1, 1).
 
 
 # Below are convenience wrappers of some initialization functions.

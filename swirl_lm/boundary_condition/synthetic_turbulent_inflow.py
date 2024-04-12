@@ -214,8 +214,12 @@ class SyntheticTurbulentInflow(object):
     b_tilde = [np.exp(-np.pi * k**2 / n**2) for k in range(-n_pad, n_pad)]
     return b_tilde / np.sum(b_tilde)
 
-  def _inflow_plane_to_bc(self, inflow: tf.Tensor,
-                          halo_width: int) -> List[tf.Tensor]:
+  def _inflow_plane_to_bc(
+      self,
+      inflow: tf.Tensor,
+      halo_width: int,
+      use_3d_tf_tensor: bool = False,
+  ) -> types.FlowFieldVal:
     """Arranges the inflow plane to the boundary condition format.
 
     Because the inflow planes in adjacent cores links directly with each other
@@ -227,6 +231,9 @@ class SyntheticTurbulentInflow(object):
     Args:
       inflow: A 2D tensor that contains the inflow information.
       halo_width: The width of the halo layers.
+      use_3d_tf_tensor: Returns the inflow plane as a 3D tf.Tensor if `True`,
+        otherwise unstack the inflow plane along the z dimension, i.e. the 0th
+        dimension following a z-x-y orientation.
 
     Returns:
       A list of 2D tensors representing a 3D structure, which will be used as
@@ -240,7 +247,7 @@ class SyntheticTurbulentInflow(object):
       plane = tf.transpose(plane, perm=(2, 0, 1))
     elif self.inflow_dim == 1:
       plane = tf.transpose(plane, perm=(2, 1, 0))
-    return tf.unstack(plane, axis=0)
+    return plane if use_3d_tf_tensor else tf.unstack(plane, axis=0)
 
   def generate_random_fields(
       self,
@@ -260,7 +267,7 @@ class SyntheticTurbulentInflow(object):
         tf.random.stateless_normal(  # pylint:disable=g-complex-comprehension
             shape=self.nr_total, dtype=_TF_DTYPE,
             seed=seed if seed is not None else _gen_stateless_seed())
-        for i in range(3)
+        for _ in range(3)
     ]
 
   def compute_inflow_velocity(
@@ -309,8 +316,8 @@ class SyntheticTurbulentInflow(object):
       # performance: for ground fire case, the step time improves from ~ 250 ms
       # to ~ 210 ms.
       for i in range(2):
-        value = tf.unstack(tf.transpose(value, [1, 2, 0]), axis=0)
-        value = tf.stack(halo_exchange.inplace_halo_exchange(
+        value = tf.transpose(value, [1, 2, 0])
+        value = halo_exchange.inplace_halo_exchange(
             value,
             dims=[2],
             replica_id=replica_id,
@@ -320,7 +327,7 @@ class SyntheticTurbulentInflow(object):
                 (halo_exchange.BCType.NO_TOUCH, 0.0),
             ] * 2],
             width=self.n_pad[i + 1]
-        ), 0)
+        )
 
       # Return the result in the original permutation of dimensions:
       # [inflow_dim, inflow_plane_dim_0, inflo_plane_dim_1].
@@ -380,10 +387,12 @@ class SyntheticTurbulentInflow(object):
           axis=0,
       )
 
-    u = [
-        u_mean_i + u_rms_i * u_alpha_i for u_mean_i, u_rms_i, u_alpha_i in zip(
-            velocity_mean, velocity_rms, u_alpha)
-    ]
+    u = tf.nest.map_structure(
+        lambda u_mean_i, u_rms_i, u_alpha_i: u_mean_i + u_rms_i * u_alpha_i,
+        velocity_mean,
+        velocity_rms,
+        u_alpha,
+    )
 
     return {'r': r, 'u': u}
 
@@ -399,7 +408,9 @@ class SyntheticTurbulentInflow(object):
         params: grid_parametrization.GridParametrization,
     ) -> FlowFieldMap:
       """Updates the inflow boundary condition with synthetic turbulence."""
-      del kernel_op, states
+      del kernel_op
+
+      use_3d_tf_tensor = isinstance(list(states.values())[0], tf.Tensor)
 
       for key in self._required_keys:
         if key not in additional_states.keys():
@@ -419,10 +430,11 @@ class SyntheticTurbulentInflow(object):
               {key: inflow_info['r'][self._rand_keys.index(key)]})
         elif key in self._bc_keys:
           additional_states_updated.update({
-              key:
-                  self._inflow_plane_to_bc(
-                      inflow_info['u'][self._bc_keys.index(key)],
-                      params.halo_width)
+              key: self._inflow_plane_to_bc(
+                  inflow_info['u'][self._bc_keys.index(key)],
+                  params.halo_width,
+                  use_3d_tf_tensor,
+              )
           })
         else:
           additional_states_updated.update({key: value})

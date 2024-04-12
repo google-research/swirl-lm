@@ -52,14 +52,12 @@ _D = 3.75e-6
 
 
 def shear_stress(
-    kernel_op: get_kernel_fn.ApplyKernelOp,
+    deriv_lib: derivatives.Derivatives,
     mu: FlowFieldVal,
-    dx: float,
-    dy: float,
-    dz: float,
     u: FlowFieldVal,
     v: FlowFieldVal,
     w: FlowFieldVal,
+    additional_states: FlowFieldMap,
     shear_bc_update_fn: Optional[Dict[Text, Callable[[FlowFieldVal],
                                                      FlowFieldVal]]] = None,
 ) -> FlowFieldMap:
@@ -72,14 +70,12 @@ def shear_stress(
   2D x-y slices.
 
   Args:
-    kernel_op: An object holding a library of kernel operations.
+    deriv_lib: An instance of the derivatives library.
     mu: Dynamic viscosity of the flow field.
-    dx: Grid spacing in the x dimension.
-    dy: Grid spacing in the y dimension.
-    dz: Grid spacing in the z dimension.
     u: Velocity component in the x dimension, with updated boundary condition.
     v: Velocity component in the y dimension, with updated boundary condition.
     w: Velocity component in the z dimension, with updated boundary condition.
+    additional_states: A dictionary container helper variables.
     shear_bc_update_fn: A dictionary of halo_exchange functions for the shear
       stress tensor.
 
@@ -87,7 +83,7 @@ def shear_stress(
     The 9 component stress stress tensor for each grid point. Values in the halo
     with width 1 is invalid.
   """
-  du_dx = calculus.grad(kernel_op, [u, v, w], [dx, dy, dz])
+  du_dx = calculus.grad(deriv_lib, (u, v, w), additional_states)
 
   du_00 = du_dx[0][0]
   du_01 = du_dx[0][1]
@@ -227,6 +223,7 @@ def shear_flux(
     interp = functools.partial(
         interpolation.centered_node_to_face, kernel_op=kernel_op
     )
+    use_3d_tf_tensor = isinstance(u, tf.Tensor)
 
     def grad_interp(
         f: FlowFieldVal,
@@ -357,7 +354,7 @@ def shear_flux(
       tau_s1 = tf.nest.map_structure(lambda t: -t, tau_s1)
       tau_s2 = tf.nest.map_structure(lambda t: -t, tau_s2)
 
-      if most.vertical_dim == 2:
+      if most.vertical_dim == 2 and not use_3d_tf_tensor:
         tau_s1 = [tau_s1]
         tau_s2 = [tau_s2]
 
@@ -481,15 +478,21 @@ def subsidence_velocity_siebesma(zz: FlowFieldVal) -> FlowFieldVal:
   Returns:
     The subsidence velocity.
   """
-  w = [
-      tf.compat.v1.where(
-          tf.less_equal(z, _Z_F1), _W_MAX * z / _Z_F1,
-          _W_MAX * (1.0 - (z - _Z_F1) / (_Z_F5 - _Z_F1))) for z in zz
-  ]
-  return [
-      tf.compat.v1.where(tf.less_equal(z, _Z_F5), w_i, tf.zeros_like(w_i))
-      for z, w_i in zip(zz, w)
-  ]
+  w = tf.nest.map_structure(
+      lambda z: tf.compat.v1.where(
+          tf.less_equal(z, _Z_F1),
+          _W_MAX * z / _Z_F1,
+          _W_MAX * (1.0 - (z - _Z_F1) / (_Z_F5 - _Z_F1)),
+      ),
+      zz,
+  )
+  return tf.nest.map_structure(
+      lambda z, w_i: tf.compat.v1.where(
+          tf.less_equal(z, _Z_F5), w_i, tf.zeros_like(w_i)
+      ),
+      zz,
+      w,
+  )
 
 
 def source_by_subsidence_velocity(

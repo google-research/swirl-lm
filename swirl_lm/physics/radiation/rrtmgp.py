@@ -14,20 +14,19 @@
 
 """Implementation of a radiative transfer solver."""
 
-import collections
 from typing import Optional
 
 import numpy as np
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.physics.atmosphere import microphysics_one_moment
-from swirl_lm.physics.radiation.optics import optics_utils
 from swirl_lm.physics.radiation.rte import two_stream
 from swirl_lm.physics.thermodynamics import water
+from swirl_lm.utility import common_ops
+from swirl_lm.utility import stretched_grid_util
 from swirl_lm.utility import types
 import tensorflow as tf
 
 
-OrderedDict = collections.OrderedDict
 FlowFieldMap = types.FlowFieldMap
 FlowFieldVal = types.FlowFieldVal
 
@@ -54,6 +53,8 @@ class RRTMGP:
     # The vertical grid spacing used in computing the local water path for an
     # atmospheric grid cell.
     self._dh = (config.dx, config.dy, config.dz)[g_dim]
+    # Whether stretched grid is used in each dimension.
+    self._use_stretched_grid = config.use_stretched_grid
     # The two-stream radiative transfer solver.
     self._two_stream_solver = two_stream.TwoStreamSolver(
         config.radiative_transfer,
@@ -68,24 +69,20 @@ class RRTMGP:
         config, self._water
     )
 
-  def _compute_cloud_path(self, rho: FlowFieldVal, q_c: FlowFieldVal):
+  def _compute_cloud_path(
+      self,
+      rho: FlowFieldVal,
+      q_c: FlowFieldVal,
+      additional_states: FlowFieldMap,
+  ) -> FlowFieldVal:
     """Computes the cloud water/ice path in an atmospheric grid cell."""
-
-    def cloud_path_fn(rho: tf.Tensor, q_c: tf.Tensor) -> tf.Tensor:
-      return rho * q_c * self._dh
-
-    return tf.nest.map_structure(cloud_path_fn, rho, q_c)
-
-  def _reconstruct_vmr(self, p: FlowFieldVal, vmr_profile: tf.Tensor):
-    """Reconstructs the volume mixing ratio field for a given pressure field."""
-    p_for_interp = self._atmospheric_state.vmr.p_ref
-    def vmr_fn(p: tf.Tensor) -> tf.Tensor:
-      interp = optics_utils.create_linear_interpolant(p, p_for_interp)
-      return optics_utils.interpolate(
-          vmr_profile, OrderedDict({'p': lambda _: interp})
-      )
-
-    return tf.nest.map_structure(vmr_fn, p)
+    if self._use_stretched_grid[self._g_dim]:
+      h = additional_states[stretched_grid_util.h_key(self._g_dim)]
+      return common_ops.map_structure_3d(lambda a, b, c: a * b * c, rho, q_c, h)
+    else:
+      def cloud_path_fn(rho: tf.Tensor, q_c: tf.Tensor) -> tf.Tensor:
+        return rho * q_c * self._dh
+      return tf.nest.map_structure(cloud_path_fn, rho, q_c)
 
   def compute_heating_rate(
       self,
@@ -124,23 +121,40 @@ class RRTMGP:
         'RRTMGP requires the temperature (`T`) to be present in'
         ' `additional_states`.'
     )
+    # On very rare occasions, the total-water specific humidity may be a small
+    # negative value, likely because the source term is not bounded properly.
+    # This is usually innocuous for the evolution of the transport equation, but
+    # here may lead to negative water vapor, which leads to negative relative
+    # abundance of certain gas species. This results in negative interpolations
+    # of quantities like optical depth and Planck fraction that are inherently
+    # nonnegative. As a precaution, we clip the total-water specific humidity at
+    # 0.
+    q_t = tf.nest.map_structure(
+        tf.maximum,
+        states['q_t'],
+        tf.nest.map_structure(tf.zeros_like, states['q_t'])
+    )
     q_liq, q_ice = self._water.equilibrium_phase_partition(
-        additional_states['T'], states['rho'], states['q_t']
+        additional_states['T'], states['rho'], q_t
     )
     pressure = self._water.p_ref(additional_states['zz'], additional_states)
 
+    # Condensed phase specific humidity required for cloud optics.
     q_c = tf.nest.map_structure(tf.math.add, q_liq, q_ice)
-    vmr_h2o = self._water.humidity_to_volume_mixing_ratio(states['q_t'], q_c)
-    vmr_o3 = self._reconstruct_vmr(pressure, self._atmospheric_state.vmr.vmr_o3)
-    vmr_fields = {
-        1: vmr_h2o,
-        3: vmr_o3,
-    }
-    molecules_per_area = self._water.air_molecules_per_area(
-        self._kernel_op, pressure, self._g_dim, vmr_h2o
+
+    # Reconstructs volume mixing ratio (vmr) fields of relevant gas species.
+    vmr_lib = self._atmospheric_state.vmr
+    vmr_fields = vmr_lib.reconstruct_vmr_fields_from_pressure(pressure)
+
+    # Derive the water vapor vmr from the simulation state itself.
+    vmr_fields.update(
+        {'h2o': self._water.humidity_to_volume_mixing_ratio(q_t, q_c)}
     )
-    lwp = self._compute_cloud_path(states['rho'], q_liq)
-    iwp = self._compute_cloud_path(states['rho'], q_ice)
+    molecules_per_area = self._water.air_molecules_per_area(
+        self._kernel_op, pressure, self._g_dim, vmr_fields['h2o']
+    )
+    lwp = self._compute_cloud_path(states['rho'], q_liq, additional_states)
+    iwp = self._compute_cloud_path(states['rho'], q_ice, additional_states)
     cloud_r_eff_liq = self._microphysics_lib.cloud_particle_effective_radius(
         states['rho'], q_liq, 'l'
     )

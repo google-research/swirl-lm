@@ -454,10 +454,7 @@ class RayleighDampingLayer(object):
         value: FlowFieldVal,
     ) -> FlowFieldVal:
       """Adds two states elementwise."""
-      return [
-          state_1 + state_2
-          for state_1, state_2 in zip(additional_states[name], value)
-      ]
+      return tf.nest.map_structure(tf.math.add, additional_states[name], value)
 
     additional_states_updated = {}
     additional_states_updated.update(additional_states)
@@ -483,7 +480,9 @@ class RayleighDampingLayer(object):
           self._target_value_mean_dims_by_var[varname],
           target_val)
       if not self._is_primitive[varname]:
-        sponge_force = [rho * f for rho, f in zip(states['rho'], sponge_force)]
+        sponge_force = tf.nest.map_structure(
+            tf.math.multiply, states['rho'], sponge_force
+        )
       if self._target_status[sponge_name]:
         additional_states_updated.update({sponge_name: sponge_force})
       else:

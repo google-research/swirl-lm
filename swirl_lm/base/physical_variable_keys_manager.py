@@ -17,13 +17,13 @@
 import abc
 import enum
 import re
-from typing import Dict, List, Mapping, Optional, Sequence, Text, Tuple, Union
+from typing import Dict, Optional, Sequence, Text, Tuple, Union
 
 from absl import logging
 import six
 from swirl_lm.communication import halo_exchange
 from swirl_lm.utility import common_ops
-import tensorflow as tf
+from swirl_lm.utility import types
 
 BCKeyInfo = Tuple[Text, int, int]
 SourceKeyInfo = Text
@@ -154,7 +154,7 @@ class BoundaryConditionKeysHelper(PhysicalVariableKeysHelper):
 
   def _update_helper_variable_from_additional_states(
       self,
-      additional_states: Mapping[Text, List[tf.Tensor]],
+      additional_states: types.FlowFieldMap,
       halo_width: int,
       bc: Dict[Text, halo_exchange.BoundaryConditionsSpec],
   ) -> Dict[Text, halo_exchange.BoundaryConditionsSpec]:
@@ -264,8 +264,8 @@ class SourceKeysHelper(PhysicalVariableKeysHelper):
 
   def _update_helper_variable_from_additional_states(
       self,
-      additional_states: Mapping[Text, List[tf.Tensor]],
-  ) -> Dict[Text, List[tf.Tensor]]:
+      additional_states: types.FlowFieldMap,
+  ) -> types.FlowFieldMap:
     R"""Updates external sources/forces that are specified in additinoal states.
 
     Args:

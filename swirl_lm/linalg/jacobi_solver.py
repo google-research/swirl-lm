@@ -32,7 +32,7 @@ from swirl_lm.physics.thermodynamics import thermodynamics_pb2
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
-from swirl_lm.utility import stretched_grid
+from swirl_lm.utility import stretched_grid_util
 from swirl_lm.utility import types
 import tensorflow as tf
 from typing_extensions import override
@@ -44,7 +44,6 @@ _HaloUpdateFn: TypeAlias = Callable[[FlowFieldVal], FlowFieldVal]
 PoissonSolverSolution: TypeAlias = base_poisson_solver.PoissonSolverSolution
 
 VARIABLE_COEFF = base_poisson_solver.VARIABLE_COEFF
-STRETCHED_GRID_KEY_PREFIX = stretched_grid.STRETCHED_GRID_KEY_PREFIX
 
 
 def halo_update_for_compatibility_fn(
@@ -404,30 +403,26 @@ class ThreeWeightForPressure(base_poisson_solver.PoissonSolver):
     h = []
     for dim in (0, 1, 2):
       if use_stretched_grid[dim]:
-        h_key = STRETCHED_GRID_KEY_PREFIX + f'_h{dim}'
-        assert h_key in additional_states, (
-            f'`{h_key}` must be a key in `additional_states` to use a stretched'
-            f' grid in dimension {dim}.'
-        )
+        h_key = stretched_grid_util.h_key(dim)
         h.append(additional_states[h_key])
       else:
         n = grid_dims[dim]
         ones_1d = tf.ones(n)
         h.append(
-            stretched_grid.reshape_to_broadcastable(
+            common_ops.reshape_to_broadcastable(
                 ones_1d, dim, use_3d_tf_tensor
             )
         )
 
-    w0 = tf.nest.map_structure(lambda h2: h[1] * h2 / h[0], h[2])
-    w1 = tf.nest.map_structure(lambda h2: h[0] * h2 / h[1], h[2])
-    w2 = tf.nest.map_structure(lambda h2: h[0] * h[1] / h2, h[2])
+    w0 = common_ops.map_structure_3d(lambda h0, h1, h2: h1 * h2 / h0, *h)
+    w1 = common_ops.map_structure_3d(lambda h0, h1, h2: h0 * h2 / h1, *h)
+    w2 = common_ops.map_structure_3d(lambda h0, h1, h2: h0 * h1 / h2, *h)
 
     # Update the rhs for stretched-grid factors
-    rhs = tf.nest.map_structure(
-        lambda rhs, h2: rhs * h[0] * h[1] * h2,
+    rhs = common_ops.map_structure_3d(
+        lambda rhs, h0, h1, h2: rhs * h0 * h1 * h2,
         rhs,
-        h[2],
+        *h,
     )
 
     # For the anelastic case, all the weighting coefficients are multipled by

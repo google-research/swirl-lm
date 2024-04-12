@@ -122,7 +122,9 @@ def filter_2(
       mode='CONSTANT',
       constant_values=False)
 
-  g = [tf.compat.v1.where(mask, g_i, f_i) for g_i, f_i in zip(g, f)]
+  g = tf.nest.map_structure(
+      lambda g_i, f_i: tf.compat.v1.where(mask, g_i, f_i), g, f
+  )
   g[0] = f[0]
   g[-1] = f[-1]
 

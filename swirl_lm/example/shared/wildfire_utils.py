@@ -795,20 +795,27 @@ class WildfireUtils:
 
       def drag_force(u):
         """Computes the drag force for the specified velocity."""
-        drag = [
-            -3.0 * c_d * rho_g * a_v * u_mag_i * u_i / 8.0
-            for rho_g, u_mag_i, u_i in zip(states['rho'], u_mag, u)
-        ]
-        return [
-            tf.compat.v1.where(rho_f < EPSILON,
-                               tf.zeros_like(drag_i, dtype=tf.float32), drag_i)
-            for rho_f, drag_i in zip(additional_states['rho_f'], drag)
-        ]
 
-      u_mag = [
-          tf.math.sqrt(u**2 + v**2 + w**2)
-          for u, v, w in zip(states['u'], states['v'], states['w'])
-      ]
+        def drag_fn(rho_g, u_mag_i, u_i):
+          """Computes the canopy drag."""
+          return -3.0 * c_d * rho_g * a_v * u_mag_i * u_i / 8.0
+
+        drag = tf.nest.map_structure(drag_fn, states['rho'], u_mag, u)
+
+        return tf.nest.map_structure(
+            lambda rho_f, drag_i: tf.compat.v1.where(
+                rho_f < EPSILON, tf.zeros_like(drag_i, dtype=tf.float32), drag_i
+            ),
+            additional_states['rho_f'],
+            drag,
+        )
+
+      u_mag = tf.nest.map_structure(
+          lambda u, v, w: tf.math.sqrt(u**2 + v**2 + w**2),
+          states['u'],
+          states['v'],
+          states['w'],
+      )
 
       updated_additional_states = {}
       for key, value in additional_states.items():

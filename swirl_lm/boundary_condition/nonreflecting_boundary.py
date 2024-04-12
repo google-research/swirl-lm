@@ -124,12 +124,17 @@ def nonreflecting_bc_state_update_fn(
   """
   del kernel_op, replica_id
   updated_additional_states = {}
-  spaces = (params.dx, params.dy, params.dz)
+  spaces = params.grid_spacings
   halo_width = params.halo_width
   for k in boundary_condition_utils.get_keys_for_boundary_condition(
       params.bc,
       halo_exchange.BCType.NONREFLECTING
   ):
+    if any(params.use_stretched_grid):
+      raise NotImplementedError(
+          'Stretched grid is not yet supported for nonreflecting boundary'
+          ' condition.'
+      )
     varname, dim, face = params.bc_manager.parse_key(k)
     bc_type, u_threshold = params.bc[varname][dim][face]
     bc_params = params.bc_params[varname][dim][face]

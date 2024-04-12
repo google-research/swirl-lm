@@ -33,6 +33,7 @@ from swirl_lm.utility import common_ops
 from swirl_lm.utility import composite_types
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
+from swirl_lm.utility import stretched_grid_util
 from swirl_lm.utility import types
 import tensorflow as tf
 
@@ -190,6 +191,7 @@ def compute_buoyancy_balanced_hydrodynamic_pressure(
     rho_0: FlowFieldVal,
     g_dim: int,
     params: parameters_lib.SwirlLMParameters,
+    additional_states: FlowFieldMap
 ) -> FlowFieldVal:
   """Computes p so that dp/dz = (rho - rho_0) g with central difference.
 
@@ -212,6 +214,7 @@ def compute_buoyancy_balanced_hydrodynamic_pressure(
     g_dim: The dimension of the vertical direction.
     params: SwirlLMParameters that contains the configuration for the
       simulation.
+    additional_states: Dictionary of helper variables.
 
   Returns:
     The hydrodynamic pressure that balances the buoyancy term numerically.
@@ -223,7 +226,6 @@ def compute_buoyancy_balanced_hydrodynamic_pressure(
   if params.solver_mode == thermodynamics_pb2.Thermodynamics.ANELASTIC:
     b = tf.nest.map_structure(tf.math.divide, b, rho_0)
 
-  h = (params.dx, params.dy, params.dz)[g_dim]
   n_vec = (params.nx, params.ny, params.nz)
   core_n = (params.core_nx, params.core_ny, params.core_nz)[g_dim]
   cores = (params.cx, params.cy, params.cz)[g_dim]
@@ -286,10 +288,16 @@ def compute_buoyancy_balanced_hydrodynamic_pressure(
     ones = tf.nest.map_structure(tf.ones_like, f)
     return tf.nest.map_structure(tf.multiply, ones, broadcastable_mask)
 
+  # Compute the buoyancy multiplied by twice the grid spacing.
+  if params.use_stretched_grid[g_dim]:
+    h = additional_states[stretched_grid_util.h_key(g_dim)]
+    b_dz = common_ops.map_structure_3d(lambda b, h: 2.0 * b * h, b, h)
+  else:
+    h = params.grid_spacings[g_dim]
+    b_dz = tf.nest.map_structure(lambda b: 2.0 * b * h, b)
+
   # Remove the halos along the vertical direction.
-  b_dz = _slice_in_dim(
-      tf.nest.map_structure(lambda b_i: 2.0 * h * b_i, b),
-      halo_width, core_n, g_dim)
+  b_dz = _slice_in_dim(b_dz, halo_width, core_n, g_dim)
 
   # Split the buoyancy term into odd and even indices. The first internal fluid
   # node is assumed to have index 0.
@@ -396,13 +404,19 @@ def cross_product(
   gx, gy, gz = g
   result = {}
   if 0 in components:
-    cross_x = [fy * gz_k - fz * gy_k for gy_k, gz_k in zip(gy, gz)]
+    cross_x = tf.nest.map_structure(
+        lambda gy_k, gz_k: fy * gz_k - fz * gy_k, gy, gz
+    )
     result.update({0: cross_x})
   if 1 in components:
-    cross_y = [fz * gx_k - fx * gz_k for gx_k, gz_k in zip(gx, gz)]
+    cross_y = tf.nest.map_structure(
+        lambda gx_k, gz_k: fz * gx_k - fx * gz_k, gx, gz
+    )
     result.update({1: cross_y})
   if 2 in components:
-    cross_z = [fx * gy_k - fy * gx_k for gx_k, gy_k in zip(gx, gy)]
+    cross_z = tf.nest.map_structure(
+        lambda gx_k, gy_k: fx * gy_k - fy * gx_k, gx, gy
+    )
     result.update({2: cross_z})
   return result
 
@@ -441,7 +455,7 @@ def coriolis_force(
   ordered_velocity_keys = (common.KEY_U, common.KEY_V, common.KEY_W)
 
   def subtract_scalar(t, sc):
-    return [t_i - sc for t_i in t]
+    return tf.nest.map_structure(lambda t_i: t_i - sc, t)
 
   def get_force_update_fn(
       kernel_op: get_kernel_fn.ApplyKernelOp,
@@ -465,7 +479,8 @@ def coriolis_force(
     # Compute the horizontal components of the cross product.
     velocity_srcs = cross_product(coeff, deltas, horizontal_dims)
     dim_to_src = {
-        k: [-src_i for src_i in src] for k, src in velocity_srcs.items()
+        k: tf.nest.map_structure(lambda src_i: -src_i, src) for k, src in
+        velocity_srcs.items()
     }
     for dim in horizontal_dims:
       src_key = 'src_{}'.format(ordered_velocity_keys[dim])

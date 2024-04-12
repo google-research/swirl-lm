@@ -51,31 +51,42 @@ def _rk3(rhs, dt: float, var: Sequence[FlowFieldVal]) -> List[FlowFieldVal]:
   # The first RK step.
   rhs_1 = rhs(*var)
 
-  var_1 = [[var_i_j + dt * rhs_1_i_j
-            for var_i_j, rhs_1_i_j in zip(var_i, rhs_1_i)]
-           for var_i, rhs_1_i in zip(var, rhs_1)]
+  var_1 = [
+      tf.nest.map_structure(
+          lambda var_i_j, rhs_1_i_j: var_i_j + dt * rhs_1_i_j, var_i, rhs_1_i
+      )
+      for var_i, rhs_1_i in zip(var, rhs_1)
+  ]
 
   # The second RK step.
   rhs_2 = rhs(*var_1)
 
   var_2 = []
   for i in range(len(var)):
-    var_2.append([
-        _RK3_COEFFS['c11'] * var_i_j + _RK3_COEFFS['c12'] *
-        (var_1_i_j + dt * rhs_2_i_j)
-        for var_i_j, var_1_i_j, rhs_2_i_j in zip(var[i], var_1[i], rhs_2[i])
-    ])
+    var_2.append(
+        tf.nest.map_structure(
+            lambda var_i_j, var_1_i_j, rhs_2_i_j: _RK3_COEFFS['c11'] * var_i_j
+            + _RK3_COEFFS['c12'] * (var_1_i_j + dt * rhs_2_i_j),
+            var[i],
+            var_1[i],
+            rhs_2[i],
+        )
+    )
 
   # The third RK step.
   rhs_3 = rhs(*var_2)
 
   var_3 = []
   for i in range(len(var)):
-    var_3.append([
-        _RK3_COEFFS['c21'] * var_i_j + _RK3_COEFFS['c22'] *
-        (var_2_i_j + dt * rhs_3_i_j)
-        for var_i_j, var_2_i_j, rhs_3_i_j in zip(var[i], var_2[i], rhs_3[i])
-    ])
+    var_3.append(
+        tf.nest.map_structure(
+            lambda var_i_j, var_2_i_j, rhs_3_i_j: _RK3_COEFFS['c21'] * var_i_j
+            + _RK3_COEFFS['c22'] * (var_2_i_j + dt * rhs_3_i_j),
+            var[i],
+            var_2[i],
+            rhs_3[i],
+        )
+    )
 
   return var_3
 

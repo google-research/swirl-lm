@@ -40,7 +40,7 @@ import tensorflow as tf
 
 @dataclasses.dataclass(frozen=True)
 class DataLoaderBase(metaclass=abc.ABCMeta):
-  """Generic data loader that reads a .nc file and constructs TF tensors."""
+  """Generic data loader that reads a .nc file and constructs `tf.Tensor`s."""
 
   _NETCDF_DATA_DIR = '/tmp/netcdf/data'
 
@@ -72,13 +72,11 @@ class DataLoaderBase(metaclass=abc.ABCMeta):
   def _parse_nc_file(
       cls,
       path: str,
-      exclude_vars: Sequence[str] = (),
-  ) -> Tuple[nc.Dataset, types.VariableMap, types.DimensionMap]:
+  ) -> Tuple[nc.Dataset, types.TensorMap, types.DimensionMap]:
     """Utility function for unpacking the RRTMGP files and loading tensors.
 
     Args:
       path: Full path of the netCDF dataset file.
-      exclude_vars: Names of variables that should be skipped.
 
     Returns:
       A 3-tuple of 1) the original netCDF Dataset, 2) a dictionary containing
@@ -92,8 +90,6 @@ class DataLoaderBase(metaclass=abc.ABCMeta):
 
     for key in ds.variables:
       val = ds[key][:].data
-      if key in exclude_vars:
-        continue
       if val.dtype == np.float64:
         val = val.astype(np.float32)
       tensor_dict.update({key: tf.constant(val)})

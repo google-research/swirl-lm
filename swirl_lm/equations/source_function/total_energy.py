@@ -291,14 +291,12 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
       mu = tf.nest.map_structure(lambda rho_i: self._params.nu * rho_i, rho)
 
     tau = eq_utils.shear_stress(
-        self._kernel_op,
+        self._deriv_lib,
         mu,
-        self._h[0],
-        self._h[1],
-        self._h[2],
         states[common.KEY_U],
         states[common.KEY_V],
         states[common.KEY_W],
+        additional_states,
     )
 
     # Compute the divergence of the combined source terms due to dilatation and
@@ -341,6 +339,14 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
     # Compute the source terms due to dilatation, wind shear, radiation,
     # subsidence velocity, and precipitation.
     if self._include_radiation:
+      assert (
+          self._g_dim is not None
+      ), 'Gravity dimension must be 0, 1, or 2, but it is None.'
+      if self._params.use_stretched_grid[self._g_dim]:
+        raise NotImplementedError(
+            'Stretched grid is not yet supported for radiation, in the method'
+            ' `Cloud.source_by_radiation`.'
+        )
       halos = [self._params.halo_width] * 3
       f_r = self._cloud.source_by_radiation(
           thermo_states['q_l'],
@@ -358,7 +364,7 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
           rho,
           f_r,
       )
-    source = calculus.divergence(self._kernel_op, div_terms, self._h)
+    source = calculus.divergence(self._deriv_lib, div_terms, additional_states)
 
     if self._include_subsidence:
       src_subsidence = eq_utils.source_by_subsidence_velocity(

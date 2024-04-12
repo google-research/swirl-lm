@@ -249,6 +249,14 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
       # radiative fluxes as a function of height and liquid water content
       # (Stevens et al. 2005, https://doi.org/10.1175/MWR2930.1).
       else:
+        assert (
+            self._g_dim is not None
+        ), 'Gravity dimension must be 0, 1, or 2, but it is None.'
+        if self._params.use_stretched_grid[self._g_dim]:
+          raise NotImplementedError(
+              'Stretched grid is not yet supported for radiation in the method'
+              ' `Cloud.source_by_radiation`.'
+          )
         halos = [self._params.halo_width] * 3
         f_r = self._cloud.source_by_radiation(
             thermo_states['q_l'],

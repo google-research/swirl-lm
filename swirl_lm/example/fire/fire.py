@@ -861,14 +861,12 @@ class Fire:
     if self.igniter is not None:
       ignition_kernel = self.igniter.ignition_kernel(
           step_id, additional_states['ignition_kernel'])
-      temperature = [
-          self._ignite(ignition_kernel, t) for ignition_kernel, t in zip(
-              ignition_kernel, states[self.fire_utils.t_var])
-      ]
-      t_s = [
-          self._ignite(ignition_kernel, t) for ignition_kernel, t in zip(
-              ignition_kernel, additional_states['T_s'])
-      ]
+      temperature = tf.nest.map_structure(
+          self._ignite, ignition_kernel, states[self.fire_utils.t_var]
+      )
+      t_s = tf.nest.map_structure(
+          self._ignite, ignition_kernel, additional_states['T_s']
+      )
       states_updated.update({self.fire_utils.t_var: temperature})
       additional_states_updated.update({'T_s': t_s})
 
@@ -1013,13 +1011,17 @@ class Fire:
   def source_term_update_fn(self) -> parameters_lib.SourceUpdateFnLib:
     """Generates a library of functions that updates requested source terms."""
 
+    # Define a helper function that adds rho multiplied by a new source term to
+    # the existing one.
+    a_plus_bx = lambda a, b, x: a + b * x
+
     def src_uvw_fn(kernel_op, replica_id, replicas, states, additional_states,
                    params):
       """Updates the source terms for u, v, and w."""
       src = {
-          'src_u': [tf.zeros_like(u, dtype=u.dtype) for u in states['u']],
-          'src_v': [tf.zeros_like(v, dtype=v.dtype) for v in states['v']],
-          'src_w': [tf.zeros_like(w, dtype=w.dtype) for w in states['w']],
+          'src_u': tf.nest.map_structure(tf.zeros_like, states['u']),
+          'src_v': tf.nest.map_structure(tf.zeros_like, states['v']),
+          'src_w': tf.nest.map_structure(tf.zeros_like, states['w']),
       }
 
       if self.include_fuel:
@@ -1032,18 +1034,15 @@ class Fire:
         drag = self.fire_utils.drag_force_fn(kernel_op, replica_id, replicas,
                                              states, helper_states, params)
         src.update({
-            'src_u': [
-                src_i + drag_i
-                for src_i, drag_i in zip(src['src_u'], drag['src_u'])
-            ],
-            'src_v': [
-                src_i + drag_i
-                for src_i, drag_i in zip(src['src_v'], drag['src_v'])
-            ],
-            'src_w': [
-                src_i + drag_i
-                for src_i, drag_i in zip(src['src_w'], drag['src_w'])
-            ],
+            'src_u': tf.nest.map_structure(
+                tf.math.add, src['src_u'], drag['src_u']
+            ),
+            'src_v': tf.nest.map_structure(
+                tf.math.add, src['src_v'], drag['src_v']
+            ),
+            'src_w': tf.nest.map_structure(
+                tf.math.add, src['src_w'], drag['src_w']
+            ),
         })
 
       if self.fire_utils.use_sponge:
@@ -1051,9 +1050,9 @@ class Fire:
         sponge_states['rho'] = states['rho']
         helper_states = {
             'sponge_beta': additional_states['sponge_beta'],
-            'src_u': [tf.zeros_like(u, dtype=u.dtype) for u in states['u']],
-            'src_v': [tf.zeros_like(v, dtype=v.dtype) for v in states['v']],
-            'src_w': [tf.zeros_like(w, dtype=w.dtype) for w in states['w']],
+            'src_u': tf.nest.map_structure(tf.zeros_like, states['u']),
+            'src_v': tf.nest.map_structure(tf.zeros_like, states['v']),
+            'src_w': tf.nest.map_structure(tf.zeros_like, states['w']),
         }
         for varname in ('u', 'v', 'w'):
           if varname not in self.fire_utils.sponge_target_names:
@@ -1070,33 +1069,24 @@ class Fire:
             params,
         )
         src.update({
-            'src_u': [
-                src_i + rho_i * sponge_force_i
-                for src_i, rho_i, sponge_force_i in zip(
-                    src['src_u'], states['rho'], sponge_force['src_u']
-                )
-            ],
-            'src_v': [
-                src_i + rho_i * sponge_force_i
-                for src_i, rho_i, sponge_force_i in zip(
-                    src['src_v'], states['rho'], sponge_force['src_v']
-                )
-            ],
-            'src_w': [
-                src_i + rho_i * sponge_force_i
-                for src_i, rho_i, sponge_force_i in zip(
-                    src['src_w'], states['rho'], sponge_force['src_w']
-                )
-            ],
+            'src_u': tf.nest.map_structure(
+                a_plus_bx, src['src_u'], states['rho'], sponge_force['src_u']
+            ),
+            'src_v': tf.nest.map_structure(
+                a_plus_bx, src['src_v'], states['rho'], sponge_force['src_v']
+            ),
+            'src_w': tf.nest.map_structure(
+                a_plus_bx, src['src_w'], states['rho'], sponge_force['src_w']
+            ),
         })
 
       if self.ib is not None:
         ib_states = {key: states[key] for key in ('u', 'v', 'w')}
         helper_states = {
             'ib_interior_mask': additional_states['ib_interior_mask'],
-            'src_u': [tf.zeros_like(u, dtype=u.dtype) for u in states['u']],
-            'src_v': [tf.zeros_like(v, dtype=v.dtype) for v in states['v']],
-            'src_w': [tf.zeros_like(w, dtype=w.dtype) for w in states['w']],
+            'src_u': tf.nest.map_structure(tf.zeros_like, states['u']),
+            'src_v': tf.nest.map_structure(tf.zeros_like, states['v']),
+            'src_w': tf.nest.map_structure(tf.zeros_like, states['w']),
         }
         if 'ib_boundary' in additional_states:
           helper_states.update(
@@ -1106,24 +1096,15 @@ class Fire:
             kernel_op, replica_id, replicas, ib_states, helper_states
         )
         src.update({
-            'src_u': [
-                src_i + rho_i * ib_force_i
-                for src_i, rho_i, ib_force_i in zip(
-                    src['src_u'], states['rho'], ib_force['src_u']
-                )
-            ],
-            'src_v': [
-                src_i + rho_i * ib_force_i
-                for src_i, rho_i, ib_force_i in zip(
-                    src['src_v'], states['rho'], ib_force['src_v']
-                )
-            ],
-            'src_w': [
-                src_i + rho_i * ib_force_i
-                for src_i, rho_i, ib_force_i in zip(
-                    src['src_w'], states['rho'], ib_force['src_w']
-                )
-            ],
+            'src_u': tf.nest.map_structure(
+                a_plus_bx, src['src_u'], states['rho'], ib_force['src_u']
+            ),
+            'src_v': tf.nest.map_structure(
+                a_plus_bx, src['src_v'], states['rho'], ib_force['src_v']
+            ),
+            'src_w': tf.nest.map_structure(
+                a_plus_bx, src['src_w'], states['rho'], ib_force['src_w']
+            ),
         })
 
       if self._include_coriolis_force:
@@ -1169,7 +1150,7 @@ class Fire:
       self,
       replica_id: tf.Tensor,
       coordinates: initializer.ThreeIntTuple,
-  ) -> types.TensorMap:
+  ) -> types.FlowFieldMap:
     """Initializes states for the simulation.
 
     Args:
@@ -1299,14 +1280,14 @@ class Fire:
       })
 
     if self.fire_utils.t_var in self.config.transport_scalars_names:
-      thermo_states = {self.fire_utils.t_var: [output[self.fire_utils.t_var]]}
+      thermo_states = {self.fire_utils.t_var: output[self.fire_utils.t_var]}
       if 'Y_O' in self.config.transport_scalars_names:
-        thermo_states.update({'Y_O': [output['Y_O']]})
+        thermo_states.update({'Y_O': output['Y_O']})
       thermo_additional_states = {}
       output.update({
-          'rho':
-              self.thermodynamics.update_thermal_density(
-                  thermo_states, thermo_additional_states)[0]
+          'rho': self.thermodynamics.update_thermal_density(
+              thermo_states, thermo_additional_states
+          )
       })
     else:
       output.update({

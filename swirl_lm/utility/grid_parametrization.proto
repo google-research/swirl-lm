@@ -97,8 +97,14 @@ message CoordinateBC {
   optional BoundaryConditionType dim_2 = 3;
 }
 
+message CoordinateStr {
+  optional string dim_0 = 1;
+  optional string dim_1 = 2;
+  optional string dim_2 = 3;
+}
+
 // A message that parameterizes a distributed simulation.
-// Next id: 11
+// Next id: 12
 message GridParametrization {
   // The shape or topology of compute cores.
   optional CoordinateInt computation_shape = 1;
@@ -123,4 +129,6 @@ message GridParametrization {
   // The number of boundary points to be to each end of the computational
   // domain.
   optional int32 num_boundary_points = 10 [default = 1];
+  // The paths to files containing stretched grid data.
+  optional CoordinateStr stretched_grid_paths = 11;
 }

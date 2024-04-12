@@ -29,6 +29,7 @@ from swirl_lm.boundary_condition import nonreflecting_boundary
 from swirl_lm.core import simulation
 from swirl_lm.linalg import poisson_solver
 from swirl_lm.utility import common_ops
+from swirl_lm.utility import stretched_grid
 from swirl_lm.utility import tpu_util
 from swirl_lm.utility import types
 import tensorflow as tf
@@ -87,6 +88,7 @@ SAVE_MAX_UVW_AND_CFL = flags.DEFINE_bool(
 FLAGS = flags.FLAGS
 
 CKPT_DIR_FORMAT = '{filename_prefix}-ckpts/'
+COMPLETION_FILE = 'DONE'
 _MAX_UVW_CFL = 'max_uvw_cfl'
 
 Array = Any
@@ -137,7 +139,13 @@ def get_checkpoint_manager(
   )
 
 
-def _get_state_keys(params):
+def _write_completion_file(output_dir: str) -> None:
+  """Writes the completion file to the `output_dir`."""
+  with tf.io.gfile.GFile(f'{output_dir}/{COMPLETION_FILE}', 'w') as f:
+    f.write('')
+
+
+def _get_state_keys(params: parameters_lib.SwirlLMParameters):
   """Returns essential, additional and helper var state keys."""
   # Essential flow field variables:
   # u: velocity in dimension 0;
@@ -153,6 +161,15 @@ def _get_state_keys(params):
   helper_var_keys = list(
       params.helper_var_keys if params.helper_var_keys else []
   )
+
+  # Add additional and helper_var keys required for stretched grids.
+  stretched_grid_additional_keys, stretched_grid_helper_var_keys = (
+      stretched_grid.additional_and_helper_var_keys(
+          params.use_stretched_grid, params.use_3d_tf_tensor
+      )
+  )
+  additional_keys.extend(stretched_grid_additional_keys)
+  helper_var_keys.extend(stretched_grid_helper_var_keys)
 
   # Check to make sure we don't have keys duplicating / overwriting each other.
   if len(set(essential_keys)) + len(set(additional_keys)) + len(
@@ -187,6 +204,13 @@ def _init_fn(
     """Initializes all variables required in the simulation."""
     states = {}
 
+
+    # Add helper variables for stretched grids.
+    states.update(
+        stretched_grid.local_stretched_grid_vars_from_global_xyz(
+            params, coordinates
+        )
+    )
 
     # Add helper variables from Poisson solver.
     poisson_solver_helper_var_fn = (
@@ -238,7 +262,7 @@ def _process_at_step_id(
   Args:
     process_fn: Function accepting `essential_states` and `additional_states`,
       and returning the updated values of individual states in a dictionary.
-    essential_states: The essential states, corresponds to the`states` keyword
+    essential_states: The essential states, corresponds to the `states` keyword
       argument of `process_fn`.
     additional_states: The additional states, corresponds to the
       `additional_states` keyword argument of `process_fn`.
@@ -591,6 +615,43 @@ def solver(
     considered a new simulation and will save its `state` after initialization
     as a checkpoint.
 
+  Categories of tensors in `state`:
+    The tensors in `state` consist of 3 categories, which `driver._one_cycle()`
+    treats differently. There are `essential_keys`, `additional_keys`, and
+    `helper_var_keys`.  Tensors corresponding to `essential_keys` and
+    `additional_keys` are unstacked from tensors into lists of tensors at the
+    beginning of a cycle and restacked into tensors at the end of a cycle.
+    Tensors corresponding to `helper_var_keys` are left as is.
+
+    When passing the tensors to the simulation model's step function, the
+    tensors corresponding to `essential_keys` are put into one dictionary,
+    whereas the tensors corresponding to `additional_keys` and `helper_var_keys`
+    are put into a separate dictionary.
+
+  Termination:
+
+    In the normal case, the solver will return after it has run the simulation
+    for the requested number of cycles. The output directory will contain data
+    for `num_cycles + 1` steps, more specifically, for step numbers [0, 1 *
+    num_steps, 2 * num_steps, ..., num_cycles * num_steps].
+
+    If the simulation reaches a state where any variable has a non-finite value
+    (NaN or Inf), then the simulation will stop early and save the state one
+    step before the state that contains non-finite values. As a result, there
+    will be fewer steps saved than `num_cycles + ` and the final saved step
+    number will not necessarily be a multiple of num_steps.
+
+    In both of the these cases (`num_cycles` reached or non-finite value seen),
+    the solver will write an empty `DONE` file to the output directory to
+    indicate that the simulation is complete.
+
+    The simulation can also terminate by raising an exception (e.g., because of
+    input errors, resource issues, etc.). In this case, the solver will exit
+    before writing an empty `DONE` file.
+
+    In case of restarts (e.g., by increasing `num_cycles` to continue a
+    simulation), the `DONE` file should be removed before starting the solver.
+
   Args:
     customized_init_fn: The function that initializes the flow field. The
       function needs to be replica dependent.
@@ -836,13 +897,11 @@ def solver(
       params.num_steps,
   )
 
-  kernel_op = params.kernel_op
-
   # Get the model that defines the concrete simulation calculation procedures.
   # Since we are allowing some model object's methods to be decorated with
   # `tf.function`, calling `_get_model` outside the loop ensures that these
   # methods are traced only once.
-  model = _get_model(kernel_op, params)
+  model = _get_model(params.kernel_op, params)
 
   while step_id_value() < (
       params.start_step + params.num_steps * params.num_cycles
@@ -883,6 +942,10 @@ def solver(
       # materialized, we can guarantee that the actual write actions are
       # completed, and we update the saved completed step here.
       ckpt_manager.save()
+      # Wait for checkpoint manager before marking completion.
+      ckpt_manager.sync()
+      # Mark simulation as complete.
+      _write_completion_file(output_dir)
       raise ValueError(
           f'Non-convergence detected. Early exit from cycle {cycle} at step '
           f'{step_id_value() + 1}. The last valid state at step '
@@ -937,5 +1000,9 @@ def solver(
       )
     t2 = time.time()
     logging.info('Writing output & checkpoint took %f secs.', t2 - t1)
+
+  # Wait for checkpoint manager before marking completion.
+  ckpt_manager.sync()
+  _write_completion_file(output_dir)
 
   return strategy.experimental_local_results(state)

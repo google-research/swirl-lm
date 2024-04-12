@@ -15,7 +15,7 @@
 """Library for common operations."""
 import enum
 import functools
-from typing import Any, Callable, Dict, Iterable, Mapping, Sequence, Text, Tuple
+from typing import Any, Callable, Dict, Iterable, Literal, Mapping, Sequence, Text, Tuple
 
 import numpy as np
 from swirl_lm.utility import types
@@ -303,6 +303,162 @@ def get_field(
     nz: int,
 ) -> list[tf.Tensor]:
   return [state[get_tile_name(field_name, i)] for i in range(nz)]
+
+
+def convert_to_3d_tensor_and_tile(
+    f_1d: tf.Tensor,
+    dim: Literal[0, 1, 2],
+    nx: int,
+    ny: int,
+    nz: int,
+) -> tf.Tensor:
+  """Converts 1D tensor `f_1d` to a tiled 3D tensor.
+
+  This function follows the SwirlLM convention that tensor dimensions are
+  ordered (z, x, y).
+
+  Args:
+    f_1d: The 1D tensor to convert to 3D.
+    dim: The dimension along which `f_1d` is laid out.
+    nx: Number of grid points per core in the x dimension.
+    ny: Number of grid points per core in the y dimension.
+    nz: Number of grid points per core in the z dimension.
+
+  Returns:
+    A 3D tensor corresponding to f_1d.
+  """
+  if dim == 0:
+    return tf.tile(f_1d[tf.newaxis, :, tf.newaxis], multiples=(nz, 1, ny))
+  elif dim == 1:
+    return tf.tile(f_1d[tf.newaxis, tf.newaxis, :], multiples=(nz, nx, 1))
+  elif dim == 2:
+    return tf.tile(f_1d[:, tf.newaxis, tf.newaxis], multiples=(1, nx, ny))
+  else:
+    raise ValueError(f'Unsupported dim: {dim}. `dim` must be 0, 1, or 2.')
+
+
+def _reshape_to_broadcastable_3d_tensor(
+    f_1d: tf.Tensor,
+    dim: Literal[0, 1, 2],
+) -> tf.Tensor:
+  """Reshapes a rank-1 tensor to a form broadcastable against 3D fields.
+
+  3D fields are assumed to be represented as 3D tensors.
+
+  See docstring of `reshape_to_broadcastable` for additional detail.
+
+  Args:
+    f_1d: A rank-1 tensor.
+    dim: The dimension of variation of the input tensor `f_1d`.
+
+  Returns:
+    A rank-3 tensor that can be broadcast directly against a 3D field.
+  """
+  assert (
+      f_1d.ndim == 1
+  ), f'Expecting rank-1 tensor, got rank-{f_1d.ndim} tensor.'
+  if dim == 0:
+    # Set shape of tensor to (1, nx, 1).
+    return f_1d[tf.newaxis, :, tf.newaxis]
+  elif dim == 1:
+    # Set shape of tensor to (1, 1, ny).
+    return f_1d[tf.newaxis, tf.newaxis, :]
+  else:  # dim == 2
+    # Set shape of tensor to (nz, 1, 1).
+    return f_1d[:, tf.newaxis, tf.newaxis]
+
+
+def _reshape_to_broadcastable_no_3d_tensor(
+    f_1d: tf.Tensor, dim: Literal[0, 1, 2]) -> Sequence[tf.Tensor]:
+  """Reshapes a rank-1 tensor to a form broadcastable against 3D fields.
+
+  The returned tensor is in Swirl-LM 3D form, which is a list of 2D tensors. The
+  list represents the z-dimension, and the dimensions of 2D tensors correspond
+  to x and y dimensions.
+
+  Note that the output is NOT suitable for passing to `tf.nest.map_structure`.
+  Instead use `map_structure_3d` defined in this file. The reason
+  `tf.nest.map_structure` doesn't work is that it expects all the input tensors
+  to have the exact same length, but the output will be a list of length one if
+  `f_1d` is along x or y.
+
+  Args:
+    f_1d: A rank-1 tensor.
+    dim: The dimension of variation of the input tensor `f_1d`.
+
+  Returns:
+    A list containing rank-2 tensor(s), which can be passed to
+    `map_structure_3d`.
+  """
+  return tf.unstack(_reshape_to_broadcastable_3d_tensor(f_1d, dim))
+
+
+def reshape_to_broadcastable(
+    f_1d: tf.Tensor,
+    dim: Literal[0, 1, 2],
+    use_3d_tf_tensor: bool,
+) -> tf.Tensor | Sequence[tf.Tensor]:
+  """Reshapes a rank-1 tensor to a form broadcastable against 3D fields.
+
+  Here, `dim` is 0, 1, or 2, corresponding to dimension x, y, or z respectively.
+  The rank-1 tensor `f_1d` will be reshaped such that it represents a 3D field
+  whose values vary only along dimension `dim`. However, for memory efficiency,
+  the number of elements do not change. The output can be used in operations
+  with 3D fields, with broadcasting occurring.
+
+  3D fields are stored with order (z, x, y). If `use_3d_tf_tensor == False`,
+  then 3D fields are stored as lists of 2D tensors, and the output of this
+  function changes accordingly.
+
+  The number of elements of `f_1d` must be correct on input (this is NOT
+  checked). That is, if `dim`==0, 1, or 2, then len(f_1d) must equal nx, ny, or
+  nz, respectively, where `nx`, `ny`, `nz` are the corresponding sizes of 3D
+  fields.
+
+  Examples of how the output can be used with 3D fields via broadcasting:
+    Suppose here that `q` is a 3D field (a 3D tensor or list of 2D tensors)
+      fx = reshape_to_broadcastable(fx_1d, 0, True)
+      fy = reshape_to_broadcastable(fy_1d, 1, True)
+      fz = reshape_to_broadcastable(fz_1d, 2, True)
+
+      # This is a valid operation.
+      map_structure_3d(lambda q, fx, fy, fz: q * fx * fy * fz, q, fx, fy, fz)
+
+  Args:
+    f_1d: A rank-1 tensor.
+    dim: The dimension of variation of the input tensor `f_1d`.
+    use_3d_tf_tensor: Whether 3D fields are represented by 3D tensors or lists
+      of 2D tensors.
+
+  Returns:
+    The reshaped tensor that can be broadcast against a 3D field.
+  """
+  if dim not in (0, 1, 2):
+    raise ValueError(f'Unsupported dim: {dim}. `dim` must be 0, 1, or 2.')
+
+  if use_3d_tf_tensor:
+    return _reshape_to_broadcastable_3d_tensor(f_1d, dim)
+  else:
+    return _reshape_to_broadcastable_no_3d_tensor(f_1d, dim)
+
+
+def get_local_slice_of_1d_array(
+    v: tf.Tensor, core_id: int, core_n: int, n: int
+):
+  """Retrieves the values local to `core_id` from a global 1D array `v`.
+
+  Args:
+    v: A 1D tensor representing a global array.
+    core_id: The logical coordinate for the dimension under consideration.
+    core_n: The number of non-halo elements per replica for this dimension.
+    n: The number of elements (including halos) per replica for this dimension.
+
+  Returns:
+    A 1D tensor representing the local slice of `v` in `core_id`.
+  """
+  start = core_id * core_n
+  end = start + n
+  return v[start : end]
 
 
 def get_slice(
@@ -1669,3 +1825,73 @@ def meshgrid(xs: _TensorEquivalent, ys: _TensorEquivalent,
                  zs_ts)
 
   return xx, yy, zz
+
+
+def _get_broadcast_z_size(tensors: Sequence[Sequence[tf.Tensor]]) -> int:
+  """Returns the maximum length of the input tensors in the z dimension.
+
+  Args:
+    tensors: Tensors whose size in the z dimension is 1 or nz for some
+      nz. If nz cannot be determined (i.e., there are non-length-1 tensors
+      whose sizes are different), there will be an assertion error.
+
+  Returns:
+    The maximum size of the input tensors in the z dimension.
+  """
+  max_z = 1
+  for tensor in tensors:
+    assert isinstance(tensor, Sequence), (
+        f'Expecting tensor to be of type Sequence, got {type(tensor)}.')
+    if len(tensor) > 1:
+      if max_z == 1:
+        max_z = len(tensor)
+      else:
+        assert len(tensor) == max_z, (
+            f'Got different lengths of tensors: {len(tensor)} and {max_z}')
+  return max_z
+
+
+def _broadcast_to_z_size(
+    tensor: Sequence[tf.Tensor], z_size: int) -> Sequence[tf.Tensor]:
+  """Broadcasts the input tensor to `z_size` if possible."""
+  if len(tensor) != z_size:
+    assert len(tensor) == 1, (
+        f'Expecting length along z to be 1, but got {len(tensor)}.')
+    return [tensor[0]] * z_size
+  else:
+    return tensor
+
+
+def _is_sequence_of_list_of_2d_tensors(tensors: Sequence[FlowFieldVal]) -> bool:
+  """Returns true if all input tensors are list-of-2D tensors."""
+  all_3d = all(isinstance(tensor, tf.Tensor) for tensor in tensors)
+  all_non_3d = all(not isinstance(tensor, tf.Tensor) for tensor in tensors)
+  if all_3d:
+    return False
+  if all_non_3d:
+    return True
+  raise ValueError('Expecting tensors to be all 3D or all list-of-2D. Got '
+                   f'{[type(tensor) for tensor in tensors]}.')
+
+
+def map_structure_3d(f, *args):
+  """Like tf.nest.map_structure but handles Swirl-LM list-of-2D tensors.
+
+  Unlike tf.nest.map_structure, this function will attempt to broadcast along
+  the z-dimension (i.e., the list dimension) for list-of-2D tensors.
+
+  `args` can also be of plain tensor type, in which case they will be directly
+  passed to `f`.
+
+  Args:
+    f: The function to apply to `args`.
+    *args: List of arguments to pass to `f`.
+
+  Returns:
+    The result of applying `f` to `args`.
+  """
+  if not _is_sequence_of_list_of_2d_tensors(args):
+    return f(*args)
+  z_size = _get_broadcast_z_size(args)
+  args = [_broadcast_to_z_size(arg, z_size) for arg in args]
+  return tf.nest.map_structure(f, *args)

@@ -110,6 +110,7 @@ def diffusion_scalar(
     Returns:
       A list that contains the 3 diffusion components of the scalar.
     """
+    use_3d_tf_tensor = isinstance(rho, tf.Tensor)
     multiply = lambda a, b: tf.nest.map_structure(tf.multiply, a, b)
     rho_d = multiply(rho, diffusivity)
 
@@ -127,11 +128,6 @@ def diffusion_scalar(
 
     # Add the closure from Monin-Obukhov similarity theory if requested.
     if most is not None and most.is_active_scalar(scalar_name):
-      if any(deriv_lib._use_stretched_grid_in_dim):  # pylint: disable=protected-access
-        raise NotImplementedError(
-            'Monin-Obukhov similarity theory not yet supported for stretched'
-            ' grid.'
-        )
       required_variables = ('u', 'v', 'w', 'theta')
       for varname in required_variables:
         if varname not in helper_variables:
@@ -151,7 +147,7 @@ def diffusion_scalar(
       # for consistency.
       q_3 = tf.nest.map_structure(lambda q: -q, q_3)
 
-      if most.vertical_dim == 2:
+      if most.vertical_dim == 2 and not use_3d_tf_tensor:
         q_3 = [q_3]
 
       # Replace the diffusion flux at the ground surface with the MOS closure.
@@ -412,14 +408,6 @@ def diffusion_momentum(
       stored in a list of 3 elements, with the elements being the diffusion
       component in the x, y, and z directions, respectively.
     """
-    if helper_variables is None:
-      helper_variables = {}
-    grad_central = [
-        lambda f: kernel_op.apply_kernel_op_x(f, 'kDx'),
-        lambda f: kernel_op.apply_kernel_op_y(f, 'kDy'),
-        lambda f: kernel_op.apply_kernel_op_z(f, 'kDz', 'kDzsh'),
-    ]
-
     shear_key = {
         'u': ('xx', 'xy', 'xz'),
         'v': ('yx', 'yy', 'yz'),
@@ -428,24 +416,19 @@ def diffusion_momentum(
 
     if scheme == numerics_pb2.DiffusionScheme.DIFFUSION_SCHEME_CENTRAL_5:
       tau = eq_utils.shear_stress(
-          kernel_op,
+          deriv_lib,
           mu,
-          grid_spacing[0],
-          grid_spacing[1],
-          grid_spacing[2],
           velocity['u'],
           velocity['v'],
           velocity['w'],
+          helper_variables,
           tau_bc_update_fn,
       )
 
       def diffusion_fn_1d(key, dim):
         """Computes the diffusion term for `key` in direction `dim`."""
         shear = tau[shear_key[key][dim]]
-        h = grid_spacing[dim]
-        return tf.nest.map_structure(
-            lambda d_flux: d_flux / (2.0 * h), grad_central[dim](shear)
-        )
+        return deriv_lib.deriv_centered(shear, dim, helper_variables)
 
       diff = {
           key: [diffusion_fn_1d(key, i) for i in range(3)]

@@ -51,6 +51,10 @@ class OpticsScheme(metaclass=abc.ABCMeta):
         lambda f: kernel_op.apply_kernel_op_y(f, 'shift_dny'),
         lambda f: kernel_op.apply_kernel_op_z(f, 'shift_dnz', 'shift_dnzsh'),
     )[g_dim]
+    self.cloud_optics_lw = None
+    self.cloud_optics_sw = None
+    self.gas_optics_lw = None
+    self.gas_optics_sw = None
 
   @abc.abstractmethod
   def compute_lw_optical_properties(

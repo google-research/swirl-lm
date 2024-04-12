@@ -17,7 +17,8 @@
 import copy
 import os
 import os.path
-from typing import Callable, List, Mapping, Optional, Sequence, Tuple
+from typing import Callable, List, Literal, Mapping, Optional, Sequence, Tuple, TypeAlias
+
 from absl import flags
 from absl import logging
 import numpy as np
@@ -37,6 +38,9 @@ from swirl_lm.utility import types
 import tensorflow as tf
 
 from google.protobuf import text_format
+
+FlowFieldVal: TypeAlias = types.FlowFieldVal
+FlowFieldMap: TypeAlias = types.FlowFieldMap
 
 # The threshold of the difference between the absolute value of the
 # gravitational vector along a dimension and one. Below this threshold the
@@ -174,8 +178,19 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
       self,
       config: parameters_pb2.SwirlLMParameters,
       grid_params: Optional[
-          grid_parametrization_pb2.GridParametrization] = None,
+          grid_parametrization_pb2.GridParametrization
+      ] = None,
   ):
+    """Initializes the SwirlLMParameters object.
+
+    Args:
+      config: An instance of the `SwirlLMParameters` proto.
+      grid_params: An instance of the `GridParametrization` proto.
+
+    Raises:
+      ValueError: If the kernel operator type or scheme used for discretizing
+        the diffusion term is not recognized.
+    """
     super(SwirlLMParameters, self).__init__(grid_params)
 
     self.swirl_lm_parameters_proto = config
@@ -273,7 +288,9 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
         'Gravity dimension is ambiguous if it is not aligned with an axis.'
         f' {g_dim} is provided.'
     )
-    self.g_dim = g_dim.item() if len(g_dim) == 1 else None
+    self.g_dim: Literal[0, 1, 2] | None = (
+        g_dim.item() if len(g_dim) == 1 else None
+    )
 
     # Get the scalar related quantities if scalars are solved as a
     # `List[SwirlLMParameters.Scalar]`.
@@ -397,6 +414,9 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
               f'used as the diffusion scheme in the momentum equations but only'
               f' DIFFUSION_SCHEME_CENTRAL_3 supports the Monin-Obukhov '
               f'similarity theory.')
+
+    if any(self.use_stretched_grid):
+      _validate_config_for_stretched_grid(config)
 
     # Toggle if to run with the debug mode.
     self.dbg = FLAGS.simulation_debug
@@ -968,3 +988,40 @@ def params_from_config_file_flag() -> SwirlLMParameters:
     raise ValueError('Flag --config_filepath is not set.')
 
   return SwirlLMParameters.config_from_proto(FLAGS.config_filepath)
+
+
+def _validate_config_for_stretched_grid(
+    config: parameters_pb2.SwirlLMParameters,
+) -> None:
+  """Validates the config for features available with stretched grid.
+
+  Caution: This is a list of *known* features that are not yet supported, but
+  the list is not necessarily exhaustive.
+
+  Args:
+    config: An instance of the `SwirlLMParameters` proto.
+
+  Raises:
+    NotImplementedError: If the config has features turned on that are not
+    supported by stretched grid.
+  """
+  if config.HasField('boundary_models') and config.boundary_models.HasField(
+      'ib'
+  ):
+    raise NotImplementedError(
+        'Immersed boundary method is not yet supported with stretched grid.'
+    )
+
+  if config.enable_rhie_chow_correction:
+    raise NotImplementedError(
+        'Rhie-Chow correction is not supported with stretched grid.'
+    )
+
+  if (
+      config.diffusion_scheme
+      == numerics_pb2.DiffusionScheme.DIFFUSION_SCHEME_STENCIL_3
+  ):
+    raise NotImplementedError(
+        f'Diffusion scheme {config.diffusion_scheme} is not supported with'
+        ' stretched grid.'
+    )

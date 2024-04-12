@@ -86,6 +86,8 @@ class AbstractLookupGasOptics(loader.DataLoaderBase, metaclass=abc.ABCMeta):
   p_ref_min: tf.Tensor
   # Minimum temperature supported by RRTM lookup tables.
   temperature_ref_min: tf.Tensor
+  # Maximum temperature supported by RRTM lookup tables.
+  temperature_ref_max: tf.Tensor
   # Δt for reference temperature values (Δt is constant).
   dtemp: tf.Tensor
   # Δ for log of reference pressure values (Δlog(p) is constant).
@@ -262,24 +264,25 @@ class AbstractLookupGasOptics(loader.DataLoaderBase, metaclass=abc.ABCMeta):
   def _load_data(
       cls,
       ds: nc.Dataset,
-      tables: types.VariableMap,
+      tables: types.TensorMap,
       dims: types.DimensionMap,
   ) -> Dict[str, Any]:
     """Preprocesses the RRTMGP gas optics data.
 
     Args:
       ds: The original netCDF Dataset containing the RRTMGP optics data.
-      tables: The extracted data as a dictionary of `tf.Variable`s.
+      tables: The extracted data as a dictionary of `tf.Tensor`s.
       dims: A dictionary containing dimension information for the tables.
 
     Returns:
       A dictionary containing dimension information and the preprocessed RRTMGP
-      data as `tf.Variable`s.
+      data as `tf.Tensor`s.
     """
     p_ref = tables['press_ref']
     t_ref = tables['temp_ref']
     p_ref_min = tf.math.reduce_min(p_ref)
     temperature_ref_min = tf.math.reduce_min(t_ref)
+    temperature_ref_max = tf.math.reduce_max(t_ref)
     dtemp = t_ref[1] - t_ref[0]
     dln_p = tf.math.log(p_ref[0]) - tf.math.log(p_ref[1])
     gas_names_ds = ds['gas_names'][:].data
@@ -392,6 +395,7 @@ class AbstractLookupGasOptics(loader.DataLoaderBase, metaclass=abc.ABCMeta):
         t_ref=t_ref,
         p_ref_min=p_ref_min,
         temperature_ref_min=temperature_ref_min,
+        temperature_ref_max=temperature_ref_max,
         dtemp=dtemp,
         dln_p=dln_p,
         vmr_ref=tables['vmr_ref'],

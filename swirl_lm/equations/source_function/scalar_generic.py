@@ -29,7 +29,7 @@ from swirl_lm.numerics import diffusion
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.turbulence import sgs_model
 from swirl_lm.utility import get_kernel_fn
-from swirl_lm.utility import stretched_grid
+from swirl_lm.utility import stretched_grid_util
 from swirl_lm.utility import types
 import tensorflow as tf
 
@@ -70,8 +70,7 @@ class ScalarGeneric(abc.ABC):
     self._scalar_name = scalar_name
     self._thermodynamics = thermodynamics
     self._deriv_lib = params.deriv_lib
-
-    self._h = (self._params.dx, self._params.dy, self._params.dz)
+    self._h = params.grid_spacings
 
     self._scalar_params = _get_config_for_scalar(
         self._params.scalars, self._scalar_name
@@ -92,27 +91,14 @@ class ScalarGeneric(abc.ABC):
       )
       self._bc_types[dim][face] = boundary_condition_utils.BoundaryType.UNKNOWN
 
-    # Find the direction of gravity. Only vector along a particular dimension is
-    # considered currently.
-    self._g_vec = (
-        self._params.gravity_direction
-        if self._params.gravity_direction
-        else [0.0] * 3
-    )
-    self._g_dim = None
-    for i in range(3):
-      if np.abs(np.abs(self._g_vec[i]) - 1.0) < _G_THRESHOLD:
-        self._g_dim = i
-        break
+    # Dimension in which gravity acts.
+    self._g_dim = params.g_dim
 
     # Prepare diffusion related models.
     self._diffusion_fn = diffusion.diffusion_scalar(self._params)
     self._use_sgs = self._params.use_sgs
-    filter_widths = (self._params.dx, self._params.dy, self._params.dz)
     if self._use_sgs:
-      self._sgs_model = sgs_model.SgsModel(
-          self._kernel_op, filter_widths, params.sgs_model
-      )
+      self._sgs_model = sgs_model.SgsModel(self._kernel_op, params)
 
   def _get_momentum_for_convection(
       self,
@@ -170,7 +156,7 @@ class ScalarGeneric(abc.ABC):
           states[key] for key in (common.KEY_U, common.KEY_V, common.KEY_W)
       )
       diff_t = self._sgs_model.turbulent_diffusivity(
-          (phi,), velocity, replicas, additional_states
+          (phi,), additional_states, velocity, replicas
       )
       diffusivity = tf.nest.map_structure(
           lambda diff_t_i: self._params.diffusivity(self._scalar_name)  # pylint: disable=g-long-lambda
@@ -253,7 +239,7 @@ class ScalarGeneric(abc.ABC):
     helper_variables = {}
     # Helper variables required for stretched grids.
     helper_variables.update(
-        stretched_grid.get_helper_variables(additional_states)
+        stretched_grid_util.get_helper_variables(additional_states)
     )
 
     def convection_1d(dim: int) -> types.FlowFieldVal:
@@ -313,7 +299,7 @@ class ScalarGeneric(abc.ABC):
 
     # Helper variables required for stretched grids.
     helper_variables.update(
-        stretched_grid.get_helper_variables(additional_states)
+        stretched_grid_util.get_helper_variables(additional_states)
     )
 
     # Helper variables required by the Monin-Obukhov similarity theory.

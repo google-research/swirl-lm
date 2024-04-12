@@ -20,7 +20,9 @@ abstract away the underlying algebraic kernel operations on raw arrays.
 
 from typing import TypeAlias
 
+from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
+from swirl_lm.utility import stretched_grid_util
 from swirl_lm.utility import types
 import tensorflow as tf
 from typing_extensions import Self
@@ -185,95 +187,6 @@ class Derivatives:
       raise ValueError(f'Unsupported dim: {dim}.  `dim` must be 0, 1, or 2.')
     return df
 
-  def _deriv_node_to_face_3d_tensor(
-      self,
-      f: FlowFieldVal,
-      dim: int,
-      additional_states: FlowFieldMap,
-  ) -> FlowFieldVal:
-    """Given the value of a field f at nodes, returns the derivative at faces.
-
-    See docstring of `deriv_node_to_face` for detail.
-
-    Args:
-      f: A 3D field f, given at nodes.
-      dim: The dimension along which to compute the derivative.
-      additional_states: Mapping that contains the optional scale factors.
-
-    Returns:
-      The derivative of f along dim, evaluated at faces in dimension `dim` and
-      nodes in the other dimensions.
-    """
-    df_dim_face = self._backward_difference(f, dim)
-    if self._use_stretched_grid_in_dim[dim]:
-      h_face_key = f'stretched_grid_h{dim}_face'
-      assert h_face_key in additional_states, (
-          f'To use stretched grid in dimension {dim}, the additional_states'
-          f' must contain the key `{h_face_key}`.'
-      )
-      h_face = additional_states[h_face_key]
-      df_dxdim_face = df_dim_face / (h_face * self._grid_spacings[dim])
-    else:
-      df_dxdim_face = df_dim_face / self._grid_spacings[dim]
-    return df_dxdim_face
-
-  def _deriv_node_to_face_list_of_tensors(
-      self,
-      f: FlowFieldVal,
-      dim: int,
-      additional_states: FlowFieldMap,
-  ) -> FlowFieldVal:
-    """Given the value of a field f at nodes, returns the derivative at faces.
-
-    See docstring of `deriv_node_to_face` for detail.
-
-    Args:
-      f: A 3D field f, given at nodes.
-      dim: The dimension along which to compute the derivative.
-      additional_states: Mapping that contains the optional scale factors.
-
-    Returns:
-      The derivative of f along dim, evaluated at faces in dimension `dim` and
-      nodes in the other dimensions.
-    """
-    df_dim_face = self._backward_difference(f, dim)
-    if dim in (0, 1):
-      if self._use_stretched_grid_in_dim[dim]:
-        h_face_key = f'stretched_grid_h{dim}_face'
-        assert h_face_key in additional_states, (
-            f'To use stretched grid in dimension {dim}, `additional_states`'
-            f' must contain the key `{h_face_key}`.'
-        )
-        h_face = additional_states[h_face_key]
-        # For dim == 0 or 1, h_face is a single 2D tensor.
-        df_dxdim_face = tf.nest.map_structure(
-            lambda df: df / (h_face * self._grid_spacings[dim]),
-            df_dim_face,
-        )
-      else:
-        df_dxdim_face = tf.nest.map_structure(
-            lambda df: df / self._grid_spacings[dim], df_dim_face
-        )
-    else:  # dim == 2
-      if self._use_stretched_grid_in_dim[dim]:
-        h_face_key = 'stretched_grid_h2_face'
-        assert h_face_key in additional_states, (
-            'To use stretched grid in dimension 2, `additional_states`'
-            f' must contain the key `{h_face_key}`.'
-        )
-        h_face = additional_states[h_face_key]
-        # For dim == 2, h_face is a list of rank-0 tensors.
-        df_dxdim_face = tf.nest.map_structure(
-            lambda df, h: df / (h * self._grid_spacings[dim]),
-            df_dim_face,
-            h_face,
-        )
-      else:
-        df_dxdim_face = tf.nest.map_structure(
-            lambda df: df / self._grid_spacings[dim], df_dim_face
-        )
-    return df_dxdim_face
-
   def deriv_node_to_face(
       self,
       f: FlowFieldVal,
@@ -298,99 +211,18 @@ class Derivatives:
       The derivative of f along dim, evaluated at faces in dimension `dim` and
       nodes in the other dimensions.
     """
-    if self._use_3d_tf_tensor:
-      return self._deriv_node_to_face_3d_tensor(f, dim, additional_states)
-    else:
-      return self._deriv_node_to_face_list_of_tensors(f, dim, additional_states)
-
-  def _deriv_face_to_node_3d_tensor(
-      self,
-      f_face: FlowFieldVal,
-      dim: int,
-      additional_states: FlowFieldMap,
-  ) -> FlowFieldVal:
-    """Given the value of a field f at faces, return the derivative at nodes.
-
-    See docstring of `deriv_face_to_node` for detail.
-
-    Args:
-      f_face: A 3D field f, given at faces in dimension `dim` and nodes in the
-        other dimensions.
-      dim: The dimension along which to compute the derivative.
-      additional_states: Mapping that contains the optional scale factors.
-
-    Returns:
-      The derivative of f along dim, evaluated at nodes.
-    """
-    df_dim = self._forward_difference(f_face, dim)
+    df_dim_face = self._backward_difference(f, dim)
     if self._use_stretched_grid_in_dim[dim]:
-      h_key = f'stretched_grid_h{dim}'
-      assert h_key in additional_states, (
-          f'To use stretched grid in dimension {dim}, the additional_states'
-          f' must contain the key `{h_key}`.'
+      h_face_key = stretched_grid_util.h_face_key(dim)
+      h_face = additional_states[h_face_key]
+      df_dxdim_face = common_ops.map_structure_3d(
+          lambda df, h: df / (h * self._grid_spacings[dim]), df_dim_face, h_face
       )
-      h = additional_states[h_key]
-      df_dx_dim = df_dim / (h * self._grid_spacings[dim])
     else:
-      df_dx_dim = df_dim / self._grid_spacings[dim]
-    return df_dx_dim
-
-  def _deriv_face_to_node_list_of_tensors(
-      self,
-      f_face: FlowFieldVal,
-      dim: int,
-      additional_states: FlowFieldMap,
-  ) -> FlowFieldVal:
-    """Given the value of a field f at faces, return the derivative at nodes.
-
-    See docstring of `deriv_face_to_node` for detail.
-
-    Args:
-      f_face: A 3D field f, given at faces in dimension `dim` and nodes in the
-        other dimensions.
-      dim: The dimension along which to compute the derivative.
-      additional_states: Mapping that contains the optional scale factors.
-
-    Returns:
-      The derivative of f along dim, evaluated at nodes.
-    """
-    df_dim = self._forward_difference(f_face, dim)
-    if dim in (0, 1):
-      if self._use_stretched_grid_in_dim[dim]:
-        h_key = f'stretched_grid_h{dim}'
-        assert h_key in additional_states, (
-            f'To use stretched grid in dimension {dim}, `additional_states`'
-            f' must contain the key `{h_key}`.'
-        )
-        h = additional_states[h_key]
-        # For dim == 0 or 1, h is a single 2D tensor.
-        df_dx_dim = tf.nest.map_structure(
-            lambda df: df / (h * self._grid_spacings[dim]),
-            df_dim,
-        )
-      else:
-        df_dx_dim = tf.nest.map_structure(
-            lambda df: df / self._grid_spacings[dim], df_dim
-        )
-    else:  # dim == 2
-      if self._use_stretched_grid_in_dim[dim]:
-        h_key = 'stretched_grid_h2'
-        assert h_key in additional_states, (
-            'To use stretched grid in dimension 2, `additional_states`'
-            f' must contain the key `{h_key}`.'
-        )
-        h = additional_states[h_key]
-        # For dim == 2, h_face is a list of rank-0 tensors.
-        df_dx_dim = tf.nest.map_structure(
-            lambda df, h: df / (h * self._grid_spacings[dim]),
-            df_dim,
-            h,
-        )
-      else:
-        df_dx_dim = tf.nest.map_structure(
-            lambda df: df / self._grid_spacings[dim], df_dim
-        )
-    return df_dx_dim
+      df_dxdim_face = tf.nest.map_structure(
+          lambda df: df / self._grid_spacings[dim], df_dim_face
+      )
+    return df_dxdim_face
 
   def deriv_face_to_node(
       self,
@@ -415,98 +247,17 @@ class Derivatives:
     Returns:
       The derivative of f along dim, evaluated at nodes.
     """
-    if self._use_3d_tf_tensor:
-      return self._deriv_face_to_node_3d_tensor(f_face, dim, additional_states)
-    else:
-      return self._deriv_face_to_node_list_of_tensors(
-          f_face, dim, additional_states
-      )
-
-  def _deriv_centered_3d_tensor(
-      self,
-      f: FlowFieldVal,
-      dim: int,
-      additional_states: FlowFieldMap,
-  ) -> FlowFieldVal:
-    """Given the value of a field f at nodes, return the derivative at nodes.
-
-    See docstring of `deriv_centered` for detail.
-
-    Args:
-      f: A 3D field f, evaluated at nodes.
-      dim: The dimension along which to compute the derivative.
-      additional_states: Mapping that contains the optional scale factors.
-
-    Returns:
-      The derivative of f along dim, evaluated at nodes.
-    """
-    df_dim = self._centered_difference(f, dim)
+    df_dim = self._forward_difference(f_face, dim)
     if self._use_stretched_grid_in_dim[dim]:
-      h_key = f'stretched_grid_h{dim}'
-      assert h_key in additional_states, (
-          f'To use stretched grid in dimension {dim}, the additional_states'
-          f' must contain the key `{h_key}`.'
-      )
+      h_key = stretched_grid_util.h_key(dim)
       h = additional_states[h_key]
-      df_dx_dim = df_dim / (h * 2 * self._grid_spacings[dim])
+      df_dx_dim = common_ops.map_structure_3d(
+          lambda df, h: df / (h * self._grid_spacings[dim]), df_dim, h
+      )
     else:
-      df_dx_dim = df_dim / (2 * self._grid_spacings[dim])
-    return df_dx_dim
-
-  def _deriv_centered_list_of_tensors(
-      self,
-      f: FlowFieldVal,
-      dim: int,
-      additional_states: FlowFieldMap,
-  ) -> FlowFieldVal:
-    """Given the value of a field f at nodes, return the derivative at nodes.
-
-    See docstring of `deriv_centered` for detail.
-
-    Args:
-      f: A 3D field f, evaluated at nodes.
-      dim: The dimension along which to compute the derivative.
-      additional_states: Mapping that contains the optional scale factors.
-
-    Returns:
-      The derivative of f along dim, evaluated at nodes.
-    """
-    df_dim = self._centered_difference(f, dim)
-    if dim in (0, 1):
-      if self._use_stretched_grid_in_dim[dim]:
-        h_key = f'stretched_grid_h{dim}'
-        assert h_key in additional_states, (
-            f'To use stretched grid in dimension {dim}, `additional_states`'
-            f' must contain the key `{h_key}`.'
-        )
-        h = additional_states[h_key]
-        # For dim == 0 or 1, h[dim] is a single 2D tensor.
-        df_dx_dim = tf.nest.map_structure(
-            lambda df: df / (h * 2 * self._grid_spacings[dim]),
-            df_dim,
-        )
-      else:
-        df_dx_dim = tf.nest.map_structure(
-            lambda df: df / (2 * self._grid_spacings[dim]), df_dim
-        )
-    else:  # dim == 2
-      if self._use_stretched_grid_in_dim[dim]:
-        h_key = 'stretched_grid_h2'
-        assert h_key in additional_states, (
-            'To use stretched grid in dimension 2, `additional_states`'
-            f' must contain the key `{h_key}`.'
-        )
-        h = additional_states[h_key]
-        # For dim == 2, h_face is a list of rank-0 tensors.
-        df_dx_dim = tf.nest.map_structure(
-            lambda df, h: df / (h * 2 * self._grid_spacings[dim]),
-            df_dim,
-            h,
-        )
-      else:
-        df_dx_dim = tf.nest.map_structure(
-            lambda df: df / (2 * self._grid_spacings[dim]), df_dim
-        )
+      df_dx_dim = tf.nest.map_structure(
+          lambda df: df / self._grid_spacings[dim], df_dim
+      )
     return df_dx_dim
 
   def deriv_centered(
@@ -528,10 +279,18 @@ class Derivatives:
     Returns:
       The derivative of f along dim, evaluated at nodes.
     """
-    if self._use_3d_tf_tensor:
-      return self._deriv_centered_3d_tensor(f, dim, additional_states)
+    df_dim = self._centered_difference(f, dim)
+    if self._use_stretched_grid_in_dim[dim]:
+      h_key = stretched_grid_util.h_key(dim)
+      h = additional_states[h_key]
+      df_dx_dim = common_ops.map_structure_3d(
+          lambda df, h: df / (h * 2 * self._grid_spacings[dim]), df_dim, h
+      )
     else:
-      return self._deriv_centered_list_of_tensors(f, dim, additional_states)
+      df_dx_dim = tf.nest.map_structure(
+          lambda df: df / (2 * self._grid_spacings[dim]), df_dim
+      )
+    return df_dx_dim
 
   def create_copy_with_custom_kernel_op(
       self, custom_kernel_op: get_kernel_fn.ApplyKernelOp

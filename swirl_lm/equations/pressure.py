@@ -123,7 +123,7 @@
 
 import collections
 import functools
-from typing import Any, Dict, Mapping, Optional, Text, Tuple
+from typing import Any, Dict, Literal, Mapping, Optional, Text, Tuple
 
 from absl import logging
 import numpy as np
@@ -392,6 +392,29 @@ def _gen_monitor_data(
   return monitor_vars  # pytype: disable=bad-return-type
 
 
+def _get_first_last_grid_spacing_for_wall_bc(
+    params: parameters_lib.SwirlLMParameters, dim: Literal[0, 1, 2]
+) -> tuple[float, float]:
+  """Returns the first and last grid spacing in `dim`, allowing nonuniform grid.
+
+  Only valid for a wall-like boundary condition, not a periodic BC.
+
+  Args:
+    params: An instance of SwirlLMParameters specifying the configuration.
+    dim: The dimension under consideration.
+
+  Returns:
+    The first and last grid spacing.
+  """
+  if params.use_stretched_grid[dim]:
+    coord = params.global_xyz[dim]
+    first_grid_spacing = coord[1] - coord[0]
+    last_grid_spacing = coord[-1] - coord[-2]
+  else:
+    first_grid_spacing = last_grid_spacing = params.grid_spacings[dim]
+  return first_grid_spacing, last_grid_spacing
+
+
 class Pressure(object):
   """A library for solving the pressure equation."""
 
@@ -409,9 +432,12 @@ class Pressure(object):
     self._thermodynamics = thermodynamics
     self.monitor = monitor_lib
 
-    self._pressure_params = (
-        params.pressure if params.pressure is not None else text_format.Parse(
-            _DEFAULT_PRESSURE_PARAMS, pressure_pb2.Pressure()))
+    if (pressure_params := params.pressure) is not None:
+      self._pressure_params = pressure_params
+    else:
+      self._pressure_params = text_format.Parse(
+          _DEFAULT_PRESSURE_PARAMS, pressure_pb2.Pressure()
+      )
 
     self._solver = poisson_solver.poisson_solver_factory(
         params, self._kernel_op, self._pressure_params.solver)
@@ -793,27 +819,14 @@ class Pressure(object):
     bc_p = [[None, None], [None, None], [None, None]]
 
     velocity_keys = ['u', 'v', 'w']
-    grid_spacing = (self._params.dx, self._params.dy, self._params.dz)
-
-    def grad_per_dim(f, dim):
-      """Computes the diffusion term in a specific dimension."""
-      grad_ops = (
-          lambda f: self._kernel_op.apply_kernel_op_x(f, 'kDx'),
-          lambda f: self._kernel_op.apply_kernel_op_y(f, 'kDy'),
-          lambda f: self._kernel_op.apply_kernel_op_z(f, 'kDz', 'kDzsh'),
-      )
-      return tf.nest.map_structure(
-          lambda grad: grad / (2.0 * grid_spacing[dim]), grad_ops[dim](f))
 
     def ddh_per_dim(f, dim):
       """Computes the second order derivative of `f` along `dim`."""
-      diff_ops = [
-          lambda f: self._kernel_op.apply_kernel_op_x(f, 'kddx'),
-          lambda f: self._kernel_op.apply_kernel_op_y(f, 'kddy'),
-          lambda f: self._kernel_op.apply_kernel_op_z(f, 'kddz', 'kddzsh'),
-      ]
-      return tf.nest.map_structure(lambda diff: diff / grid_spacing[dim]**2,
-                                   diff_ops[dim](f))
+      df_dh_face = self._deriv_lib.deriv_node_to_face(f, dim, additional_states)
+      d2f_dh2 = self._deriv_lib.deriv_face_to_node(
+          df_dh_face, dim, additional_states
+      )
+      return d2f_dh2
 
     # The diffusion term for the 3 velocity component can be expressed in vector
     # form as:
@@ -838,7 +851,12 @@ class Pressure(object):
     mu = tf.nest.map_structure(lambda rho_i: self._params.nu * rho_i,
                                states['rho'])
     ddu_n = [ddh_per_dim(states[velocity_keys[i]], i) for i in range(3)]
-    du_dx = [grad_per_dim(states[velocity_keys[i]], i) for i in range(3)]
+    du_dx = [
+        self._deriv_lib.deriv_centered(
+            states[velocity_keys[dim]], dim, additional_states
+        )
+        for dim in (0, 1, 2)
+    ]
     du_t = (
         # The x component.
         tf.nest.map_structure(tf.math.add, du_dx[1], du_dx[2]),
@@ -847,25 +865,34 @@ class Pressure(object):
         # The z component.
         tf.nest.map_structure(tf.math.add, du_dx[0], du_dx[1]),
     )
-    ddu_t = [grad_per_dim(du_t[i], i) for i in range(3)]
+    ddu_t = [
+        self._deriv_lib.deriv_centered(du_t[dim], dim, additional_states)
+        for dim in (0, 1, 2)
+    ]
 
     diff = [
         tf.nest.map_structure(diff_fn, mu, ddu_n[i], ddu_t[i]) for i in range(3)
     ]
 
     # Updates the pressure boundary condition based on the simulation setup.
-    for i in range(3):
+    for i in (0, 1, 2):
       for j in range(2):
-        if (self._params.bc_type[i][j] ==
-            boundary_condition_utils.BoundaryType.PERIODIC):
+        if (
+            self._params.bc_type[i][j]
+            == boundary_condition_utils.BoundaryType.PERIODIC
+        ):
           bc_p[i][j] = None
 
-        elif (self._params.bc_type[i][j] ==
-              boundary_condition_utils.BoundaryType.INFLOW):
+        elif (
+            self._params.bc_type[i][j]
+            == boundary_condition_utils.BoundaryType.INFLOW
+        ):
           bc_p[i][j] = (halo_exchange.BCType.NEUMANN_2, 0.0)
 
-        elif (self._params.bc_type[i][j]
-              == boundary_condition_utils.BoundaryType.OUTFLOW):
+        elif (
+            self._params.bc_type[i][j]
+            == boundary_condition_utils.BoundaryType.OUTFLOW
+        ):
           if self._pressure_params.pressure_outlet:
             # Enforce a pressure outlet boundary condition on demand.
             bc_p[i][j] = (halo_exchange.BCType.DIRICHLET, 0.0)
@@ -875,11 +902,19 @@ class Pressure(object):
         elif self._params.bc_type[i][j] in (
             boundary_condition_utils.BoundaryType.SLIP_WALL,
             boundary_condition_utils.BoundaryType.NON_SLIP_WALL,
-            boundary_condition_utils.BoundaryType.SHEAR_WALL):
+            boundary_condition_utils.BoundaryType.SHEAR_WALL,
+        ):
+          first_last_grid_spacing = _get_first_last_grid_spacing_for_wall_bc(
+              self._params, i
+          )
 
-          bc_value = common_ops.get_face(diff[i], i, j,
-                                         self._params.halo_width - 1,
-                                         grid_spacing[i])[0]
+          bc_value = common_ops.get_face(
+              diff[i],
+              i,
+              j,
+              self._params.halo_width - 1,
+              first_last_grid_spacing[j],
+          )[0]
           if i == self.g_dim:
             # Ensures the pressure balances with the buoyancy at the first fluid
             # layer by assigning values to the pressure in halos adjacent to the
@@ -891,9 +926,16 @@ class Pressure(object):
                                          rho_0, self._params, i)
 
             bc_value = tf.nest.map_structure(
-                tf.math.add, bc_value,
-                common_ops.get_face(b, i, j, self._params.halo_width - 1,
-                                    grid_spacing[i])[0])
+                tf.math.add,
+                bc_value,
+                common_ops.get_face(
+                    b,
+                    i,
+                    j,
+                    self._params.halo_width - 1,
+                    first_last_grid_spacing[j],
+                )[0],
+            )
 
           # The boundary condition for pressure is applied at the interface
           # between the boundary and fluid only. Assuming everything is

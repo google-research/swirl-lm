@@ -29,15 +29,14 @@
 
 import collections
 import dataclasses
+import string
 from typing import Callable, Optional, Sequence, Tuple
 
 from swirl_lm.physics.radiation.optics import lookup_gas_optics_base
-from swirl_lm.physics.radiation.optics import lookup_volume_mixing_ratio
 import tensorflow as tf
 
 
 LookupGasOpticsBase = lookup_gas_optics_base.AbstractLookupGasOptics
-LookupVolumeMixingRatio = lookup_volume_mixing_ratio.LookupVolumeMixingRatio
 OrderedDict = collections.OrderedDict
 
 
@@ -97,9 +96,23 @@ def lookup_values(
     A tensor having the same shape as an element of `idx_list` where the indices
     have been replaced by the corresponding value from `vals`.
   """
-  idx_list = [tf.expand_dims(idx, axis=-1) for idx in idx_list]
-  idx = tf.concat(idx_list, axis=-1)
-  return tf.gather_nd(vals, idx)
+  # To avoid the `tf.gather` op, which is very slow on TPU's, we convert the
+  # integer indices to a one-hot representation that can leverage the high
+  # throughput of the matrix-multiply unit, and express the lookup reduction
+  # operation with `tf.einsum`.
+  eq_idx = ''
+  eq_tb = '...'
+  for i in range(len(idx_list)):
+    dim_var = string.ascii_lowercase[i]
+    eq_idx += f'...{dim_var},'
+    eq_tb += f'{dim_var}'
+  eq = eq_idx + eq_tb + '->...'
+  inputs = [
+      tf.one_hot(idx, tf.shape(vals)[i], dtype=vals.dtype)
+      for i, idx in enumerate(idx_list)
+  ]
+  inputs += [vals]
+  return tf.einsum(eq, *inputs)
 
 
 def evaluate_weighted_lookup(
@@ -180,7 +193,7 @@ def create_linear_interpolant(
     idx_low = floor_idx(f, f_ref)
     idx_high = tf.math.minimum(idx_low + 1, size - 1)
     # Compute the interpolant weights for the two endpoints.
-    lower_reference_vals = lookup_values(f_ref, (idx_low,))
+    lower_reference_vals = f_ref[0] + delta * tf.cast(idx_low, f_ref.dtype)
     weight2 = tf.math.abs((f - lower_reference_vals) / delta)
     weight1 = 1.0 - weight2
     if offset is not None:

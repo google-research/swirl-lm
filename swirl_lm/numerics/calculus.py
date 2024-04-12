@@ -14,41 +14,28 @@
 
 """Vector calculus operations."""
 
-from typing import Sequence, Union
+from typing import Sequence, TypeAlias, Union
 
+from swirl_lm.numerics import derivatives
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import types
 import tensorflow as tf
 
-FlowFieldVal = types.FlowFieldVal
-
-
-def _grad_impl(kernel_op: get_kernel_fn.ApplyKernelOp, state: FlowFieldVal,
-               dim: int, grid_spacing: float) -> FlowFieldVal:
-  """Computes gradient of `value` in `dim` with 2nd order central scheme."""
-  if dim == 0:
-    d_state = kernel_op.apply_kernel_op_x(state, 'kDx')
-  elif dim == 1:
-    d_state = kernel_op.apply_kernel_op_y(state, 'kDy')
-  else:  # dim == 2
-    d_state = kernel_op.apply_kernel_op_z(state, 'kDz', 'kDzsh')
-
-  return tf.nest.map_structure(
-      lambda d_state_i: d_state_i / (2.0 * grid_spacing), d_state)
+FlowFieldVal: TypeAlias = types.FlowFieldVal
+FlowFieldMap: TypeAlias = types.FlowFieldMap
 
 
 def grad(
-    kernel_op: get_kernel_fn.ApplyKernelOp,
+    deriv_lib: derivatives.Derivatives,
     field_vars: Union[FlowFieldVal, Sequence[FlowFieldVal]],
-    delta: Sequence[float],
+    additional_states: FlowFieldMap,
 ) -> Sequence[Sequence[FlowFieldVal]]:
   """Computes the gradient for all variables in `field_vars`.
 
   Args:
-    kernel_op: Kernel operators that perform finite difference operations.
+    deriv_lib: An instance of the derivatives library.
     field_vars: A list of 3D tensor variables, or a single 3D tensor variable.
-    delta: The filter widths/grid spacing in three dimensions, which is a
-      sequence of length 3.
+    additional_states: Mapping that contains helper variables.
 
   Returns:
     The gradients of all variables in `field_vars`. The first index of the
@@ -60,34 +47,39 @@ def grad(
   """
   n_dim = len(tf.convert_to_tensor(field_vars).shape)
   if n_dim == 3:
-    return [_grad_impl(kernel_op, field_vars, j, delta[j]) for j in range(3)]
+    return [
+        deriv_lib.deriv_centered(field_vars, dim, additional_states)
+        for dim in (0, 1, 2)
+    ]
   elif n_dim == 4:
-    return [[_grad_impl(kernel_op, field_var, j, delta[j])
-             for j in range(3)]
-            for field_var in field_vars]
-
+    return [
+        [
+            deriv_lib.deriv_centered(field_var, dim, additional_states)
+            for dim in (0, 1, 2)
+        ]
+        for field_var in field_vars
+    ]
   raise TypeError('Unknown type for `field_vars`.')
 
 
 def divergence(
-    kernel_op: get_kernel_fn.ApplyKernelOp,
+    deriv_lib: derivatives.Derivatives,
     field_var: Sequence[FlowFieldVal],
-    delta: Sequence[float],
+    additional_states: FlowFieldMap,
 ) -> FlowFieldVal:
   """Computes the divergence of `field_var`.
 
   Args:
-    kernel_op: Kernel operators that perform finite difference operations.
+    deriv_lib: An instance of the derivatives library.
     field_var: A sequence of 3D tensor variables. The length of the sequence has
       to be 3.
-    delta: The grid spacing in three dimensions, which is a sequence of length
-      3.
+    additional_states: Mapping that contains helper variables.
 
   Returns:
     The divergence of `field_var`.
 
   Raises:
-    ValueError: If the length of either `field_var` or `delta` is not 3.
+    ValueError: If the length of `field_var` is not 3.
   """
   if len(field_var) != 3:
     raise ValueError(
@@ -95,16 +87,11 @@ def divergence(
         'compute the divergence. {} is given.'.format(len(field_var))
     )
 
-  if len(delta) != 3:
-    raise ValueError(
-        'The length mesh size vector has to be 3. {} is given.'.format(
-            len(delta)
-        )
-    )
-
   gradients = [
-      _grad_impl(kernel_op, field_var[i], i, delta[i]) for i in range(3)
+      deriv_lib.deriv_centered(field_var[dim], dim, additional_states)
+      for dim in (0, 1, 2)
   ]
+
   return tf.nest.map_structure(
       lambda ddx, ddy, ddz: ddx + ddy + ddz, *gradients
   )
@@ -132,7 +119,15 @@ def laplacian(
   Returns:
     The scaled Laplacian ν Δf.
   """
-  ddx = [g / dx**2 for g in kernel_op.apply_kernel_op_x(f, 'kddx')]
-  ddy = [g / dy**2 for g in kernel_op.apply_kernel_op_y(f, 'kddy')]
-  ddz = [g / dz**2 for g in kernel_op.apply_kernel_op_z(f, 'kddz', 'kddzsh')]
-  return [nu * (ddx_ + ddy_ + ddz_) for ddx_, ddy_, ddz_ in zip(ddx, ddy, ddz)]
+  ddx = tf.nest.map_structure(
+      lambda g: g / dx**2, kernel_op.apply_kernel_op_x(f, 'kddx')
+  )
+  ddy = tf.nest.map_structure(
+      lambda g: g / dy**2, kernel_op.apply_kernel_op_y(f, 'kddy')
+  )
+  ddz = tf.nest.map_structure(
+      lambda g: g / dz**2, kernel_op.apply_kernel_op_z(f, 'kddz', 'kddzsh')
+  )
+  return tf.nest.map_structure(
+      lambda ddx_, ddy_, ddz_: nu * (ddx_ + ddy_ + ddz_), ddx, ddy, ddz
+  )

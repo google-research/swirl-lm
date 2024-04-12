@@ -37,7 +37,6 @@ from swirl_lm.numerics import diffusion
 from swirl_lm.numerics import numerics_pb2
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import thermodynamics_pb2
-from swirl_lm.physics.turbulence import sgs_model
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import components_debug
 from swirl_lm.utility import get_kernel_fn
@@ -81,12 +80,6 @@ class Scalars(object):
 
     self.thermodynamics = thermodynamics_manager.thermodynamics_factory(
         self._params)
-
-    self._use_sgs = self._params.use_sgs
-    filter_widths = (self._params.dx, self._params.dy, self._params.dz)
-    if self._use_sgs:
-      self._sgs_model = sgs_model.SgsModel(self._kernel_op, filter_widths,
-                                           params.sgs_model)
 
     self._bc = {
         varname: bc_val

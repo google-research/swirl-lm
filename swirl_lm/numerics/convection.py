@@ -38,7 +38,6 @@ FlowFieldMap: TypeAlias = types.FlowFieldMap
 def first_order_upwinding(
     kernel_op: get_kernel_fn.ApplyKernelOp,
     f: FlowFieldVal,
-    f_plus: FlowFieldVal,
     velocity_in_dim: FlowFieldVal,
     grid_spacing: float,
     dim: int,
@@ -52,10 +51,7 @@ def first_order_upwinding(
 
   Args:
     kernel_op: An object holding a library of kernel operations.
-    f: A list of `tf.Tensor` to which the backward difference is applied. Each
-      element in the `List` is an `x-y` plane (aka z-slice).
-    f_plus: A list of `tf.Tensor` to which the forward difference is applied.
-      Each element in the `List` is an `x-y` plane (aka z-slice).
+    f: The 3D scalar field.
     velocity_in_dim: A list of `tf.Tensor` holding the velocity in the direction
       where the derivative is computed. Each element in the `List` is an `x-y`
       plane (aka z-slice).
@@ -65,8 +61,7 @@ def first_order_upwinding(
       respectively.
 
   Returns:
-    The upwinding first-order derivative of `f`, i.e. `df / dx`. Each element
-    in the `List` is an `x-y` plane (aka z-slice).
+    The upwinding first-order derivative of `f`, i.e. `df / dx`.
   """
   grad_forward_fn = [
       lambda g: kernel_op.apply_kernel_op_x(g, 'kdx+'),
@@ -80,18 +75,28 @@ def first_order_upwinding(
       lambda g: kernel_op.apply_kernel_op_z(g, 'kdz', 'kdzsh'),
   ]
 
-  df_dh_forward = [df / grid_spacing for df in  grad_forward_fn[dim](f_plus)]
-  df_dh_backward = [df / grid_spacing for df in grad_backward_fn[dim](f)]
+  df_dh_forward = tf.nest.map_structure(
+      lambda df: df / grid_spacing, grad_forward_fn[dim](f)
+  )
+  df_dh_backward = tf.nest.map_structure(
+      lambda df: df / grid_spacing, grad_backward_fn[dim](f)
+  )
+  return tf.nest.map_structure(
+      lambda velocity_in_dim_, df_dh_forward_, df_dh_backward_: tf.where(
+          tf.less(velocity_in_dim_, 0), df_dh_forward_, df_dh_backward_
+      ),
+      velocity_in_dim,
+      df_dh_forward,
+      df_dh_backward,
+  )
 
-  return [
-      tf.where(tf.less(velocity_in_dim_, 0), df_dh_forward_, df_dh_backward_)
-      for velocity_in_dim_, df_dh_forward_, df_dh_backward_ in zip(
-          velocity_in_dim, df_dh_forward, df_dh_backward)
-  ]
 
-
-def central2(kernel_op: get_kernel_fn.ApplyKernelOp, f: FlowFieldVal,
-             grid_spacing: float, dim: int) -> FlowFieldVal:
+def central2(
+    kernel_op: get_kernel_fn.ApplyKernelOp,
+    f: FlowFieldVal,
+    grid_spacing: float,
+    dim: int,
+) -> FlowFieldVal:
   """Computes the first order derivative using second order centered difference.
 
   Args:
@@ -555,6 +560,47 @@ def flux_roe(
   return tf.nest.map_structure(roe_flux_fn, roe_speed, f_neg, f_pos)
 
 
+def face_interp_fn_first_order_upwind(
+    dim: int,
+) -> Callable[[FlowFieldVal], Tuple[FlowFieldVal, FlowFieldVal]]:
+  """Generates a function that returns face values for the upwind scheme.
+
+  Args:
+    dim: The dimension that is normal to the face.
+
+  Returns:
+    A function that returns upwind values of a variable on faces that are normal
+    to `dim`.
+
+  Raises:
+    ValueError if `dim` is not one of 0, 1, and 2.
+  """
+  kernel_op = get_kernel_fn.ApplyKernelConvOp(
+      4, {'shift': ([1.0, 0.0, 0.0], 1),}
+  )
+
+  if dim == 0:
+    op_type = ['shiftx']
+    kernel_fn = kernel_op.apply_kernel_op_x
+  elif dim == 1:
+    op_type = ['shifty']  # 🦊 :)
+    kernel_fn = kernel_op.apply_kernel_op_y
+  elif dim == 2:
+    op_type = ['shiftz', 'shiftzsh']
+    kernel_fn = kernel_op.apply_kernel_op_z
+  else:
+    raise ValueError('`dim` has to be 0, 1, or 2. {} is provided.'.format(dim))
+
+  def first_order_upwind_fn(
+      state: FlowFieldVal) -> Tuple[FlowFieldVal, FlowFieldVal]:
+    """Computes the face flux of `state` normal to `dim` with upwind scheme."""
+    s_pos = kernel_fn(state, *op_type)
+    s_neg = state
+    return s_pos, s_neg
+
+  return first_order_upwind_fn
+
+
 def face_interp_fn_quick(
     dim: int,
 ) -> Callable[[FlowFieldVal], Tuple[FlowFieldVal, FlowFieldVal]]:
@@ -757,7 +803,9 @@ def convection_from_flux(
         f' {NumericalFlux.Name(numerics_pb2.NUMERICAL_FLUX_LF)}.'
     )
 
-  if interp_scheme == numerics_pb2.CONVECTION_SCHEME_QUICK:
+  if interp_scheme == numerics_pb2.CONVECTION_SCHEME_UPWIND_1:
+    interp_fn = face_interp_fn_first_order_upwind(dim)
+  elif interp_scheme == numerics_pb2.CONVECTION_SCHEME_QUICK:
     interp_fn = face_interp_fn_quick(dim)
   elif interp_scheme == numerics_pb2.CONVECTION_SCHEME_WENO_3:
     interp_fn = face_interp_fn_weno(dim, order=2)
@@ -796,73 +844,6 @@ def convection_from_flux(
 
   # Compute convection term, e.g., ∂/∂x (flux_x) etc., evaluated on nodes
   return deriv_lib.deriv_face_to_node(flux, dim, helper_variables)
-
-
-def convection_upwinding_1(
-    kernel_op: get_kernel_fn.ApplyKernelOp,
-    replica_id: tf.Tensor,
-    replicas: np.ndarray,
-    state: FlowFieldVal,
-    rhou: FlowFieldVal,
-    pressure: FlowFieldVal,
-    dx: float,
-    dt: float,
-    dim: int,
-    bc_types: Tuple[boundary_condition_utils.BoundaryType,
-                    boundary_condition_utils.BoundaryType] = (
-                        boundary_condition_utils.BoundaryType.UNKNOWN,
-                        boundary_condition_utils.BoundaryType.UNKNOWN),
-    varname: Optional[Text] = None,
-    halo_width: Optional[int] = None,
-    src: Optional[FlowFieldVal] = None,
-) -> FlowFieldVal:
-  """Computes the convection term with first order upwinding scheme.
-
-  Args:
-    kernel_op: An object holding a library of kernel operations.
-    replica_id: The index of the current TPU replica.
-    replicas: A numpy array that maps grid coordinates to replica id numbers.
-    state: A list of `tf.Tensor` representing a 3D volume of the variable for
-      which the convection term is computed.
-    rhou: A list of `tf.Tensor` representing a 3D volume of momentum.
-    pressure: A list of `tf.Tensor` representing a 3D volume of pressure.
-    dx: The grid spacing.
-    dt: The time step size that is used in the simulation.
-    dim: The dimension that is normal to the face where the convection term is
-      computed
-    bc_types: The type of the boundary conditions on the 2 ends along `dim`.
-    varname: The name of the variable.
-    halo_width: The number of points in the halo layer in the direction normal
-      to a boundary plane.
-    src: The source term needs to be included for the face-flux correction.
-
-  Returns:
-    The convection term of `f`. Values within `halo_width` of 1 are invalid.
-
-  Raises:
-    ValueError if `dim` is not one of 0, 1, and 2.
-  """
-  interp_fn = [
-      lambda f: kernel_op.apply_kernel_op_x(f, 'ksx'),
-      lambda f: kernel_op.apply_kernel_op_y(f, 'ksy'),
-      lambda f: kernel_op.apply_kernel_op_z(f, 'ksz', 'kszsh'),
-  ]
-
-  grad_fn = [
-      lambda f: kernel_op.apply_kernel_op_x(f, 'kdx+'),
-      lambda f: kernel_op.apply_kernel_op_y(f, 'kdy+'),
-      lambda f: kernel_op.apply_kernel_op_z(f, 'kdz+', 'kdz+sh'),
-  ]
-
-  rhou_face = face_interpolation(kernel_op, replica_id, replicas, rhou,
-                                 pressure, dx, dt, dim, bc_types, varname,
-                                 halo_width, src)
-  sc_face = interp_fn[dim](state)
-
-  rho_u_f = tf.nest.map_structure(tf.multiply, rhou_face, sc_face)
-
-  return tf.nest.map_structure(lambda d_rho_u_f: d_rho_u_f / dx,
-                               grad_fn[dim](rho_u_f))
 
 
 def convection_central_2(
@@ -955,10 +936,12 @@ def convection_term(
 
   Raises:
     NotImplementedError if scheme is not one of the following:
-    CONVECTION_SCHEME_QUICK, CONVECTION_SCHEME_UPWIND_1,
-    CONVECTION_SCHEME_CENTRAL_2.
+    CONVECTION_SCHEME_UPWIND_1, CONVECTION_SCHEME_QUICK,
+    CONVECTION_SCHEME_WENO_3, CONVECTION_SCHEME_WENO_3_NN,
+    CONVECTION_SCHEME_WENO_5, CONVECTION_SCHEME_CENTRAL_2.
   """
   if scheme in (
+      ConvectionScheme.CONVECTION_SCHEME_UPWIND_1,
       ConvectionScheme.CONVECTION_SCHEME_QUICK,
       ConvectionScheme.CONVECTION_SCHEME_WENO_3,
       ConvectionScheme.CONVECTION_SCHEME_WENO_3_NN,
@@ -984,20 +967,18 @@ def convection_term(
         src,
         apply_correction,
     )
-  elif scheme == ConvectionScheme.CONVECTION_SCHEME_UPWIND_1:
-    return convection_upwinding_1(kernel_op, replica_id, replicas, state, rhou,
-                                  pressure, dx, dt, dim, bc_types, varname,
-                                  halo_width, src)
   elif scheme == ConvectionScheme.CONVECTION_SCHEME_CENTRAL_2:
     return convection_central_2(kernel_op, state, rhou, pressure, dx, dt, dim)
   else:
     raise NotImplementedError(
         f'{numerics_pb2.ConvectionScheme.Name(scheme)} is'
-        f'not implemented. Available options are:'
-        f' {ConvectionScheme.Name(ConvectionScheme.CONVECTION_SCHEME_QUICK)},'
-        f' {ConvectionScheme.Name(ConvectionScheme.CONVECTION_SCHEME_WENO_3)},'
-        f' {ConvectionScheme.Name(ConvectionScheme.CONVECTION_SCHEME_WENO_3_NN)},'
-        f' {ConvectionScheme.Name(ConvectionScheme.CONVECTION_SCHEME_WENO_5)},'
-        f' {ConvectionScheme.Name(ConvectionScheme.CONVECTION_SCHEME_UPWIND_1)},'
-        f' {ConvectionScheme.Name(ConvectionScheme.CONVECTION_SCHEME_CENTRAL_2)}'
+        f'not implemented. Available options are: ' +
+        ', '.join(ConvectionScheme.Name(scheme) for scheme in
+                  [ConvectionScheme.CONVECTION_SCHEME_UPWIND_1,
+                   ConvectionScheme.CONVECTION_SCHEME_QUICK,
+                   ConvectionScheme.CONVECTION_SCHEME_WENO_3,
+                   ConvectionScheme.CONVECTION_SCHEME_WENO_3_NN,
+                   ConvectionScheme.CONVECTION_SCHEME_WENO_5,
+                   ConvectionScheme.CONVECTION_SCHEME_CENTRAL_2,
+                   ])
     )

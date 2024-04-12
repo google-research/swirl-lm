@@ -85,7 +85,7 @@ class LookupCloudOptics(loader.DataLoaderBase, metaclass=abc.ABCMeta):
   @classmethod
   def _load_data(
       cls,
-      tables: types.VariableMap,
+      tables: types.TensorMap,
       dims: types.DimensionMap,
   ) -> Dict[str, Any]:
     """Preprocesses the cloud optics data.
@@ -96,7 +96,7 @@ class LookupCloudOptics(loader.DataLoaderBase, metaclass=abc.ABCMeta):
 
     Returns:
       A dictionary containing dimension information and the preprocessed RRTMGP
-      data as `tf.Variable`s.
+      data as `tf.Tensor`s.
     """
     data = {}
     data['n_size_liq'] = dims['nsize_liq']

@@ -295,7 +295,7 @@ def _theta(
   Returns:
     The fraction of heat feedback to the solid after combustion.
   """
-  if not rho_f_init:
+  if rho_f_init is None:
     # Assume reaction heat transfer to gas and solid with equal probability
     # if the initial fuel state is missing.
     return tf.nest.map_structure(

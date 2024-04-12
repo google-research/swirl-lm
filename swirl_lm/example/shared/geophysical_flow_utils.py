@@ -66,7 +66,7 @@ def perturbed_constant_init_fn(
     if rms is None:
       return mean_val
 
-    # We want to make sure different cors are seeded differently, so here we
+    # We want to make sure different cores are seeded differently, so here we
     # incorporate the core cooridinates signature as part of the seed.
     seed_base = 702626207
     local_seed = (int.from_bytes(

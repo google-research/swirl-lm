@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@ import tensorflow as tf
 
 _T_EPS = 0.5
 
-_INFLOW_DATA_NAMES = ('INFLOW_U', 'INFLOW_V', 'INFLOW_W')
+INFLOW_DATA_NAMES = ('INFLOW_U', 'INFLOW_V', 'INFLOW_W')
 
 _INFLOW_DATA_FILE_FORMAT = (
     '{prefix}-field-{{}}-xyz-{rx}-{ry}-{rz}-step-{step}.ser')
@@ -69,8 +69,10 @@ class SimulatedTurbulentInflow():
   def __init__(self, params: parameters_lib.SwirlLMParameters):
     """Initializes the inflow library."""
     self._params = params
-
-    self._model_params = self._params.boundary_models.simulated_inflow
+    assert (
+        boundary_models := params.boundary_models
+    ) is not None, '`boundary_models` must be set in the config.'
+    self._model_params = boundary_models.simulated_inflow
 
     # Get the inflow dimension (in order x-y-z) and inflow axis
     # (in order z-x-y). The inflow dimension refers to the physical dimension,
@@ -120,6 +122,7 @@ class SimulatedTurbulentInflow():
       self,
       inflow_data: tf.Tensor,
       index: int,
+      use_3d_tf_tensor: bool = False,
   ) -> List[tf.Tensor]:
     """Extracts the inflow plane at `index`.
 
@@ -127,6 +130,9 @@ class SimulatedTurbulentInflow():
       inflow_data: The 3D tensor storing the partitioned inflow data.
       index: The local index where the plane is extracted. It has to be within
         the range of the last dimension of `inflow_data`.
+      use_3d_tf_tensor: Returns the inflow plane as a 3D tf.Tensor if `True`,
+        otherwise unstack the inflow plane along the z dimension, i.e. the 0th
+        dimension following a z-x-y orientation.
 
     Returns:
       A list of 2D tensors representing a 3D structure, which will be used as
@@ -148,8 +154,8 @@ class SimulatedTurbulentInflow():
       plane = tf.squeeze(inflow_data[index, ...])
       tiles = [1, 1, 1]
       tiles[self._inflow_axis] = self._params.halo_width + 1
-      return tf.unstack(
-          tf.tile(tf.expand_dims(plane, self._inflow_axis), tiles))
+      inflow_bc = tf.tile(tf.expand_dims(plane, self._inflow_axis), tiles)
+      return inflow_bc if use_3d_tf_tensor else tf.unstack(inflow_bc)
 
   def _get_source_data(
       self,
@@ -195,7 +201,7 @@ class SimulatedTurbulentInflow():
     """Initializes the inflow data."""
     inflow_data = {
         key: tf.zeros(self._inflow_data_shape, dtype=types.TF_DTYPE)
-        for key in _INFLOW_DATA_NAMES
+        for key in INFLOW_DATA_NAMES
     }
 
     if self._model_params.WhichOneof('operation') == 'enforcement':
@@ -203,7 +209,7 @@ class SimulatedTurbulentInflow():
       required_bc_names = _required_bc_names(self._model_params)
       inflow_data.update({
           bc_key: tf.stack(self._inflow_data_to_bc(inflow_data[data_key], 0))
-          for bc_key, data_key in zip(required_bc_names, _INFLOW_DATA_NAMES)
+          for bc_key, data_key in zip(required_bc_names, INFLOW_DATA_NAMES)
       })
 
     return inflow_data
@@ -222,7 +228,7 @@ class SimulatedTurbulentInflow():
     states = tuple([
         {
             key: tf.constant(0, dtype=types.TF_DTYPE)
-            for key in _INFLOW_DATA_NAMES
+            for key in INFLOW_DATA_NAMES
         },
     ] * len(coordinates))
     return driver_tpu.distributed_read_state(
@@ -281,7 +287,7 @@ class SimulatedTurbulentInflow():
           lambda: inflow_original)
 
     inflow_data = {}
-    for varname, inflow_name in zip(common.KEYS_VELOCITY, _INFLOW_DATA_NAMES):
+    for varname, inflow_name in zip(common.KEYS_VELOCITY, INFLOW_DATA_NAMES):
       inflow_plane = self._get_source_data(
           get_inflow_plane(varname), replicas, self._sender_core_id)
       updated_inflow_data_dim = tf.tensor_scatter_nd_update(
@@ -300,6 +306,7 @@ class SimulatedTurbulentInflow():
       replicas: np.ndarray,
       step_id: tf.Tensor,
       additional_states: types.FlowFieldMap,
+      use_3d_tf_tensor: bool = False,
   ) -> types.FlowFieldMap:
     """Updates the boundary condition with inflow data."""
     if self._model_params.WhichOneof('operation') != 'enforcement':
@@ -330,22 +337,35 @@ class SimulatedTurbulentInflow():
           (sender_core_id + 1, 0))
 
       inflow_bc = {}
-      for varname, inflow_name in zip(common.KEYS_VELOCITY, _INFLOW_DATA_NAMES):
+      for varname, inflow_name in zip(common.KEYS_VELOCITY, INFLOW_DATA_NAMES):
         bc_key = self._key_manager.generate_bc_key(
             varname, self._inflow_dim, self._model_params.enforcement.face)
         bc_val_0 = self._get_source_data(
-            self._inflow_data_to_bc(additional_states[inflow_name],
-                                    local_inflow_time_index), replicas,
-            sender_core_id)
+            self._inflow_data_to_bc(
+                additional_states[inflow_name],
+                local_inflow_time_index,
+                use_3d_tf_tensor,
+            ),
+            replicas,
+            sender_core_id,
+        )
         bc_val_1 = self._get_source_data(
-            self._inflow_data_to_bc(additional_states[inflow_name],
-                                    next_time_index), replicas,
-            next_core_id)
+            self._inflow_data_to_bc(
+                additional_states[inflow_name],
+                next_time_index,
+                use_3d_tf_tensor,
+            ),
+            replicas,
+            next_core_id,
+        )
         bc_val = tf.nest.map_structure(
             lambda bc_0, bc_1: (1.0 - t_fraction) * bc_0 + t_fraction * bc_1,
             bc_val_0, bc_val_1)
 
-        inflow_bc.update({bc_key: tf.unstack(bc_val)})
+        if not use_3d_tf_tensor:
+          bc_val = tf.unstack(bc_val)
+
+        inflow_bc.update({bc_key: bc_val})
 
     return inflow_bc
 
@@ -358,6 +378,8 @@ class SimulatedTurbulentInflow():
       additional_states: types.FlowFieldMap,
   ) -> types.FlowFieldMap:
     """Updates/Collects the inflow boundary condition."""
+    use_3d_tf_tensor = isinstance(list(states.values())[0], tf.Tensor)
+
     updated_additional_states = dict(additional_states)
 
     operation = self._model_params.WhichOneof('operation')
@@ -367,7 +389,10 @@ class SimulatedTurbulentInflow():
                               additional_states))
     elif operation == 'enforcement':
       updated_additional_states.update(
-          self.update_inflow(replicas, step_id, additional_states))
+          self.update_inflow(
+              replicas, step_id, additional_states, use_3d_tf_tensor
+          )
+      )
     else:
       raise ValueError(
           f'{operation} is not supported. Available options: "generation", '
@@ -396,7 +421,7 @@ def simulated_turbulent_inflow_factory(
       'simulated_inflow'):
     return None
 
-  for required_varname in list(_INFLOW_DATA_NAMES) + _required_bc_names(
+  for required_varname in list(INFLOW_DATA_NAMES) + _required_bc_names(
       params.boundary_models.simulated_inflow):
     if (required_varname not in list(params.helper_var_keys) +
         list(params.additional_state_keys)):

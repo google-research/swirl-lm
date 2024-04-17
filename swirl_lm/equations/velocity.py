@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -107,6 +107,7 @@ class Velocity(object):
     """Initializes the velocity update library."""
     self._kernel_op = kernel_op
     self._params = params
+    self._deriv_lib = params.deriv_lib
     self.monitor = monitor_lib
 
     self.diffusion_fn = diffusion.diffusion_momentum(self._params)
@@ -125,10 +126,8 @@ class Velocity(object):
         ] * 3)
 
     self._use_sgs = self._params.use_sgs
-    filter_widths = (self._params.dx, self._params.dy, self._params.dz)
     if self._use_sgs:
-      self._sgs_model = sgs_model.SgsModel(self._kernel_op, filter_widths,
-                                           params.sgs_model)
+      self._sgs_model = sgs_model.SgsModel(self._kernel_op, params)
 
     self._bc = {
         varname: bc_val
@@ -156,26 +155,26 @@ class Velocity(object):
     }
     self._tau_bc_update_fn = {}
     self._source = {_KEY_U: None, _KEY_V: None, _KEY_W: None}
-    self.grad_central = [
-        lambda f: self._kernel_op.apply_kernel_op_x(f, 'kDx'),
-        lambda f: self._kernel_op.apply_kernel_op_y(f, 'kDy'),
-        lambda f: self._kernel_op.apply_kernel_op_z(f, 'kDz', 'kDzsh'),
-    ]
 
     self._ib = ib if ib is not None else (
         immersed_boundary_method.immersed_boundary_method_factory(self._params))
 
   def _exchange_halos(self, f, bc_f, replica_id, replicas):
     """Performs halo exchange for the variable f."""
-    return halo_exchange.inplace_halo_exchange(
-        f,
-        self._halo_dims,
-        replica_id,
-        replicas,
-        self._replica_dims,
-        self._params.periodic_dims,
-        bc_f,
-        width=self._params.halo_width)
+
+    @tf.function
+    def do_exchange_halos(f, bc_f, replica_id):
+      return halo_exchange.inplace_halo_exchange(
+          f,
+          self._halo_dims,
+          replica_id,
+          replicas,
+          self._replica_dims,
+          self._params.periodic_dims,
+          bc_f,
+          width=self._params.halo_width)
+
+    return do_exchange_halos(f, bc_f, replica_id)
 
   def exchange_velocity_halos(
       self,
@@ -257,6 +256,7 @@ class Velocity(object):
     zz = additional_states.get('zz', tf.nest.map_structure(tf.zeros_like, p))
     rho_ref = self._thermodynamics.rho_ref(zz, additional_states)
 
+    @tf.function
     def momentum_function(
         rho_u: FlowFieldVal,
         rho_v: FlowFieldVal,
@@ -302,20 +302,22 @@ class Velocity(object):
           _KEY_P: p,
       })
 
-      h = (self._params.dx, self._params.dy, self._params.dz)
       dt = self._params.dt
 
       diff_all = self.diffusion_fn(
           self._kernel_op,
+          self._deriv_lib,
           replica_id,
           replicas,
           self._params.diffusion_scheme,
           mu,
-          h,
+          self._params.grid_spacings,
           states,
+          additional_states,
           tau_bc_update_fn=self._tau_bc_update_fn,
-          helper_variables=additional_states)  # pytype: disable=wrong-arg-types
+      )
 
+      @tf.function
       def momentum_function_in_dim(dim):
         """Computes the RHS of the momentum equation in `dim`."""
         f = states[_KEYS_VELOCITY[dim]]
@@ -329,14 +331,16 @@ class Velocity(object):
         conv = [
             convection.convection_term(  # pylint: disable=g-complex-comprehension
                 self._kernel_op,
+                self._deriv_lib,
                 replica_id,
                 replicas,
                 f,
                 states[_KEYS_MOMENTUM[i]],
                 p_corr[i],
-                h[i],
+                self._params.grid_spacings[i],
                 dt,
                 i,
+                additional_states,
                 bc_types=tuple(self._params.bc_type[i]),
                 varname=_KEYS_MOMENTUM[i],
                 halo_width=self._params.halo_width,
@@ -357,18 +361,14 @@ class Velocity(object):
         ):
           alpha = tf.nest.map_structure(tf.math.reciprocal, rho_ref)
           a_p = tf.nest.map_structure(tf.math.multiply, alpha, p)
-          d_ap_dh = tf.nest.map_structure(
-              lambda d_ap: d_ap / (2.0 * h[dim]), self.grad_central[dim](a_p)
-          )
+          d_ap_dh = self._deriv_lib.deriv_centered(a_p, dim, additional_states)
           # Modified pressure gradient term.
           dp_dh = tf.nest.map_structure(tf.math.multiply, rho_ref, d_ap_dh)
         else:
-          dp_dh = tf.nest.map_structure(
-              lambda dp_: dp_ / (2.0 * h[dim]), self.grad_central[dim](p)
-          )
+          dp_dh = self._deriv_lib.deriv_centered(p, dim, additional_states)
 
         # Computes external forcing terms.
-        force = forces[dim] if forces[dim] else (
+        force = forces[dim] if forces[dim] is not None else (
             tf.nest.map_structure(tf.zeros_like, f))
 
         source_fn = self._params.source_update_fn(_KEYS_VELOCITY[dim])
@@ -383,10 +383,12 @@ class Velocity(object):
         momentum_terms = (conv[0], conv[1], conv[2], diff[0], diff[1], diff[2],
                           dp_dh, gravity, force)
 
+        @tf.function
         def _rhs_fn(c_x, c_y, c_z, d_x, d_y, d_z, dp_dh_i, gravity_i, force_i):
           return (
               -c_x - c_y - c_z + d_x + d_y + d_z - dp_dh_i + gravity_i + force_i
           )
+
         rhs = tf.nest.map_structure(_rhs_fn, *momentum_terms)
 
         if self._ib is not None:
@@ -440,6 +442,7 @@ class Velocity(object):
         prediction. Must contain 'u', 'v', and 'w'.
     """
 
+    @tf.function
     def bc_planes_for_wall(val, dim, face):
       """Generates a list of planes to be applied as wall boundary condition."""
       bc_planes = []
@@ -517,7 +520,7 @@ class Velocity(object):
         for model closures that are used in a simulation.
 
     Returns:
-      A dictionary of helper variables specificlaly for the momentum equations.
+      A dictionary of helper variables specifically for the momentum equations.
     """
     helper_variables = {}
     helper_variables.update(additional_states)
@@ -751,27 +754,32 @@ class Velocity(object):
     rho_mid = common_ops.average(states[_KEY_RHO], states_0[_KEY_RHO])
     if (self._thermodynamics.solver_mode ==
         thermodynamics_pb2.Thermodynamics.ANELASTIC):
+      # For anelastic, `dp` represents α₀ δp through the end of this function.
       dp = tf.nest.map_structure(tf.math.divide, states[common.KEY_DP], rho_mid)
     else:
       dp = states[common.KEY_DP]
 
-    def generate_correction_fn(dim):
-      dh = (self._params.dx, self._params.dy, self._params.dz)[dim]
+    def correction_fn(
+        rho_u_j: FlowFieldVal, rho: FlowFieldVal, grad_j_dp: FlowFieldVal
+    ) -> FlowFieldVal:
+      """Computes correction to momentum equation."""
+      if (self._thermodynamics.solver_mode ==
+          thermodynamics_pb2.Thermodynamics.ANELASTIC):
+        # jth component of vector equation (ρu) <- (ρu) - dt ρ₀ ∇ (α₀ δp)
+        return rho_u_j - dt * rho * grad_j_dp
+      else:
+        # jth component of vector equation (ρu) <- (ρu) - dt ∇ δp
+        return rho_u_j - dt * grad_j_dp
 
-      def correction_fn(rho_u_, rho_, dp_):
-        if (self._thermodynamics.solver_mode ==
-            thermodynamics_pb2.Thermodynamics.ANELASTIC):
-          return rho_u_ - dt * rho_ * dp_ / (2 * dh)
-        else:
-          return rho_u_ - dt * dp_ / (2 * dh)
-
-      return correction_fn
-
-    velocity_keys = (_KEY_RHO_U, _KEY_RHO_V, _KEY_RHO_W)
+    momentum_keys = (_KEY_RHO_U, _KEY_RHO_V, _KEY_RHO_W)
     states_new = {
-        velocity_keys[dim]: tf.nest.map_structure(
-            generate_correction_fn(dim), states[velocity_keys[dim]], rho_mid,
-            self.grad_central[dim](dp)) for dim in range(3)
+        momentum_keys[dim]: tf.nest.map_structure(
+            correction_fn,
+            states[momentum_keys[dim]],
+            rho_mid,
+            self._deriv_lib.deriv_centered(dp, dim, additional_states),
+        )
+        for dim in range(3)
     }
 
     states_buf = {

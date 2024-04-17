@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -53,7 +53,7 @@ class LookupGasOpticsLongwave(gas_base.AbstractLookupGasOptics):
   def _load_data(
       cls,
       ds: nc.Dataset,
-      tables: types.VariableMap,
+      tables: types.TensorMap,
       dims: types.DimensionMap,
   ) -> Dict[str, Any]:
     """Preprocesses the RRTMGP longwave gas optics data.
@@ -61,24 +61,30 @@ class LookupGasOpticsLongwave(gas_base.AbstractLookupGasOptics):
     Args:
       ds: The original netCDF Dataset containing the RRTMGP shortwave optics
         data.
-      tables: The extracted data as a dictionary of `tf.Variable`s.
+      tables: The extracted data as a dictionary of `tf.Tensor`s.
       dims: A dictionary containing dimension information for the tables.
 
     Returns:
       A dictionary containing dimension information and the preprocessed RRTMGP
-      data as `tf.Variable`s.
+      data as `tf.Tensor`s.
     """
     data = super()._load_data(ds, tables, dims)
     data['n_t_plnk'] = dims['temperature_Planck']
     data['planck_fraction'] = tables['plank_fraction']
-    data['t_planck'] = tables['temperature_Planck']
+    # Similarly to the original RRTM Fortran code, here we assume that
+    # temperature minimum and maximum are the same for the absorption
+    # coefficient grid and the Planck grid and the Planck grid is equally
+    # spaced.
+    data['t_planck'] = tf.linspace(
+        data['temperature_ref_min'],
+        data['temperature_ref_max'],
+        data['n_t_plnk'],
+    )
     data['totplnk'] = tables['totplnk']
     return data
 
   @classmethod
-  def from_nc_file(
-      cls, path: str
-  ) -> 'LookupGasOpticsLongwave':
+  def from_nc_file(cls, path: str) -> 'LookupGasOpticsLongwave':
     """Instantiates a `LookupGasOpticsLongwave` object from zipped netCDF file.
 
     The compressed file should be netCDF parsable and contain the RRTMGP

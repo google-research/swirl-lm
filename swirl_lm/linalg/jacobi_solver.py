@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,53 +12,38 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Copyright 2022 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-# coding=utf-8
-"""A library of solvers for the Poisson equation.
+"""A library to provide SwirlLM an interface to the Jacobi solvers.
 
-Methods presented here are used to solve the Poisson equation, i.e.
-  ∇²p = b,
-in a distributed setting.
+This library adapts the interface of the Jacobi solvers to what is needed for
+the pressure correction Poisson equation in SwirlLM.
+
+Each variant of the Poisson equation has its own interface class.
 """
 
-import functools
-from typing import Callable, Optional, Sequence
+from typing import Callable, Sequence, TypeAlias, cast
 
 import numpy as np
+from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.communication import halo_exchange
 from swirl_lm.linalg import base_poisson_solver
+from swirl_lm.linalg import jacobi_solver_impl
 from swirl_lm.linalg import poisson_solver_pb2
+from swirl_lm.physics.thermodynamics import thermodynamics_pb2
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
+from swirl_lm.utility import stretched_grid_util
 from swirl_lm.utility import types
 import tensorflow as tf
+from typing_extensions import override
 
-FlowFieldVal = types.FlowFieldVal
-FlowFieldMap = types.FlowFieldMap
-_TF_DTYPE = types.TF_DTYPE
-_HaloUpdateFn = Callable[[FlowFieldVal], FlowFieldVal]
-_PoissonSolverSolution = base_poisson_solver.PoissonSolverSolution
 
-X = base_poisson_solver.X
-RESIDUAL_L2_NORM = base_poisson_solver.RESIDUAL_L2_NORM
-ITERATIONS = base_poisson_solver.ITERATIONS
+FlowFieldVal: TypeAlias = types.FlowFieldVal
+FlowFieldMap: TypeAlias = types.FlowFieldMap
+_HaloUpdateFn: TypeAlias = Callable[[FlowFieldVal], FlowFieldVal]
+PoissonSolverSolution: TypeAlias = base_poisson_solver.PoissonSolverSolution
+
 VARIABLE_COEFF = base_poisson_solver.VARIABLE_COEFF
-
-
-NormType = common_ops.NormType
 
 
 def halo_update_for_compatibility_fn(
@@ -99,40 +84,68 @@ def halo_update_for_compatibility_fn(
     dtype = p[0].dtype
     new_rhs_mean = tf.cast(rhs_mean, dtype)
 
-    bc_p_x_low = [-new_rhs_mean / 6. * dx * lx * tf.ones(
-        (1, ny), dtype=dtype)] * nz
-    bc_p_x_high = [new_rhs_mean / 6. * dx * lx * tf.ones(
-        (1, ny), dtype=dtype)] * nz
-    bc_p_y_low = [-new_rhs_mean / 6. * dy * ly * tf.ones(
-        (nx, 1), dtype=dtype)] * nz
-    bc_p_y_high = [new_rhs_mean / 6. * dy * ly * tf.ones(
-        (nx, 1), dtype=dtype)] * nz
-    bc_p_z = new_rhs_mean / 6. * dz * lz * tf.ones((nx, ny), dtype=dtype)
+    bc_p_x_low = [
+        -new_rhs_mean / 6.0 * dx * lx * tf.ones((1, ny), dtype=dtype)
+    ] * nz
+    bc_p_x_high = [
+        new_rhs_mean / 6.0 * dx * lx * tf.ones((1, ny), dtype=dtype)
+    ] * nz
+    bc_p_y_low = [
+        -new_rhs_mean / 6.0 * dy * ly * tf.ones((nx, 1), dtype=dtype)
+    ] * nz
+    bc_p_y_high = [
+        new_rhs_mean / 6.0 * dy * ly * tf.ones((nx, 1), dtype=dtype)
+    ] * nz
+    bc_p_z = new_rhs_mean / 6.0 * dz * lz * tf.ones((nx, ny), dtype=dtype)
 
     bc_p = [
         [
-            (halo_exchange.BCType.NEUMANN, [
-                bc_p_x_low,
-            ] * halo_width),
-            (halo_exchange.BCType.NEUMANN, [
-                bc_p_x_high,
-            ] * halo_width),
+            (
+                halo_exchange.BCType.NEUMANN,
+                [
+                    bc_p_x_low,
+                ]
+                * halo_width,
+            ),
+            (
+                halo_exchange.BCType.NEUMANN,
+                [
+                    bc_p_x_high,
+                ]
+                * halo_width,
+            ),
         ],
         [
-            (halo_exchange.BCType.NEUMANN, [
-                bc_p_y_low,
-            ] * halo_width),
-            (halo_exchange.BCType.NEUMANN, [
-                bc_p_y_high,
-            ] * halo_width),
+            (
+                halo_exchange.BCType.NEUMANN,
+                [
+                    bc_p_y_low,
+                ]
+                * halo_width,
+            ),
+            (
+                halo_exchange.BCType.NEUMANN,
+                [
+                    bc_p_y_high,
+                ]
+                * halo_width,
+            ),
         ],
         [
-            (halo_exchange.BCType.NEUMANN, [
-                -bc_p_z,
-            ] * halo_width),
-            (halo_exchange.BCType.NEUMANN, [
-                bc_p_z,
-            ] * halo_width),
+            (
+                halo_exchange.BCType.NEUMANN,
+                [
+                    -bc_p_z,
+                ]
+                * halo_width,
+            ),
+            (
+                halo_exchange.BCType.NEUMANN,
+                [
+                    bc_p_z,
+                ]
+                * halo_width,
+            ),
         ],
     ]
     return halo_exchange.inplace_halo_exchange(
@@ -143,13 +156,19 @@ def halo_update_for_compatibility_fn(
         replica_dims=(0, 1, 2),
         periodic_dims=(False, False, False),
         boundary_conditions=bc_p,
-        width=halo_width)
+        width=halo_width,
+    )
 
   return halo_update_fn
 
 
-class JacobiSolver(base_poisson_solver.PoissonSolver):
-  """A library of solving the Poisson equation with weighted Jacobi method."""
+class PlainPoissonForPressure(base_poisson_solver.PoissonSolver):
+  """Interface for SwirlLM to the Plain Poisson Jacobi Solver.
+
+  Solve the Poisson equation that arises for the pressure correction in the
+  Navier-Stokes formulation used in SwirlLM.  This class acts to adapt the
+  interface of the Poisson Solver to that expected by SwirlLM.
+  """
 
   def __init__(
       self,
@@ -157,121 +176,24 @@ class JacobiSolver(base_poisson_solver.PoissonSolver):
       kernel_op: get_kernel_fn.ApplyKernelOp,
       solver_option: poisson_solver_pb2.PoissonSolver,
   ):
-    """Initializes the Jacobi solver for the Poisson equation."""
     super().__init__(params, kernel_op, solver_option)
-
-    self._kernel_op.add_kernel({'weighted_sum_121': ([1.0, 2.0, 1.0], 1)})
-    self._omega = solver_option.jacobi.omega
-    self._num_iters = solver_option.jacobi.max_iterations
     self._halo_width = solver_option.jacobi.halo_width
-
-    self._factor_b = 0.5 / (params.dx**-2 + params.dy**-2 + params.dz**-2)
-    self._factor_x = params.dx**2 / self._factor_b
-    self._factor_y = params.dy**2 / self._factor_b
-    self._factor_z = params.dz**2 / self._factor_b
-
-  def _poisson_step(
-      self,
-      p: FlowFieldVal,
-      rhs: FlowFieldVal,
-      halo_update_fn: Callable[[FlowFieldVal], FlowFieldVal],
-  ) -> FlowFieldVal:
-    """Computes the pressure correction for the next sub-iteration."""
-    # Compute the right hand side function for interior points.
-    p = halo_update_fn(p)
-
-    p_terms = (
-        self._kernel_op.apply_kernel_op_x(p, 'kSx'),
-        self._kernel_op.apply_kernel_op_y(p, 'kSy'),
-        self._kernel_op.apply_kernel_op_z(p, 'kSz', 'kSzsh'),
-        rhs)
-
-    p_interior = tf.nest.map_structure(
-        lambda fx, fy, fz, fb: (  # pylint: disable=g-long-lambda
-            fx / self._factor_x
-            + fy / self._factor_y
-            + fz / self._factor_z
-            - self._factor_b * fb
-        ),
-        *p_terms
+    self._grid_spacings = params.grid_spacings
+    self._plain_poisson_jacobi_solver = jacobi_solver_impl.PlainPoisson(
+        self._grid_spacings, kernel_op, solver_option
     )
 
-    return tf.nest.map_structure(
-        lambda p_interior_i, p_i: (  # pylint: disable=g-long-lambda
-            self._omega * p_interior_i + (1.0 - self._omega) * p_i),
-        p_interior, p)
-
-  def _variable_coefficient_poisson_step(
-      self,
-      p: FlowFieldVal,
-      w: FlowFieldVal,
-      rhs: FlowFieldVal,
-      halo_update_fn: Callable[[FlowFieldVal], FlowFieldVal],
-  ) -> FlowFieldVal:
-    """Solves the variable coefficient Poisson equation for one step."""
-    p = halo_update_fn(p)
-
-    delta2_inv = (1.0 / self._params.dx**2, 1.0 / self._params.dy**2,
-                  1.0 / self._params.dz**2)
-
-    # Compute the diagonal factor.
-    factor_diag = (
-        tf.nest.map_structure(
-            lambda ws: 0.5 * delta2_inv[0] * ws,
-            self._kernel_op.apply_kernel_op_x(w, 'weighted_sum_121x')),
-        tf.nest.map_structure(
-            lambda ws: 0.5 * delta2_inv[1] * ws,
-            self._kernel_op.apply_kernel_op_y(w, 'weighted_sum_121y')),
-        tf.nest.map_structure(
-            lambda ws: 0.5 * delta2_inv[2] * ws,
-            self._kernel_op.apply_kernel_op_z(w, 'weighted_sum_121z',
-                                              'weighted_sum_121zsh')),
-    )
-    factor_diag_sum = tf.nest.map_structure(lambda a, b, c: a + b + c,
-                                            *factor_diag)
-
-    # Compute factors for the off-diagonal terms.
-    # pylint: disable=g-long-lambda
-    sum_op = (
-        lambda f: tf.nest.map_structure(
-            lambda fs: 0.5 * delta2_inv[0] * fs,
-            self._kernel_op.apply_kernel_op_x(f, 'kSx')),
-        lambda f: tf.nest.map_structure(
-            lambda fs: 0.5 * delta2_inv[1] * fs,
-            self._kernel_op.apply_kernel_op_y(f, 'kSy')),
-        lambda f: tf.nest.map_structure(
-            lambda fs: 0.5 * delta2_inv[2] * fs,
-            self._kernel_op.apply_kernel_op_z(f, 'kSz', 'kSzsh')),
-    )
-    # pylint: enable=g-long-lambda
-
-    p_factor = [sum_op_i(p) for sum_op_i in sum_op]
-    p_sum = tf.nest.map_structure(lambda a, b, c: a + b + c, *p_factor)
-
-    w_p = tf.nest.map_structure(tf.math.multiply, w, p)
-    w_p_factor = [sum_op_i(w_p) for sum_op_i in sum_op]
-    w_p_sum = tf.nest.map_structure(lambda a, b, c: a + b + c, *w_p_factor)
-
-    rhs_factor = tf.nest.map_structure(
-        lambda rhs_i, w_i, p_s, w_p_s: -rhs_i + w_i * p_s + w_p_s, rhs, w,
-        p_sum, w_p_sum)
-
-    p_new = tf.nest.map_structure(tf.math.divide, rhs_factor, factor_diag_sum)
-
-    return tf.nest.map_structure(
-        lambda p_0, p_n: self._omega * p_n + (1.0 - self._omega) * p_0, p,
-        p_new)
-
+  @override
   def solve(
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
       rhs: FlowFieldVal,
       p0: FlowFieldVal,
-      halo_update_fn: Optional[_HaloUpdateFn] = None,
-      internal_dtype: Optional[tf.dtypes.DType] = None,
-      additional_states: Optional[FlowFieldMap] = None,
-  ) -> _PoissonSolverSolution:
+      halo_update_fn: _HaloUpdateFn | None = None,
+      internal_dtype: tf.dtypes.DType | None = None,
+      additional_states: FlowFieldMap | None = None,
+  ) -> PoissonSolverSolution:
     """Solves the Poisson equation with the Jacobi iterative method.
 
     Args:
@@ -279,7 +201,7 @@ class JacobiSolver(base_poisson_solver.PoissonSolver):
       replicas: A numpy array that maps a replica's grid coordinate to its
         replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 1.
       rhs: A 3D field stored in a list of `tf.Tensor` that represents the right
-        hand side tensor `b` in the Poisson equation.
+        hand side tensor in the Poisson equation.
       p0: A 3D field stored in a list of `tf.Tensor` that provides initial guess
         to the Poisson equation.
       halo_update_fn: A function that updates the halo of the input.
@@ -296,34 +218,301 @@ class JacobiSolver(base_poisson_solver.PoissonSolver):
         2. Number of iterations for the computation
     """
     del internal_dtype
+    rhs_mean = common_ops.global_mean(rhs, replicas, (self._halo_width,) * 3)
+    halo_update_for_compatibility = halo_update_for_compatibility_fn(
+        replica_id,
+        replicas,
+        replicas.shape,
+        rhs_mean,
+        self._halo_width,
+        self._grid_spacings[0],
+        self._grid_spacings[1],
+        self._grid_spacings[2],
+    )
+
+    halo_update = (
+        halo_update_fn if halo_update_fn else halo_update_for_compatibility
+    )
+
+    return self._plain_poisson_jacobi_solver.solve(rhs, p0, halo_update)
+
+
+class VariableCoefficientForPressure(base_poisson_solver.PoissonSolver):
+  """Interface for SwirlLM to the Variable Coefficient Jacobi Solver.
+
+  Solve the Poisson equation that arises for the pressure correction in the
+  Navier-Stokes formulation used in SwirlLM.  This class acts to adapt the
+  interface of the Poisson Solver to that expected by SwirlLM.
+  """
+
+  def __init__(
+      self,
+      params: grid_parametrization.GridParametrization,
+      kernel_op: get_kernel_fn.ApplyKernelOp,
+      solver_option: poisson_solver_pb2.PoissonSolver,
+  ):
+    super().__init__(params, kernel_op, solver_option)
+    self._halo_width = solver_option.jacobi.halo_width
+    self._grid_spacings = params.grid_spacings
+    self._variable_coefficient_jacobi_solver = (
+        jacobi_solver_impl.VariableCoefficient(
+            self._grid_spacings, kernel_op, solver_option
+        )
+    )
+
+  @override
+  def solve(
+      self,
+      replica_id: tf.Tensor,
+      replicas: np.ndarray,
+      rhs: FlowFieldVal,
+      p0: FlowFieldVal,
+      halo_update_fn: _HaloUpdateFn | None = None,
+      internal_dtype: tf.dtypes.DType | None = None,
+      additional_states: FlowFieldMap | None = None,
+  ) -> PoissonSolverSolution:
+    """Solves the Poisson equation with the Jacobi iterative method.
+
+    Args:
+      replica_id: The ID of the replica.
+      replicas: A numpy array that maps a replica's grid coordinate to its
+        replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 1.
+      rhs: A 3D field stored in a list of `tf.Tensor` that represents the right
+        hand side tensor in the Poisson equation.
+      p0: A 3D field stored in a list of `tf.Tensor` that provides initial guess
+        to the Poisson equation.
+      halo_update_fn: A function that updates the halo of the input.
+      internal_dtype: Which tf.dtype to use {tf.float32, tf.float64}.
+        `tf.float32` is the default, mainly to be backward compatible, but
+        `tf.float64` is recommended to avoid numerical error accumulation and
+        get accurate evaluation of `L_p` norms.
+      additional_states: Additional static fields needed in the computation.
+
+    Returns:
+      A dict with the following elements:
+        1. A 3D tensor of the same shape as `rhs` that stores the solution to
+           the Poisson equation.
+        2. Number of iterations for the computation
+    """
+    del internal_dtype
+    assert (
+        additional_states is not None
+    ), '`additional_states` must be provided.'
+    assert (
+        VARIABLE_COEFF in additional_states
+    ), f'`{VARIABLE_COEFF}` must be a key in `additional_states`.'
 
     rhs_mean = common_ops.global_mean(rhs, replicas, (self._halo_width,) * 3)
 
     halo_update_for_compatibility = halo_update_for_compatibility_fn(
-        replica_id, replicas, replicas.shape, rhs_mean, self._halo_width,
-        self._params.dx, self._params.dy, self._params.dz)
+        replica_id,
+        replicas,
+        replicas.shape,
+        rhs_mean,
+        self._halo_width,
+        self._grid_spacings[0],
+        self._grid_spacings[1],
+        self._grid_spacings[2],
+    )
 
     halo_update = (
-        halo_update_fn if halo_update_fn else halo_update_for_compatibility)
+        halo_update_fn if halo_update_fn else halo_update_for_compatibility
+    )
 
-    if additional_states is not None and VARIABLE_COEFF in additional_states:
-      p_next = functools.partial(
-          self._variable_coefficient_poisson_step,
-          w=additional_states[VARIABLE_COEFF],
-          rhs=rhs,
-          halo_update_fn=halo_update)
-    else:
-      p_next = functools.partial(
-          self._poisson_step, rhs=rhs, halo_update_fn=halo_update)
+    w = additional_states[VARIABLE_COEFF]
+    return self._variable_coefficient_jacobi_solver.solve(
+        w, rhs, p0, halo_update
+    )
 
-    i0 = tf.constant(0)
-    stop_condition = lambda i, p: i < self._num_iters
-    body = lambda i, p: (i + 1, p_next(p))
 
-    iterations, p = tf.while_loop(
-        cond=stop_condition, body=body, loop_vars=(i0, p0), back_prop=False)
+class ThreeWeightForPressure(base_poisson_solver.PoissonSolver):
+  """Interface for SwirlLM to the Three-Weight Jacobi Solver.
 
-    return {
-        X: halo_update(p),
-        ITERATIONS: iterations,
-    }
+  Solves the Poisson equation that arises for the pressure correction in the
+  Navier-Stokes formulation used in SwirlLM, particularly for when stretched
+  grids are used. This class acts to adapt the interface of the Poisson Solver
+  to that expected by SwirlLM.
+  """
+
+  def __init__(
+      self,
+      params: parameters_lib.SwirlLMParameters,
+      kernel_op: get_kernel_fn.ApplyKernelOp,
+      solver_option: poisson_solver_pb2.PoissonSolver,
+  ):
+    super().__init__(params, kernel_op, solver_option)
+    # Tell the type checker the more precise type of `params` here compared to
+    # the base class.
+    self._params = cast(parameters_lib.SwirlLMParameters, self._params)
+
+    self._halo_width = solver_option.jacobi.halo_width
+    self._grid_spacings = params.grid_spacings
+    self._three_weight_jacobi_solver = jacobi_solver_impl.ThreeWeight(
+        self._grid_spacings, kernel_op, solver_option
+    )
+
+  @staticmethod
+  def _generate_weights_and_modified_rhs(
+      rhs: FlowFieldVal,
+      additional_states: FlowFieldMap,
+      use_3d_tf_tensor: bool,
+      use_stretched_grid: tuple[bool, bool, bool],
+      grid_dims: tuple[int, int, int],
+      solver_mode: thermodynamics_pb2.Thermodynamics.SolverMode,
+  ) -> tuple[FlowFieldVal, FlowFieldVal, FlowFieldVal, FlowFieldVal]:
+    """Generates the 3 weighting coefficients and the modified RHS.
+
+    Forms the weighting coefficients that arise in translating the Poisson
+    equation ∇²p = rhs (Low-Mach) or ∇・ρ∇p = rhs (anelastic) into
+    coordinate-dependent form, including stretched-grid scale factors.  The RHS
+    is also modified when stretched grid is used.
+
+    The stretched grid scale-factor arrays are stored in `additional_states`.
+    The weight coefficients `w0`, `w1`, `w2` are materialized here into 3D
+    fields because that is what the implementation of the 3-weight Jacobi solver
+    takes as input.
+
+    For low-mach:
+
+        w0 = h1 * h2 / h0
+        w1 = h0 * h2 / h1
+        w2 = h0 * h1 / h2
+        rhs *= h0 * h1 * h2
+
+    For anelastic: start with the coefficients in the low-mach case, and then
+    each weighting coefficient is multiplied by the reference density.
+
+        w0 *= rho_0
+        w1 *= rho_0
+        w2 *= rho_0
+
+
+    Args:
+      rhs: The RHS of the pressure equation
+      additional_states: Additional static fields needed in the computation.
+      use_3d_tf_tensor: Whether to use 3D tf.Tensor or 1D tf.Tensor.
+      use_stretched_grid: A tuple of booleans indicating whether to use a
+        stretched grid in each dimension.
+      grid_dims: A tuple of integers indicating the grid dimensions per replica.
+      solver_mode: The solver mode.
+
+    Returns:
+      A tuple of 4 elements: The 3 weighting coefficients w0, w1, w2, and the
+      modified rhs.
+    """
+    h = []
+    for dim in (0, 1, 2):
+      if use_stretched_grid[dim]:
+        h_key = stretched_grid_util.h_key(dim)
+        h.append(additional_states[h_key])
+      else:
+        n = grid_dims[dim]
+        ones_1d = tf.ones(n)
+        h.append(
+            common_ops.reshape_to_broadcastable(
+                ones_1d, dim, use_3d_tf_tensor
+            )
+        )
+
+    w0 = common_ops.map_structure_3d(lambda h0, h1, h2: h1 * h2 / h0, *h)
+    w1 = common_ops.map_structure_3d(lambda h0, h1, h2: h0 * h2 / h1, *h)
+    w2 = common_ops.map_structure_3d(lambda h0, h1, h2: h0 * h1 / h2, *h)
+
+    # Update the rhs for stretched-grid factors
+    rhs = common_ops.map_structure_3d(
+        lambda rhs, h0, h1, h2: rhs * h0 * h1 * h2,
+        rhs,
+        *h,
+    )
+
+    # For the anelastic case, all the weighting coefficients are multipled by
+    # the reference density.
+    multiply = lambda a, b: tf.nest.map_structure(tf.math.multiply, a, b)
+    if solver_mode == thermodynamics_pb2.Thermodynamics.ANELASTIC:
+      rho_0 = additional_states[VARIABLE_COEFF]
+      w0 = multiply(w0, rho_0)
+      w1 = multiply(w1, rho_0)
+      w2 = multiply(w2, rho_0)
+
+    return w0, w1, w2, rhs
+
+  @override
+  def solve(
+      self,
+      replica_id: tf.Tensor,
+      replicas: np.ndarray,
+      rhs: FlowFieldVal,
+      p0: FlowFieldVal,
+      halo_update_fn: _HaloUpdateFn | None = None,
+      internal_dtype: tf.dtypes.DType | None = None,
+      additional_states: FlowFieldMap | None = None,
+  ) -> PoissonSolverSolution:
+    """Solves the 3-weight Poisson equation with the Jacobi iterative method.
+
+    Args:
+      replica_id: The ID of the replica.
+      replicas: A numpy array that maps a replica's grid coordinate to its
+        replica_id, e.g. replicas[0, 0, 0] = 0, replicas[0, 0, 1] = 1.
+      rhs: A 3D field that represents the right hand side in the Poisson
+        equation.
+      p0: A 3D field that provides the initial guess to the Poisson equation.
+      halo_update_fn: A function that updates the halo of the input.
+      internal_dtype: Deprecated, do not use.
+      additional_states: Additional static fields needed in the computation.
+
+    Returns:
+      A dict with the following elements:
+        1. A 3D field of the same shape as `rhs` that stores the solution to
+           the Poisson equation.
+        2. Number of iterations for the computation
+    """
+    del internal_dtype
+    assert (
+        additional_states is not None
+    ), '`additional_states` must be provided.'
+
+    w0, w1, w2, rhs = self._generate_weights_and_modified_rhs(
+        rhs,
+        additional_states,
+        self._params.use_3d_tf_tensor,
+        self._params.use_stretched_grid,
+        (self._params.nx, self._params.ny, self._params.nz),
+        self._params.solver_mode,
+    )
+
+    rhs_mean = common_ops.global_mean(rhs, replicas, (self._halo_width,) * 3)
+
+    halo_update_for_compatibility = halo_update_for_compatibility_fn(
+        replica_id,
+        replicas,
+        replicas.shape,
+        rhs_mean,
+        self._halo_width,
+        self._grid_spacings[0],
+        self._grid_spacings[1],
+        self._grid_spacings[2],
+    )
+
+    halo_update = (
+        halo_update_fn if halo_update_fn else halo_update_for_compatibility
+    )
+
+    return self._three_weight_jacobi_solver.solve(
+        w0, w1, w2, rhs, p0, halo_update
+    )
+
+
+def jacobi_solver_factory(
+    params: parameters_lib.SwirlLMParameters,
+    kernel_op: get_kernel_fn.ApplyKernelOp,
+    solver_option: poisson_solver_pb2.PoissonSolver,
+) -> base_poisson_solver.PoissonSolver:
+  """Creates a Jacobi solver for pressure correction equation."""
+  if any(params.use_stretched_grid):
+    return ThreeWeightForPressure(params, kernel_op, solver_option)
+  elif params.solver_mode == thermodynamics_pb2.Thermodynamics.LOW_MACH:
+    return PlainPoissonForPressure(params, kernel_op, solver_option)
+  elif params.solver_mode == thermodynamics_pb2.Thermodynamics.ANELASTIC:
+    return VariableCoefficientForPressure(params, kernel_op, solver_option)
+  else:
+    raise ValueError(f'Unknown solver mode {params.solver_mode}.')

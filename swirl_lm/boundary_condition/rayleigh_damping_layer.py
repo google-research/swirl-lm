@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -446,7 +446,7 @@ class RayleighDampingLayer(object):
     beta_names_not_in_additional_states = (
         set(self._beta_name_by_var.values()) - set(additional_states.keys()))
     if beta_names_not_in_additional_states:
-      raise ValueError(f'{self._beta_names_not_in_additional_states} not found '
+      raise ValueError(f'{beta_names_not_in_additional_states} not found '
                        'in `additional_states.`')
 
     def add_to_additional_states(
@@ -454,10 +454,7 @@ class RayleighDampingLayer(object):
         value: FlowFieldVal,
     ) -> FlowFieldVal:
       """Adds two states elementwise."""
-      return [
-          state_1 + state_2
-          for state_1, state_2 in zip(additional_states[name], value)
-      ]
+      return tf.nest.map_structure(tf.math.add, additional_states[name], value)
 
     additional_states_updated = {}
     additional_states_updated.update(additional_states)
@@ -483,7 +480,9 @@ class RayleighDampingLayer(object):
           self._target_value_mean_dims_by_var[varname],
           target_val)
       if not self._is_primitive[varname]:
-        sponge_force = [rho * f for rho, f in zip(states['rho'], sponge_force)]
+        sponge_force = tf.nest.map_structure(
+            tf.math.multiply, states['rho'], sponge_force
+        )
       if self._target_status[sponge_name]:
         additional_states_updated.update({sponge_name: sponge_force})
       else:

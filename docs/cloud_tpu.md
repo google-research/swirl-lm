@@ -43,7 +43,7 @@ machine running the browser to Jupyter.
     TPU_FLAGS=--xla_jf_conv_full_precision=true
 
     gcloud compute tpus tpu-vm create $TPU --project=$PROJECT --zone=$ZONE \
-    --accelerator-type=$TYPE --version=tpu-vm-tf-2.11.0-pod \
+    --accelerator-type=$TYPE --version=tpu-vm-tf-2.14.0-pod \
     --metadata="tensorflow-env-vars=-e LIBTPU_INIT_ARGS=$TPU_FLAGS"
     ```
 
@@ -162,7 +162,7 @@ pod. For example, to set xla_jf_conv_full_precision to true:
 
 ```shell
 gcloud compute tpus tpu-vm create $TPU --project=$PROJECT --zone=$ZONE \
-  --accelerator-type=v3-32 --version=tpu-vm-tf-2.11.0-pod \
+  --accelerator-type=v3-32 --version=tpu-vm-tf-2.14.0-pod \
   --metadata="tensorflow-env-vars=-e LIBTPU_INIT_ARGS=--xla_jf_conv_full_precision=true"
 ```
 

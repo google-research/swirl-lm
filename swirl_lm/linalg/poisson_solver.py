@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -212,13 +212,24 @@ class FastDiagonalization(PoissonSolver):
 
     rhs_interior = common_ops.strip_halos(rhs, (self._halo_width,) * 3)
 
-    p_interior = tf.unstack(solver(tf.stack(rhs_interior)))
-    paddings = tf.constant([[self._halo_width, self._halo_width],
-                            [self._halo_width, self._halo_width]])
-
-    p = [tf.pad(p_i, paddings=paddings, mode='CONSTANT') for p_i in p_interior]
-    p = [tf.zeros_like(rhs[0])
-        ] * self._halo_width + p + [tf.zeros_like(rhs[0])] * self._halo_width
+    if isinstance(rhs_interior, tf.Tensor):
+      p_interior = solver(rhs_interior)
+      paddings = tf.constant([[self._halo_width, self._halo_width]] * 3)
+      p = tf.pad(p_interior, paddings=paddings, mode='CONSTANT')
+    else:
+      p_interior = tf.unstack(solver(tf.stack(rhs_interior)))
+      paddings = tf.constant([
+          [self._halo_width, self._halo_width],
+          [self._halo_width, self._halo_width],
+      ])
+      p = [
+          tf.pad(p_i, paddings=paddings, mode='CONSTANT') for p_i in p_interior
+      ]
+      p = (
+          [tf.zeros_like(rhs[0])] * self._halo_width
+          + p
+          + [tf.zeros_like(rhs[0])] * self._halo_width
+      )
 
     # Enforce Neumann boundary condition for the Poisson system.
     bc_p_rhs = [[(halo_exchange.BCType.NEUMANN, 0.),
@@ -454,7 +465,7 @@ class ConjugateGradient(PoissonSolver):
           partial_laplacian_rhs = self._laplacian_terms(
               rhs, halo_update=None, indices=indices)
 
-          return [l_i + r_i for l_i, r_i in zip(*partial_laplacian_rhs)]  # pytype: disable=bad-unpacking
+          return tf.nest.map_structure(tf.math.add, *partial_laplacian_rhs)  # pytype: disable=bad-unpacking
 
         # Optional taylor expansion, up to order 6 now.
         max_taylor_order = 6
@@ -474,12 +485,14 @@ class ConjugateGradient(PoissonSolver):
         # Case 1: Taylor expansion.
         if taylor_order >= 1:
           # pylint: disable=g-complex-comprehension
-          term = [
-              # Add values with smaller abs values first.
-              (((((o6_i - o5_i) + o4_i) - o3_i) + o2_i) - o1_i) + nested_rhs_i
-              for nested_rhs_i, o1_i, o2_i, o3_i, o4_i, o5_i, o6_i in zip(
-                  *([nested_rhs] + terms_to_o_n))
-          ]
+          # Add values with smaller abs values first.
+          term = tf.nest.map_structure(
+              lambda nested_rhs_i, o1_i, o2_i, o3_i, o4_i, o5_i, o6_i: (
+                  ((((o6_i - o5_i) + o4_i) - o3_i) + o2_i) - o1_i
+              )
+              + nested_rhs_i,
+              *([nested_rhs] + terms_to_o_n),
+          )
           # pylint: enable=g-complex-comprehension
           return band_matrix_terms(halo_update(term), [dominating_index])[0]
 
@@ -488,10 +501,9 @@ class ConjugateGradient(PoissonSolver):
           # pylint: disable=unbalanced-tuple-unpacking
           rhs_x, rhs_y, rhs_z = band_matrix_terms(nested_rhs)
           # pylint: enable=unbalanced-tuple-unpacking
-          return [
-              rhs_x_i + rhs_y_i + rhs_z_i
-              for rhs_x_i, rhs_y_i, rhs_z_i in zip(rhs_x, rhs_y, rhs_z)
-          ]
+          return tf.nest.map_structure(
+              lambda a, b, c: a + b + c, rhs_x, rhs_y, rhs_z
+          )
 
         return band_matrix_terms(nested_rhs, [dominating_index])[0]
 
@@ -656,14 +668,14 @@ def validate_cg_config(solver_option: poisson_solver_pb2.PoissonSolver) -> None:
 
 
 def poisson_solver_factory(
-    params: grid_parametrization.GridParametrization,
+    params: parameters_lib.SwirlLMParameters,
     kernel_op: get_kernel_fn.ApplyKernelOp,
     solver_option: poisson_solver_pb2.PoissonSolver,
 ) -> PoissonSolver:
   """Constructs an object handler for the Poisson solver.
 
   Args:
-    params: The grid parametrization.
+    params: The SwirlLM parameters.
     kernel_op: An object holding a library of kernel operations.
     solver_option: The option of the selected solver to be used to solve the
       Poisson equation.
@@ -675,7 +687,7 @@ def poisson_solver_factory(
     ValueError: If the Poisson solver field is not found.
   """
   if solver_option.HasField('jacobi'):
-    return jacobi_solver.JacobiSolver(params, kernel_op, solver_option)
+    return jacobi_solver.jacobi_solver_factory(params, kernel_op, solver_option)
   elif solver_option.HasField('fast_diagonalization'):
     return FastDiagonalization(params, kernel_op, solver_option)
   elif solver_option.HasField('conjugate_gradient'):

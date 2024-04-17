@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -32,31 +32,34 @@ FlowFieldMap = types.FlowFieldMap
 _DTYPE = tf.float32
 
 
-class Probe(object):
+class Probe:
   """A library for getting values from the flow field."""
 
   def __init__(self, params: parameters_lib.SwirlLMParameters):
     """Initializes the probe library."""
-    self.variable_names = params.probe.variable_name
+    assert (
+        probe := params.probe
+    ) is not None, 'Probe must be set in the config.'
+    self.variable_names = probe.variable_name
 
     domain_size = (params.lx, params.ly, params.lz)
     mesh_size_local = (params.nx, params.ny, params.nz)
     partition = (params.cx, params.cy, params.cz)
 
-    self.c_indices = np.zeros((len(params.probe.location), 3), dtype=np.int32)
-    self.indices = np.zeros((len(params.probe.location), 3), dtype=np.int32)
-    for i in range(len(params.probe.location)):
+    self.c_indices = np.zeros((len(probe.location), 3), dtype=np.int32)
+    self.indices = np.zeros((len(probe.location), 3), dtype=np.int32)
+    for i in range(len(probe.location)):
       location = np.array([[
-          params.probe.location[i].dim_0, params.probe.location[i].dim_1,
-          params.probe.location[i].dim_2
+          probe.location[i].dim_0, probe.location[i].dim_1,
+          probe.location[i].dim_2
       ]])
       self.c_indices[i, :], self.indices[i, :] = (
           data_processing.coordinates_to_indices(location, domain_size,
                                                  mesh_size_local, partition,
                                                  params.halo_width))
 
-    self.start_step_id = params.probe.start_step_id
-    self.nt = params.probe.nt
+    self.start_step_id = probe.start_step_id
+    self.nt = probe.nt
 
   def probe_name(self, index: int) -> Text:
     """Generates the variable name for the `index`th probe."""

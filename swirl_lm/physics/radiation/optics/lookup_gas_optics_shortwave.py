@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -55,7 +55,7 @@ class LookupGasOpticsShortwave(gas_base.AbstractLookupGasOptics):
   def _load_data(
       cls,
       ds: nc.Dataset,
-      tables: types.VariableMap,
+      tables: types.TensorMap,
       dims: types.DimensionMap,
   ) -> Dict[str, Any]:
     """Preprocesses the RRTMGP shortwave gas optics data.
@@ -63,15 +63,15 @@ class LookupGasOpticsShortwave(gas_base.AbstractLookupGasOptics):
     Args:
       ds: The original netCDF Dataset containing the RRTMGP shortwave optics
         data.
-      tables: The extracted data as a dictionary of `tf.Variable`s.
+      tables: The extracted data as a dictionary of `tf.Tensor`s.
       dims: A dictionary containing dimension information for the tables.
 
     Returns:
       A dictionary containing dimension information and the preprocessed RRTMGP
-      data as `tf.Variable`s.
+      data as `tf.Tensor`s.
     """
     data = super()._load_data(ds, tables, dims)
-    solar_src = tables['solar_source']
+    solar_src = tables['solar_source_quiet']
     data['solar_src_tot'] = tf.math.reduce_sum(solar_src)
     data['solar_src_scaled'] = solar_src / data['solar_src_tot']
     data['rayl_lower'] = tables['rayl_lower']

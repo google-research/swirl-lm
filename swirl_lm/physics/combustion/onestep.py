@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -234,10 +234,14 @@ def one_step_reaction_integration(
 
   dt = delta_t / nt
 
-  if params.thermodynamics.WhichOneof('thermodynamics_type') != 'ideal_gas_law':
+  assert (
+      thermodynamics_ := params.thermodynamics
+  ) is not None, 'Thermodynamics must be set in the config.'
+  if thermodynamics_.WhichOneof('thermodynamics_type') != 'ideal_gas_law':
     raise ValueError(
         'The thermodynamics model has to be `ideal_gas_law` to use the one-step'
-        ' chemistry model.')
+        ' chemistry model.'
+    )
   thermodynamics = ideal_gas.IdealGas(params)
 
   states0 = {

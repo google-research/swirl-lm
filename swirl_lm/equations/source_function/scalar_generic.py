@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,19 +15,21 @@
 """A class that computes terms in a generic scalar transport equation."""
 
 import abc
+from collections.abc import Sequence
 import copy
 from typing import List, Tuple
-
 from absl import logging
 import numpy as np
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.boundary_condition import boundary_condition_utils
 from swirl_lm.equations import common
+from swirl_lm.equations import scalars_pb2
 from swirl_lm.numerics import convection
 from swirl_lm.numerics import diffusion
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.turbulence import sgs_model
 from swirl_lm.utility import get_kernel_fn
+from swirl_lm.utility import stretched_grid_util
 from swirl_lm.utility import types
 import tensorflow as tf
 
@@ -35,6 +37,20 @@ import tensorflow as tf
 # absolute value of a gravity component is less than this threshold, it is
 # considered as 0 when computing the free slip wall boundary condition.
 _G_THRESHOLD = 1e-6
+
+
+def _get_config_for_scalar(
+    scalars: Sequence[scalars_pb2.Scalar],
+    name: str,
+) -> scalars_pb2.Scalar:
+  """Gets the config for a scalar based on the name."""
+  for scalar in scalars:
+    if scalar.name == name:
+      return scalar
+  raise AssertionError(
+      f'{name} is not configured. Valid scalars are:'
+      f' {tuple(scalar.name for scalar in scalars)}.'
+  )
 
 
 class ScalarGeneric(abc.ABC):
@@ -53,48 +69,36 @@ class ScalarGeneric(abc.ABC):
     self._bc_types = copy.deepcopy(params.bc_type)
     self._scalar_name = scalar_name
     self._thermodynamics = thermodynamics
+    self._deriv_lib = params.deriv_lib
+    self._h = params.grid_spacings
 
-    self._h = (self._params.dx, self._params.dy, self._params.dz)
-
-    self._scalar_params = None
-    for scalar in self._params.scalars:
-      if scalar.name == self._scalar_name:
-        self._scalar_params = scalar
-        break
-    assert (
-        self._scalar_params is not None
-    ), f'{self._scalar_name} is not configured.'
+    self._scalar_params = _get_config_for_scalar(
+        self._params.scalars, self._scalar_name
+    )
 
     for override_bc in self._scalar_params.override_bc_type:
       dim = override_bc.dim
       face = override_bc.face
-      logging.info('BC type for scalar: %s '
-                   'will be reset to %s (originally %s) for dimension %d at '
-                   'face %d', self._scalar_name,
-                   str(boundary_condition_utils.BoundaryType.UNKNOWN),
-                   str(self._bc_types[dim][face]), dim, face)
-      self._bc_types[dim][face] = (
-          boundary_condition_utils.BoundaryType.UNKNOWN)
+      logging.info(
+          'BC type for scalar: %s '
+          'will be reset to %s (originally %s) for dimension %d at '
+          'face %d',
+          self._scalar_name,
+          str(boundary_condition_utils.BoundaryType.UNKNOWN),
+          str(self._bc_types[dim][face]),
+          dim,
+          face,
+      )
+      self._bc_types[dim][face] = boundary_condition_utils.BoundaryType.UNKNOWN
 
-    # Find the direction of gravity. Only vector along a particular dimension is
-    # considered currently.
-    self._g_vec = (
-        self._params.gravity_direction if self._params.gravity_direction else [
-            0.0,
-        ] * 3)
-    self._g_dim = None
-    for i in range(3):
-      if np.abs(np.abs(self._g_vec[i]) - 1.0) < _G_THRESHOLD:
-        self._g_dim = i
-        break
+    # Dimension in which gravity acts.
+    self._g_dim = params.g_dim
 
     # Prepare diffusion related models.
     self._diffusion_fn = diffusion.diffusion_scalar(self._params)
     self._use_sgs = self._params.use_sgs
-    filter_widths = (self._params.dx, self._params.dy, self._params.dz)
     if self._use_sgs:
-      self._sgs_model = sgs_model.SgsModel(self._kernel_op, filter_widths,
-                                           params.sgs_model)
+      self._sgs_model = sgs_model.SgsModel(self._kernel_op, params)
 
   def _get_momentum_for_convection(
       self,
@@ -129,7 +133,7 @@ class ScalarGeneric(abc.ABC):
 
     return phi
 
-  def _get_diffusivity(
+  def get_diffusivity(
       self,
       replicas: np.ndarray,
       phi: types.FlowFieldVal,
@@ -137,7 +141,6 @@ class ScalarGeneric(abc.ABC):
       additional_states: types.FlowFieldMap,
   ) -> types.FlowFieldVal:
     """Computes the overall diffusivity.
-
 
     Args:
       replicas: A 3D array specifying the topology of the partition.
@@ -149,12 +152,11 @@ class ScalarGeneric(abc.ABC):
       The overall diffusivity of the scalar at the present iteration.
     """
     if self._use_sgs:
-      momentum = tuple(
-          states[key]
-          for key in (common.KEY_RHO_U, common.KEY_RHO_V, common.KEY_RHO_W)
+      velocity = tuple(
+          states[key] for key in (common.KEY_U, common.KEY_V, common.KEY_W)
       )
       diff_t = self._sgs_model.turbulent_diffusivity(
-          (phi,), momentum, replicas, additional_states
+          (phi,), additional_states, velocity, replicas
       )
       diffusivity = tf.nest.map_structure(
           lambda diff_t_i: self._params.diffusivity(self._scalar_name)  # pylint: disable=g-long-lambda
@@ -167,6 +169,12 @@ class ScalarGeneric(abc.ABC):
           * tf.ones_like(sc),
           phi,
       )
+
+    if self._params.turbulent_combustion is not None:
+      diffusivity = self._params.turbulent_combustion.update_diffusivity(
+          diffusivity, states, additional_states
+      )
+
     return diffusivity
 
   def _get_wall_diffusive_flux_helper_variables(
@@ -185,9 +193,7 @@ class ScalarGeneric(abc.ABC):
     Returns:
       A dictionary of variables required by wall diffusive flux closure models.
     """
-    helper_variables = {
-        key: states[key] for key in common.KEYS_VELOCITY
-    }
+    helper_variables = {key: states[key] for key in common.KEYS_VELOCITY}
 
     # Because only the layer close to the ground will be used in the Monin
     # Obukhov similarity closure model, the temperature and potential
@@ -230,6 +236,11 @@ class ScalarGeneric(abc.ABC):
     phi_convect = self._get_scalar_for_convection(
         phi, states, additional_states
     )
+    helper_variables = {}
+    # Helper variables required for stretched grids.
+    helper_variables.update(
+        stretched_grid_util.get_helper_variables(additional_states)
+    )
 
     def convection_1d(dim: int) -> types.FlowFieldVal:
       """Computes the convection term for the conservative scalar."""
@@ -238,6 +249,7 @@ class ScalarGeneric(abc.ABC):
 
       return convection.convection_term(
           self._kernel_op,
+          self._deriv_lib,
           replica_id,
           replicas,
           phi_convect,
@@ -246,13 +258,15 @@ class ScalarGeneric(abc.ABC):
           self._h[dim],
           self._params.dt,
           dim,
+          helper_variables,
           bc_types=tuple(self._bc_types[dim]),
           varname=momentum_component,
           halo_width=self._params.halo_width,
           scheme=self._scalar_params.scheme,
           flux_scheme=self._params.numerical_flux,
           src=None,
-          apply_correction=False)
+          apply_correction=False,
+      )
 
     return [convection_1d(dim) for dim in range(3)]
 
@@ -283,6 +297,11 @@ class ScalarGeneric(abc.ABC):
 
     helper_variables = {}
 
+    # Helper variables required for stretched grids.
+    helper_variables.update(
+        stretched_grid_util.get_helper_variables(additional_states)
+    )
+
     # Helper variables required by the Monin-Obukhov similarity theory.
     helper_variables.update(
         self._get_wall_diffusive_flux_helper_variables(
@@ -299,14 +318,15 @@ class ScalarGeneric(abc.ABC):
 
     return self._diffusion_fn(
         self._kernel_op,
+        self._deriv_lib,
         replica_id,
         replicas,
         phi_diffuse,
         states[common.KEY_RHO],
         additional_states['diffusivity'],
-        self._h,
         scalar_name=self._scalar_name,
-        helper_variables=helper_variables)
+        helper_variables=helper_variables,
+    )
 
   def source_fn(
       self,

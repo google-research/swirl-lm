@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,12 +14,55 @@
 
 """A library for the interpolation schemes."""
 
+import enum
 import functools
-from typing import Sequence, Tuple
+from typing import Sequence, Tuple, TypeAlias
 
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import types
 import tensorflow as tf
+
+FlowFieldVal: TypeAlias = types.FlowFieldVal
+
+
+class FluxLimiterType(enum.Enum):
+  """Defines types of flux limiters."""
+  VAN_LEER = 'van_leer'
+  MUSCL = 'muscl'
+
+
+def centered_node_to_face(
+    v_node: FlowFieldVal,
+    dim: int,
+    kernel_op: get_kernel_fn.ApplyKernelOp,
+) -> FlowFieldVal:
+  """Performs centered 2nd-order interpolation from nodes to faces.
+
+  * An array evaluated on nodes has index i <==> coordinate location x_i
+  * An array evaluated on faces has index i <==> coordinate location x_{i-1/2}
+
+  E.g., interpolating in dim 0:
+    v_face[i, j, k] = 0.5 * (v_node[i, j, k] + v_node[i-1, j, k])
+
+  Args:
+    v_node: A 3D tensor, evaluated on nodes.
+    dim: The dimension along with the interpolation is performed.
+    kernel_op: Kernel operation library.
+
+  Returns:
+    A 3D tensor interpolated from `v_node`, which is evaluted on faces in
+    dimension `dim`, and evaluated on nodes in other dimensions.
+  """
+  if dim == 0:
+    sum_backward_v = kernel_op.apply_kernel_op_x(v_node, 'ksx')
+  elif dim == 1:
+    sum_backward_v = kernel_op.apply_kernel_op_y(v_node, 'ksy')
+  elif dim == 2:
+    sum_backward_v = kernel_op.apply_kernel_op_z(v_node, 'ksz', 'kszsh')
+  else:
+    raise ValueError(f'Unsupported dim: {dim}.  `dim` must be 0, 1, or 2.')
+  v_face = tf.nest.map_structure(lambda x: 0.5 * x, sum_backward_v)
+  return v_face
 
 
 def _get_weno_kernel_op(
@@ -239,13 +282,23 @@ def _interpolate_with_weno_weights(
     if isinstance(v, tf.Tensor):
       v_neg = tf.concat([v[:, :1, :], v_neg[:, :-1, :]], 1)
     else:  # v and v_neg are lists.
-      v_neg = tf.nest.map_structure(
-          lambda u, v: tf.concat([v[:1, :], u[:-1, :]], 0), v_neg, v
-      )
+      def update_x0(v_n, v_0):
+        res = tf.roll(v_n, 1, axis=0)
+        return tf.tensor_scatter_nd_update(res, [[0]], [v_0[0, :]])
+
+      v_neg = tf.nest.map_structure(update_x0, v_neg, v)
   elif dim == 'y':
-    v_neg = tf.nest.map_structure(
-        lambda u, v: tf.concat([v[..., :1], u[..., :-1]], -1), v_neg, v
-    )
+    if isinstance(v, tf.Tensor):
+      v_neg = tf.concat([v[:, :, :1], v_neg[:, :, :-1]], 2)
+    else:  # v and v_neg are lists.
+      def update_y0(v_n, v_0):
+        res = tf.roll(v_n, 1, axis=1)
+        res_t = tf.tensor_scatter_nd_update(
+            tf.transpose(res), [[0]], [v_0[:, 0]]
+        )
+        return tf.transpose(res_t)
+
+      v_neg = tf.nest.map_structure(update_y0, v_neg, v)
   else:  # dim == 'z':
     if isinstance(v, tf.Tensor):
       v_neg = tf.concat([v[:1, ...], v_neg[:-1, ...]], 0)
@@ -264,7 +317,7 @@ def weno(
 
   Args:
     v: A 3D tensor to which the interpolation is performed.
-    dim: The dimension along with the interpolation is performed.
+    dim: The dimension along which the interpolation is performed.
     k: The order/stencil width of the interpolation.
 
   Returns:
@@ -280,3 +333,110 @@ def weno(
 
   return v_neg, v_pos
 
+
+def flux_limiter(
+    v: types.FlowFieldVal,
+    dim: str,
+    limiter_type: FluxLimiterType,
+) -> tuple[FlowFieldVal, FlowFieldVal]:
+  """Performs interpolation using a limiter scheme.
+
+  Computes the interpolation of the field variable to the faces using 2nd-order
+  Upwind + a flux limiter.
+
+  Args:
+    v: A 3D tensor to which the interpolation is performed.
+    dim: The dimension along which the interpolation is performed.
+    limiter_type: The type of flux limiter.
+
+  Returns:
+    A tuple that represents the interpolated values of a variable onto faces
+    that are normal to `dim`, with the first element being interpolated from the
+    upwind/left-biased stencil and the second from the downwind/right-biased
+    stencil.
+
+  Raises:
+    NotImplementedError if `limiter_type` is not one of the follwoing:
+      'VAN_LEER', 'MUSCL'.
+    ValueError if `dim` is not one of 'x', 'y', and 'z'.
+  """
+
+  def van_leer(r: FlowFieldVal) -> FlowFieldVal:
+    """Computes the Van Leer flux limiter."""
+    van_leer_fn = lambda x: 2 * x / (1 + x)
+
+    return tf.nest.map_structure(
+        lambda r_: tf.where(tf.greater_equal(r_, 0.0), van_leer_fn(r_), 0.0), r
+    )
+
+  def muscl(r: FlowFieldVal) -> FlowFieldVal:
+    """Computes the MUSCL flux limiter."""
+    min_arg_1 = tf.nest.map_structure(lambda r_: 2.0 * r_, r)
+    min_arg_2 = tf.nest.map_structure(lambda r_: 0.5 * (1.0 + r_), r)
+    min_arg = tf.nest.map_structure(tf.math.minimum, min_arg_1, min_arg_2)
+    return tf.nest.map_structure(
+        lambda min_arg_: tf.math.maximum(
+            tf.zeros_like(min_arg_),
+            tf.math.minimum(2.0 * tf.ones_like(min_arg_), min_arg_),
+        ),
+        min_arg,
+    )
+
+  if limiter_type == FluxLimiterType.VAN_LEER:
+    limiter = van_leer
+  elif limiter_type == FluxLimiterType.MUSCL:
+    limiter = muscl
+  else:
+    raise NotImplementedError(
+        f'{limiter_type.name} is not supported. Available flux limiters are:'
+        f' {list(FluxLimiterType)}'
+    )
+
+  kernel_op = get_kernel_fn.ApplyKernelConvOp(
+      4, {'shift': ([1.0, 0.0, 0.0], 1),}
+  )
+
+  if dim == 'x':
+    shift_op = ['shiftx']
+    backward_diff = ['kdx']
+    forward_diff = ['kdx+']
+    kernel_fn = kernel_op.apply_kernel_op_x
+  elif dim == 'y':
+    shift_op = ['shifty']
+    backward_diff = ['kdy']
+    forward_diff = ['kdy+']
+    kernel_fn = kernel_op.apply_kernel_op_y
+  elif dim == 'z':
+    shift_op = ['shiftz', 'shiftzsh']
+    backward_diff = ['kdz', 'kdzsh']
+    forward_diff = ['kdz+', 'kdz+sh']
+    kernel_fn = kernel_op.apply_kernel_op_z
+  else:
+    raise ValueError(f'`dim` has to be "x", "y", or "z". {dim} is provided.')
+
+  # Define functions
+  v_shifted = kernel_fn(v, *shift_op)  # v[i - 1]
+  diff1 = kernel_fn(v, *forward_diff)  # v[i + 1] - v[i]
+  diff2 = kernel_fn(v, *backward_diff)  # v[i] - v[i - 1]
+  diff3 = kernel_fn(diff2, *shift_op)  # v[i - 1] - v[i - 2]
+
+  # Compute r = (state_D - state_U) / (state_U - state_UU).
+  r_pos = tf.nest.map_structure(tf.math.divide_no_nan, diff2, diff3)
+  r_neg = tf.nest.map_structure(tf.math.divide_no_nan, diff2, diff1)
+
+  psi_pos = limiter(r_pos)
+  psi_neg = limiter(r_neg)
+
+  v_neg = tf.nest.map_structure(
+      lambda v_upstream, psi_, diff_: v_upstream + 0.5 * psi_ * diff_,
+      v_shifted,
+      psi_pos,
+      diff3,
+  )
+  v_pos = tf.nest.map_structure(
+      lambda v_upstream, psi_, diff_: v_upstream - 0.5 * psi_ * diff_,
+      v,
+      psi_neg,
+      diff1,
+  )
+  return v_neg, v_pos

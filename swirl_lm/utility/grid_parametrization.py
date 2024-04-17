@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -27,15 +27,21 @@
 # limitations under the License.
 """Common grid parameterization."""
 
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Literal, Optional, Sequence, Tuple, TypeAlias
 
 from absl import flags
+from absl import logging
 import numpy as np
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import grid_parametrization_pb2
+from swirl_lm.utility import stretched_grid_util
+from swirl_lm.utility import types
 import tensorflow as tf
 
 from google.protobuf import text_format
+
+FlowFieldVal: TypeAlias = types.FlowFieldVal
+FlowFieldMap: TypeAlias = types.FlowFieldMap
 
 # Set allow_override=True for these flags, so each simulation can have its own
 # default values.
@@ -67,6 +73,25 @@ flags.DEFINE_integer(
     0,
     'Number of points to be added to each end of the computational domain.',
     allow_override=True)
+_STRETCHED_GRID_X_PATH = flags.DEFINE_string(
+    'stretched_grid_x_path',
+    '',
+    'Path to stretched grid text file for x dimension.',
+    allow_override=True,
+)
+_STRETCHED_GRID_Y_PATH = flags.DEFINE_string(
+    'stretched_grid_y_path',
+    '',
+    'Path to stretched grid text file for y dimension.',
+    allow_override=True,
+)
+_STRETCHED_GRID_Z_PATH = flags.DEFINE_string(
+    'stretched_grid_z_path',
+    '',
+    'Path to stretched grid text file for z dimension.',
+    allow_override=True,
+)
+
 
 FLAGS = flags.FLAGS
 
@@ -89,8 +114,8 @@ def _get_full_grid_size(
   return num_cores * core_n + num_boundary_points * 2
 
 
-def _get_full_grid(n: Optional[int], l: float) -> tf.Tensor:
-  """The full grid without halos.
+def _get_full_uniform_grid(n: Optional[int], l: float) -> tf.Tensor:
+  """The full grid without halos for a uniformly spaced mesh.
 
   Args:
     n: The total number of grid points without halos.
@@ -124,6 +149,176 @@ def _get_physical_full_grid_size(
                                 params.num_boundary_points))
 
 
+def _get_grid_spacing(
+    full_grid_size, length, num_boundary_points: int = 0
+) -> float | None:
+  """Get the grid spacing between nodes in a equidistant mesh.
+
+  Args:
+    full_grid_size: The total number of nodes in the mesh grid.
+    length: The size of the domain in a particular dimension.
+    num_boundary_points: Deprecated.
+
+  Returns:
+    The distance between two adjacent nodes.
+  """
+  # The following statement is kept to maintain the behavior of Saint Venant
+  # cases.
+  full_grid_size -= 2 * num_boundary_points
+  return length / (full_grid_size - 1) if full_grid_size > 1 else None
+
+
+def _get_stretched_grid_aware_grid_spacing_in_dim(
+    dx_dy_dz: tuple[float | None, float | None, float | None],
+    dim: Literal[0, 1, 2],
+    use_stretched_grid_in_dim: bool,
+) -> float:
+  """Get the stretched-grid-aware grid spacing in a particular dimension.
+
+  Return the grid spacing of the computational mesh, assumed uniform.  When
+  using a stretched grid, the grid spacing will be that of the transformed
+  coordinate, not of the physical Cartesian coordinate values.
+
+  Note: internally, when using a stretched grid where the coordinate levels
+  are passed in, we will treat the grid spacing of the transformed coordinate
+  as equal to 1.0, because the coordinate values of the transformed coordinate
+  never need be referred to directly.
+
+  Args:
+    dx_dy_dz: Tuple of values from GridParametrization.(dx,dy,dz)
+    dim: The dimension for which to get the grid spacing.
+    use_stretched_grid_in_dim: Whether a stretched grid is used in the given
+      dimension.
+
+  Returns:
+    The stretched-grid-aware grid spacing in the given dimension.
+  """
+  if not use_stretched_grid_in_dim:
+    grid_spacing = dx_dy_dz[dim]
+    # Note: GridParametrization.{dx,dy,dz} can return None depending on
+    # parameter input. If this occurs, a None is not supposed to be used in
+    # practice downstream. However, for type checking it is useful to keep the
+    # return type as `float`. Setting the grid spacing to 0.0 in that case
+    # ensures that if it gets inadvertently used there will be an immediate
+    # error.
+    if grid_spacing is None:
+      grid_spacing = 0.0
+  else:
+    grid_spacing = 1.0
+  return grid_spacing
+
+
+def _validate_global_coord(
+    global_coord: tf.Tensor,
+    core_n: int | None,
+    num_core: int,
+    dim: Literal[0, 1, 2],
+    num_boundary_points: int,
+) -> None:
+  """Checks that global coordinates have the correct number of elements.
+
+  Global coordinates do not include the halos. The input args `core_n`,
+  `num_core`, and `num_boundary_points` should come from a `GridParametrization`
+  object.  `core_n` should be the 3-tuple `(params.core_nx, params.core_ny,
+  params.core_nz)`, and `num_core` should be the 3-tuple `(params.nx, params.ny,
+  params.nz)`.
+
+  Args:
+    global_coord: The global coordinates.
+    core_n: Number of non-halo points in this dimension.
+    num_core: Number of cores in this dimension.
+    dim: Which dimension is being considered (only used for an error message).
+    num_boundary_points: Deprecated; should be 0 for all uses.
+
+  Raises:
+    ValueError: If `global_coord` does not have the correct number of
+      elements.
+  """
+  if num_boundary_points != 0:
+    logging.info(
+        'Skipping validation of global coordinates in the deprecated case of'
+        ' nonzero `num_boundary_points`.'
+    )
+    return
+
+  if core_n is None:
+    # There are no non-halo points in this dimension, so there is nothing to
+    # validate.
+    return
+
+  global_grid_size = num_core * core_n  # Excludes halos.
+
+  if global_coord.shape[0] != global_grid_size:
+    raise ValueError(
+        f'Global coordinates in dim {dim} has'
+        f' {global_coord.shape[0]} elements, which does not match the'
+        f' required number of elements {global_grid_size}.'
+    )
+
+
+def _load_array_from_file(path: str) -> tf.Tensor:
+  """Loads a 1D array from a text file and returns it as a tensor.
+
+  Each element of the array should be on its own line.
+
+  Args:
+    path: The path to the file to load.
+
+  Returns:
+    A 1D tensor of the data from the file.
+  """
+  contents: str = None
+  if contents is None:
+    with tf.io.gfile.GFile(path, 'r') as f:
+      contents = f.read()
+  return tf.convert_to_tensor(
+      np.fromstring(contents, sep='\n'), dtype=tf.float32
+  )
+
+
+def _global_xyz_from_config(
+    stretched_grid_paths: grid_parametrization_pb2.CoordinateStr,
+    full_grid_size: tuple[int, int, int],
+    length: tuple[float, float, float],
+    core_n: tuple[int | None, int | None, int | None],
+    num_core: tuple[int, int, int],
+    num_boundary_points: int,
+) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+  """Returns global coordinates, excluding halo points.
+
+  For each dimension: if a stretched grid is provided then that grid is used,
+  otherwise a uniform grid is used.
+
+  Args:
+    stretched_grid_paths: Paths to stretched-grid text files for each dimension.
+    full_grid_size: The full grid size excluding halos in each dimension.
+    length: The length of the domain in each dimension.
+    core_n: The number of non-halo points in each dimension.
+    num_core: The number of cores in each dimension.
+    num_boundary_points: The number of boundary points in each dimension.
+
+  Returns:
+    A tuple of global coordinates in each dimension.
+  """
+
+  def get_full_grid(dim: Literal[0, 1, 2]) -> tf.Tensor:
+    stretched_grid_path = (
+        stretched_grid_paths.dim_0,
+        stretched_grid_paths.dim_1,
+        stretched_grid_paths.dim_2,
+    )[dim]
+    if stretched_grid_path:
+      global_coord = _load_array_from_file(stretched_grid_path)
+    else:
+      global_coord = _get_full_uniform_grid(full_grid_size[dim], length[dim])
+    _validate_global_coord(
+        global_coord, core_n[dim], num_core[dim], dim, num_boundary_points
+    )
+    return global_coord
+
+  return tuple(get_full_grid(dim) for dim in (0, 1, 2))
+
+
 def params_from_flags() -> grid_parametrization_pb2.GridParametrization:
   """Returns a GridParametrization protobuf from flags."""
   params = grid_parametrization_pb2.GridParametrization()
@@ -142,6 +337,12 @@ def params_from_flags() -> grid_parametrization_pb2.GridParametrization:
   params.input_chunk_size = FLAGS.input_chunk_size
   params.num_output_splits = FLAGS.num_output_splits
   params.num_boundary_points = FLAGS.num_boundary_points
+  if _STRETCHED_GRID_X_PATH.value:
+    params.stretched_grid_paths.dim_0 = _STRETCHED_GRID_X_PATH.value
+  if _STRETCHED_GRID_Y_PATH.value:
+    params.stretched_grid_paths.dim_1 = _STRETCHED_GRID_Y_PATH.value
+  if _STRETCHED_GRID_Z_PATH.value:
+    params.stretched_grid_paths.dim_2 = _STRETCHED_GRID_Z_PATH.value
   if not params.HasField('physical_full_grid_size'):
     params.physical_full_grid_size.CopyFrom(
         _get_physical_full_grid_size(params)
@@ -206,6 +407,38 @@ class GridParametrization(object):
     self.input_chunk_size = params.input_chunk_size
     self.num_output_splits = params.num_output_splits
     self.num_boundary_points = params.num_boundary_points
+
+    self.use_stretched_grid = (
+        True if params.stretched_grid_paths.dim_0 else False,
+        True if params.stretched_grid_paths.dim_1 else False,
+        True if params.stretched_grid_paths.dim_2 else False,
+    )
+    # Get coordinate grid spacings (valid with or without stretched grid). To be
+    # compatible with stretched grids, use these values instead of
+    # self.{dx,dy,dz}.
+    dx_uniform = _get_grid_spacing(self.fx, self.lx, self.num_boundary_points)
+    dy_uniform = _get_grid_spacing(self.fy, self.ly, self.num_boundary_points)
+    dz_uniform = _get_grid_spacing(self.fz, self.lz, self.num_boundary_points)
+    self.grid_spacings: tuple[float, float, float] = tuple(
+        _get_stretched_grid_aware_grid_spacing_in_dim(
+            (dx_uniform, dy_uniform, dz_uniform),
+            dim,
+            self.use_stretched_grid[dim],
+        )
+        for dim in (0, 1, 2)
+    )
+
+    # Tuple of global coordinate values for each dimension, including halos.
+    # Consists of the stretched-grid coordinates (if used), otherwise defaults
+    # to uniform grid.
+    self.global_xyz = _global_xyz_from_config(
+        params.stretched_grid_paths,
+        (self.fx, self.fy, self.fz),
+        (self.lx, self.ly, self.lz),
+        (self.core_nx, self.core_ny, self.core_nz),
+        (self.cx, self.cy, self.cz),
+        self.num_boundary_points,
+    )
 
   @classmethod
   def create_from_flags(cls):
@@ -285,8 +518,9 @@ class GridParametrization(object):
                                                 subgrid_shape, halo_width)
 
   def __str__(self):
-    return ('fx_physical: {}, fy_physical: {}, fz_physical: {}, fx: {}, fy: {},'
-            'fz: {}, cx: {}, cy: {}, cz: {}, nx: {}, ny: {}, nz: {}, '
+    # fmt: off
+    return ('fx_physical: {}, fy_physical: {}, fz_physical: {}, fx: {}, '
+            'fy: {}, fz: {}, cx: {}, cy: {}, cz: {}, nx: {}, ny: {}, nz: {}, '
             'core_nx: {}, core_ny: {}, core_nz: {}, lx: {}, ly: {}, lz: {}, '
             'dt: {}, dx: {}, dy: {}, dz: {}, computation_shape: {}, '
             'halo_width: {}, kernel_size: {}, input_chunk_size: {}, '
@@ -294,9 +528,11 @@ class GridParametrization(object):
                 self.fx_physical, self.fy_physical, self.fz_physical, self.fx,
                 self.fy, self.fz, self.cx, self.cy, self.cz, self.nx, self.ny,
                 self.nz, self.core_nx, self.core_ny, self.core_nz, self.lx,
-                self.ly, self.lz, self.dt, self.dx, self.dy, self.dz,
+                self.ly, self.lz, self.dt, self.grid_spacings[0],
+                self.grid_spacings[1], self.grid_spacings[2],
                 self.computation_shape, self.halo_width, self.kernel_size,
                 self.input_chunk_size, self.num_output_splits))
+    # fmt: on
 
   @property
   def computation_shape(self) -> np.ndarray:
@@ -314,35 +550,32 @@ class GridParametrization(object):
   def core_nz(self) -> Optional[int]:
     return _get_core_n(self.nz, self.halo_width)
 
-  def _get_grid_spacing(self, full_grid_size, length) -> Optional[float]:
-    """Get the grid spacing between nodes in a equidistant mesh.
-
-    Args:
-      full_grid_size: The total number of nodes in the mesh grid.
-      length: The size of the domain in a particular dimension.
-
-    Returns:
-      The distance between two adjacent nodes.
-    """
-    # The following statement is kept to maintain the behavior of Saint Venant
-    # cases.
-    full_grid_size -= 2 * self.num_boundary_points
-    return length / (full_grid_size - 1) if full_grid_size > 1 else None
-
   @property
   def dx(self) -> Optional[float]:
+    if self.use_stretched_grid[0]:
+      raise ValueError(
+          'Calling .dx when using stretched grid in dim 0 is likely an error!'
+      )
     # Note: The final grid should return an outer halo of width 1 due to
     # boundary conditions, but does not. So for now we ignore that in the dx,
     # dy, dz computations.
-    return self._get_grid_spacing(self.fx, self.lx)
+    return _get_grid_spacing(self.fx, self.lx, self.num_boundary_points)
 
   @property
   def dy(self) -> Optional[float]:
-    return self._get_grid_spacing(self.fy, self.ly)
+    if self.use_stretched_grid[1]:
+      raise ValueError(
+          'Calling .dy when using stretched grid in dim 1 is likely an error!'
+      )
+    return _get_grid_spacing(self.fy, self.ly, self.num_boundary_points)
 
   @property
   def dz(self) -> Optional[float]:
-    return self._get_grid_spacing(self.fz, self.lz)
+    if self.use_stretched_grid[2]:
+      raise ValueError(
+          'Calling .dz when using stretched grid in dim 2 is likely an error!'
+      )
+    return _get_grid_spacing(self.fz, self.lz, self.num_boundary_points)
 
   @property
   def fx(self):
@@ -365,17 +598,17 @@ class GridParametrization(object):
   @property
   def x(self) -> tf.Tensor:
     """The full grid in dim 0."""
-    return _get_full_grid(self.fx, self.lx)
+    return self.global_xyz[0]
 
   @property
   def y(self) -> tf.Tensor:
     """The full grid in dim 1."""
-    return _get_full_grid(self.fy, self.ly)
+    return self.global_xyz[1]
 
   @property
   def z(self) -> tf.Tensor:
     """The full grid in dim 2."""
-    return _get_full_grid(self.fz, self.lz)
+    return self.global_xyz[2]
 
   def _grid_local(
       self,
@@ -535,3 +768,33 @@ class GridParametrization(object):
   @property
   def num_replicas(self):
     return self.cx * self.cy * self.cz
+
+  def physical_grid_spacing(
+      self,
+      dim: Literal[0, 1, 2],
+      use_3d_tf_tensor: bool,
+      additional_states: FlowFieldMap,
+  ) -> FlowFieldVal:
+    """Gets the physical grid spacing as a 1D array, allowing nonuniform grid.
+
+    Returns the physical grid spacing (dx, dy, or dz) corresponding to dimension
+    `dim` as a 1D tensor.
+
+    This function is to be used in a distributed setting. It returns the grid
+    spacing, evaluated on nodes, local to this replica.
+
+    Args:
+      dim: The dimension under consideration.
+      use_3d_tf_tensor: Whether 3D fields are represented as 3D tensors.
+      additional_states: Dictionary with helper variables.
+
+    Returns:
+      The physical grid spacing in the given dimension as a 1D array in
+      broadcastable form.
+    """
+    if self.use_stretched_grid[dim]:
+      return additional_states[stretched_grid_util.h_key(dim)]
+    else:
+      n = (self.nx, self.ny, self.nz)[dim]
+      h = self.grid_spacings[dim] * tf.ones(n)
+      return common_ops.reshape_to_broadcastable(h, dim, use_3d_tf_tensor)

@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -189,7 +189,7 @@ def conjugate_gradient_solver(
     x = x0
 
   # Computes the residual, r.
-  r = [b_ - b0_ for b_, b0_ in zip(b, linear_operator(x))]
+  r = tf.nest.map_structure(tf.math.subtract, b, linear_operator(x))
   if reprojection:
     r = reprojection(r)
 
@@ -203,14 +203,18 @@ def conjugate_gradient_solver(
       d = q
     else:
       beta = tf.math.divide(gamma, gamma_previous)
-      d = [q_ + beta * d_ for q_, d_ in zip(q, d_previous)]
+      d = tf.nest.map_structure(lambda q_, d_: q_ + beta * d_, q, d_previous)
 
     # Computes the squared norm of the residual.
     rho = gamma if preconditioner is None else dot(r, r)
 
     component_wise_distance = (
-        _UNUSED_VALUE if component_wise_distance_fn is None else
-        component_wise_distance_fn([b_i - r_i for r_i, b_i in zip(r, b)]))
+        _UNUSED_VALUE  # pylint: disable=g-long-ternary
+        if component_wise_distance_fn is None
+        else component_wise_distance_fn(
+            tf.nest.map_structure(tf.math.subtract, r, b)
+        )
+    )
 
     return d, rho, gamma, component_wise_distance
 
@@ -251,8 +255,8 @@ def conjugate_gradient_solver(
     a_d = linear_operator(d)
     alpha = tf.math.divide(gamma, dot(d, a_d))
 
-    x_next = [x_ + alpha * d_ for x_, d_ in zip(x, d)]
-    r_next = [r_ - alpha * a_d_ for r_, a_d_ in zip(r, a_d)]
+    x_next = tf.nest.map_structure(lambda x_, d_: x_ + alpha * d_, x, d)
+    r_next = tf.nest.map_structure(lambda r_, a_d_: r_ - alpha * a_d_, r, a_d)
 
     if reprojection:
       x_next = reprojection(x_next)

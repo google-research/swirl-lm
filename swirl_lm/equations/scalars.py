@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@
 import functools
 from typing import Optional, Text
 
+from absl import logging
 import numpy as np
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.base import physical_variable_keys_manager
@@ -36,7 +37,6 @@ from swirl_lm.numerics import diffusion
 from swirl_lm.numerics import numerics_pb2
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import thermodynamics_pb2
-from swirl_lm.physics.turbulence import sgs_model
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import components_debug
 from swirl_lm.utility import get_kernel_fn
@@ -81,12 +81,6 @@ class Scalars(object):
     self.thermodynamics = thermodynamics_manager.thermodynamics_factory(
         self._params)
 
-    self._use_sgs = self._params.use_sgs
-    filter_widths = (self._params.dx, self._params.dy, self._params.dz)
-    if self._use_sgs:
-      self._sgs_model = sgs_model.SgsModel(self._kernel_op, filter_widths,
-                                           params.sgs_model)
-
     self._bc = {
         varname: bc_val
         for varname, bc_val in self._params.bc.items()
@@ -105,37 +99,41 @@ class Scalars(object):
     # Get functions that computes terms in tranport equations for all scalars.
     self._scalar_model = {}
     for scalar_name in self._params.transport_scalars_names:
+      args = (self._kernel_op, self._params, scalar_name, self.thermodynamics)
       if scalar_name in potential_temperature.POTENTIAL_TEMPERATURE_VARNAME:
-        scalar_model = potential_temperature.PotentialTemperature
+        scalar_model = potential_temperature.PotentialTemperature(*args)
       elif scalar_name in humidity.HUMIDITY_VARNAME:
-        scalar_model = humidity.Humidity
+        scalar_model = humidity.Humidity(*args)
       elif scalar_name == 'e_t':
-        scalar_model = total_energy.TotalEnergy
+        scalar_model = total_energy.TotalEnergy(*args)
       else:
-        scalar_model = scalar_generic.ScalarGeneric
+        scalar_model = scalar_generic.ScalarGeneric(*args)
+      self._scalar_model[scalar_name] = scalar_model
 
-      self._scalar_model.update(
-          {
-              scalar_name: scalar_model(
-                  self._kernel_op,
-                  self._params,
-                  scalar_name,
-                  self.thermodynamics,
-              )
-          }
-      )
+  @tf.function
+  def _scalar_transport_equation(
+      self, conv_x, conv_y, conv_z, diff_x, diff_y, diff_z, src
+  ):
+    """Defines right-hand side function of a scalar transport equation."""
+    logging.info('Tracing `_scalar_transport_equation`.')
+    return -(conv_x + conv_y + conv_z) + (diff_x + diff_y + diff_z) + src
 
   def _exchange_halos(self, f, bc_f, replica_id, replicas):
     """Performs halo exchange for the variable f."""
-    return halo_exchange.inplace_halo_exchange(
-        f,
-        self._halo_dims,
-        replica_id,
-        replicas,
-        self._replica_dims,
-        self._params.periodic_dims,
-        bc_f,
-        width=self._params.halo_width)
+    @tf.function
+    def do_exchange_halos(f, bc_f, replica_id):
+      logging.info('Tracing `do_exchange_halos`.')
+      return halo_exchange.inplace_halo_exchange(
+          f,
+          self._halo_dims,
+          replica_id,
+          replicas,
+          self._replica_dims,
+          self._params.periodic_dims,
+          bc_f,
+          width=self._params.halo_width)
+
+    return do_exchange_halos(f, bc_f, replica_id)
 
   def exchange_scalar_halos(
       self,
@@ -197,12 +195,14 @@ class Scalars(object):
     Returns:
       scalar_function: A function that computes the `f(phi)`.
     """
+    logging.info('Tracing `_scalar_update`.')
     source = (
         self._source[scalar_name]
         if self._source[scalar_name] is not None
         else tf.nest.map_structure(tf.zeros_like, states[_KEY_RHO])
     )
 
+    @tf.function
     def scalar_function(phi: FlowFieldVal):
       """Computes the functional RHS for the three momentum equations.
 
@@ -213,6 +213,7 @@ class Scalars(object):
         A `FlowFieldVal` representing the RHS of the scalar transport
         equation.
       """
+      logging.info('Tracing `scalar_function`.')
       conv = self._scalar_model[scalar_name].convection_fn(
           replica_id, replicas, phi, states, additional_states
       )
@@ -242,7 +243,8 @@ class Scalars(object):
           conv_x, conv_y, conv_z, diff_x, diff_y, diff_z, src
       ):
         """Defines right-hand side function of a scalar transport equation."""
-        return -(conv_x + conv_y + conv_z) + (diff_x + diff_y + diff_z) + src
+        return self._scalar_transport_equation(
+            conv_x, conv_y, conv_z, diff_x, diff_y, diff_z, src)
 
       rhs = tf.nest.map_structure(
           scalar_transport_equation,
@@ -347,24 +349,16 @@ class Scalars(object):
     updated_scalars = {}
     for sc_name in self._params.transport_scalars_names:
       sc_mid = states_mid[sc_name]
-      if self._use_sgs:
-        diff_t = self._sgs_model.turbulent_diffusivity(
-            (sc_mid,), (states[_KEY_U], states[_KEY_V], states[_KEY_W]),
-            replicas, additional_states)
-        diffusivity = tf.nest.map_structure(
-            lambda diff_t_i: self._params.diffusivity(sc_name) + diff_t_i,  # pylint: disable=cell-var-from-loop
-            diff_t,
-        )
-      else:
-        diffusivity = tf.nest.map_structure(
-            lambda sc: self._params.diffusivity(sc_name) * tf.ones_like(sc),  # pylint: disable=cell-var-from-loop
-            sc_mid,
-        )
+      diffusivity = self._scalar_model[sc_name].get_diffusivity(
+          replicas, sc_mid, states, additional_states
+      )
       helper_states = {'diffusivity': diffusivity}
       helper_states.update(additional_states)
-      scalar_rhs_fn = self._scalar_update(replica_id, replicas, sc_name,
-                                          states_mid, helper_states)
+      scalar_rhs_fn = self._scalar_update(
+          replica_id, replicas, sc_name, states_mid, helper_states
+      )
 
+      @tf.function
       def time_advance_cn_explicit(rhs, sc_name):
         updated_vars = {}
         if (self._params.solver_mode ==
@@ -374,7 +368,7 @@ class Scalars(object):
               lambda sc, b, a: sc + self._params.dt * b * a, states_0[sc_name],
               rhs, alpha)
           updated_vars.update({sc_name: exchange_halos(new_sc, sc_name)})
-        else:
+        else:  # solver_mode == thermodynamics_pb2.Thermodynamics.LOW_MACH
           new_sc = tf.nest.map_structure(lambda a, b: a + self._params.dt * b,
                                          states_0['rho_{}'.format(sc_name)],
                                          rhs)
@@ -406,9 +400,8 @@ class Scalars(object):
         terms = (
             self._scalar_update(replica_id, replicas, sc_name, states_mid,
                                 helper_states, True)(sc_mid))
-        diff_t = diff_t if self._use_sgs else None
         updated_scalars.update(
-            self._dbg.update_scalar_terms(sc_name, terms, diff_t))
+            self._dbg.update_scalar_terms(sc_name, terms, diffusivity))
 
     # Applies the marker-and-cell or Cartesian grid method if requested in the
     # config file.

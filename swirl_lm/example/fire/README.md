@@ -9,7 +9,7 @@ This example simulates the Tubbs Fire.
    ```sh
    gcloud compute tpus tpu-vm create $TPU --project=$PROJECT \
       --zone=$ZONE \
-      --accelerator-type=$TYPE --version=tpu-vm-tf-2.11.0-pod \
+      --accelerator-type=$TYPE --version=tpu-vm-tf-2.14.0-pod \
       --metadata="tensorflow-env-vars=-e LIBTPU_INIT_ARGS=$TPU_FLAGS"
    ```
 
@@ -50,17 +50,17 @@ This example simulates the Tubbs Fire.
 
    ```sh
    python3 swirl-lm/swirl_lm/example/fire/fire_main.py \
-     --apply_data_load_filter=False --apply_postprocess=True \
+     --apply_postprocess=True \
      --apply_preprocess=False \
      --c_d=0.01 --dt=0.025 \
      --flat_surface_ignite=True --flat_surface_include_fire=True \
      --flat_surface_terrain_type=FILE --flat_surface_turbulent_inflow=True \
-     --flat_surface_use_dynamic_igniter=False
+     --flat_surface_use_dynamic_igniter=False \
      --fuel_bed_height=9.785 --fuel_density=0.104 \
      --ignition_center_x=1750.0 --ignition_center_y=12250.0 \
      --ignition_line_angle=90.0 --ignition_line_length=500.0 \
      --ignition_line_thickness=500.0 --ignition_option=SLANT_LINE \
-     --ignition_temperature=600.0
+     --ignition_temperature=600.0 \
      --inflow_x_lx=100.0 --inflow_x_ly=100.0 --inflow_x_lz=20.0 \
      --kernel_size=16 \
      --loading_step=0 \

@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -39,13 +39,15 @@ neighboring nodes/faces. In this approach the width of the stencil in each
 direction is 3.
 """
 
-from typing import Callable, Dict, List, Optional, Sequence, Text, Tuple
+from typing import Callable, Dict, List, Literal, Optional, Sequence, Text, Tuple
 
 import numpy as np
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.boundary_condition import monin_obukhov_similarity_theory
 from swirl_lm.equations import common
 from swirl_lm.equations import utils as eq_utils
+from swirl_lm.numerics import derivatives
+from swirl_lm.numerics import interpolation
 from swirl_lm.numerics import numerics_pb2
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
@@ -79,12 +81,12 @@ def diffusion_scalar(
 
   def diffusion_fn(
       kernel_op: get_kernel_fn.ApplyKernelOp,
+      deriv_lib: derivatives.Derivatives,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
       phi: FlowFieldVal,
       rho: FlowFieldVal,
       diffusivity: FlowFieldVal,
-      grid_spacing: Tuple[float, float, float],
       scalar_name: Optional[Text] = None,
       helper_variables: Optional[Dict[Text, FlowFieldVal]] = None,
   ) -> List[FlowFieldVal]:
@@ -92,56 +94,37 @@ def diffusion_scalar(
 
     Args:
       kernel_op: An object holding a library of kernel operations.
+      deriv_lib: An instance of the derivatives library.
       replica_id: The index of the current TPU replica.
       replicas: A numpy array that maps grid coordinates to replica id numbers.
       phi: The scalar for which the diffusion term is computed.
       rho: The density of the fluid.
       diffusivity: The kinematic diffusivity of the scalar.
-      grid_spacing: A tuple that has the grid spacing in the x, y, and z,
-        directions, respectively.
       scalar_name: The name of the scalar. This is useful for determining if
         special treatments needs to be applied for specific scalars, e.g.
         modelled heat fluxes for temperature and energy equations.
-      helper_variables: A dictionarry that stores variables that provides
+      helper_variables: A dictionary that stores variables that provides
         additional information for computing the diffusion term, e.g. the
         velocity and potential temperature for Monin-Obukhov similarity theory.
 
     Returns:
       A list that contains the 3 diffusion components of the scalar.
     """
-    sum_backward_fn = (
-        lambda f: kernel_op.apply_kernel_op_x(f, 'ksx'),
-        lambda f: kernel_op.apply_kernel_op_y(f, 'ksy'),
-        lambda f: kernel_op.apply_kernel_op_z(f, 'ksz', 'kszsh'),
-    )
-    flux_backward_fn = (
-        lambda f: kernel_op.apply_kernel_op_x(f, 'kdx'),
-        lambda f: kernel_op.apply_kernel_op_y(f, 'kdy'),
-        lambda f: kernel_op.apply_kernel_op_z(f, 'kdz', 'kdzsh'),
-    )
-    grad_forward_fn = (
-        lambda f: kernel_op.apply_kernel_op_x(f, 'kdx+'),
-        lambda f: kernel_op.apply_kernel_op_y(f, 'kdy+'),
-        lambda f: kernel_op.apply_kernel_op_z(f, 'kdz+', 'kdz+sh'),
-    )
+    use_3d_tf_tensor = isinstance(rho, tf.Tensor)
+    multiply = lambda a, b: tf.nest.map_structure(tf.multiply, a, b)
+    rho_d = multiply(rho, diffusivity)
 
-    rho_d = tf.nest.map_structure(tf.multiply, rho, diffusivity)
-
-    rho_d_dim = [
-        tf.nest.map_structure(
-            lambda rho_d_sum: 0.5 * rho_d_sum, sum_backward_fn[i](rho_d)
-        )
-        for i in range(3)
-    ]
-
-    f_diff = [
-        tf.nest.map_structure(  # pylint: disable=g-complex-comprehension
-            lambda rho_d_i, d_phi: rho_d_i * d_phi / grid_spacing[i],  # pylint: disable=cell-var-from-loop
-            rho_d_dim[i],
-            flux_backward_fn[i](phi),
-        )
-        for i in range(3)
-    ]
+    # Compute diffusive fluxes for each dimension, evaluated on faces, so that
+    # fluxes_face = [ρD ∂ϕ/∂x, ρD ∂ϕ/∂y, ρD ∂ϕ/∂z].
+    fluxes_face = []
+    for dim in (0, 1, 2):
+      # Interpolate ρD onto faces in dimension `dim`.
+      rho_d_face = interpolation.centered_node_to_face(rho_d, dim, kernel_op)
+      # Compute ∂ϕ/∂x_j in dimension `dim` on faces.
+      dphi_face = deriv_lib.deriv_node_to_face(phi, dim, helper_variables)
+      # Compute diffusive fluxes ρD ∂ϕ/∂x_j evaluated on faces.
+      flux_face = multiply(rho_d_face, dphi_face)
+      fluxes_face.append(flux_face)
 
     # Add the closure from Monin-Obukhov similarity theory if requested.
     if most is not None and most.is_active_scalar(scalar_name):
@@ -164,15 +147,23 @@ def diffusion_scalar(
       # for consistency.
       q_3 = tf.nest.map_structure(lambda q: -q, q_3)
 
-      if most.vertical_dim == 2:
+      if most.vertical_dim == 2 and not use_3d_tf_tensor:
         q_3 = [q_3]
 
       # Replace the diffusion flux at the ground surface with the MOS closure.
       core_index = 0
       plane_index = params.halo_width
-      f_diff[most.vertical_dim] = common_ops.tensor_scatter_1d_update_global(
-          replica_id, replicas, f_diff[most.vertical_dim], most.vertical_dim,
-          core_index, plane_index, q_3)
+      fluxes_face[most.vertical_dim] = (
+          common_ops.tensor_scatter_1d_update_global(
+              replica_id,
+              replicas,
+              fluxes_face[most.vertical_dim],
+              most.vertical_dim,
+              core_index,
+              plane_index,
+              q_3,
+          )
+      )
 
     # Assign the diffusive flux specified in the simulation configuration. This
     # prescribed flux will override values computed from other models.
@@ -211,25 +202,26 @@ def diffusion_scalar(
           # has to be reshaped as nz x [(1, ny)]; if the dimension is 1, the
           # shape is nz x [(nx, 1)]; and if the dimension is 2, the shape is
           # 1 x [(nx, ny)].
-          if not isinstance(f_diff, tf.Tensor):
+          if not isinstance(fluxes_face, tf.Tensor):
             flux = tf.unstack(flux)
-        f_diff[flux_info.dim] = common_ops.tensor_scatter_1d_update_global(
+        fluxes_face[flux_info.dim] = common_ops.tensor_scatter_1d_update_global(
             replica_id,
             replicas,
-            f_diff[flux_info.dim],
+            fluxes_face[flux_info.dim],
             flux_info.dim,
             core_index,
             plane_index,
             flux,
         )
 
-    return [
-        tf.nest.map_structure(  # pylint: disable=g-complex-comprehension
-            lambda d_f_diff: d_f_diff / grid_spacing[i],  # pylint: disable=cell-var-from-loop
-            grad_forward_fn[i](f_diff[i]),
-        )
-        for i in range(3)
+    # Compute diffusion_terms = [∂/∂x(ρD ∂ϕ/∂x), ∂/∂y(ρD ∂ϕ/∂y), ∂/∂z(ρD ∂ϕ/∂z)]
+    # evaluated on nodes.
+    diffusion_terms = [
+        deriv_lib.deriv_face_to_node(fluxes_face[dim], dim, helper_variables)
+        for dim in (0, 1, 2)
     ]
+
+    return diffusion_terms
 
   return diffusion_fn
 
@@ -255,12 +247,6 @@ def _diffusion_momentum_stencil_3(
     list of 3 elements, with the elements being the diffusion component in the
     x, y, and z directions, respectively.
   """
-  # Functions that interpolates viscosity onto faces.
-  sum_backward_fn = (
-      lambda f: kernel_op.apply_kernel_op_x(f, 'ksx'),
-      lambda f: kernel_op.apply_kernel_op_y(f, 'ksy'),
-      lambda f: kernel_op.apply_kernel_op_z(f, 'ksz', 'kszsh'),
-  )
   # Functions that computes the diffusion flux on faces.
   flux_backward_fn = (
       lambda f: kernel_op.apply_kernel_op_x(f, 'kdx'),
@@ -282,8 +268,8 @@ def _diffusion_momentum_stencil_3(
 
   # Prepares the scaled/unscaled viscosity on faces.
   mu_dim = [
-      tf.nest.map_structure(lambda mu_sum: 0.5 * mu_sum, sum_backward_fn[i](mu))
-      for i in range(3)
+      interpolation.centered_node_to_face(mu, dim, kernel_op)
+      for dim in (0, 1, 2)
   ]
   four_thirds_mu = [
       tf.nest.map_structure(lambda mu_i: 4.0 / 3.0 * mu_i, mu_dim[i])
@@ -372,45 +358,48 @@ def _diffusion_momentum_stencil_3(
 def diffusion_momentum(
     params: parameters_lib.SwirlLMParameters,
 ) -> Callable[..., Dict[Text, Sequence[FlowFieldVal]]]:
-  """Generates a function that computes the scalar diffusion term.
+  """Generates a function that computes the momentum diffusion terms.
 
   Args:
     params: A object of the simulation parameter context. `boundary_models.most`
       and `nu` are used here.
 
   Returns:
-    A function that computes the diffusion terms in a scalar transport equation.
+    A function that computes the diffusion terms in the momentum equation.
   """
 
   shear_flux_fn_stencil_3 = eq_utils.shear_flux(params)
 
   def diffusion_fn(
       kernel_op: get_kernel_fn.ApplyKernelOp,
+      deriv_lib: derivatives.Derivatives,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
       scheme: numerics_pb2.DiffusionScheme,
       mu: FlowFieldVal,
       grid_spacing: Tuple[float, float, float],
       velocity: FlowFieldMap,
-      tau_bc_update_fn: Optional[Dict[Text, Callable[[FlowFieldVal],
-                                                     FlowFieldVal]]] = None,
-      helper_variables: Optional[FlowFieldMap] = None,
+      helper_variables: FlowFieldMap,
+      tau_bc_update_fn: Optional[
+          Dict[Text, Callable[[FlowFieldVal], FlowFieldVal]]
+      ] = None,
   ) -> Dict[Text, Sequence[FlowFieldVal]]:
     """Computes the diffusion term in momentum equations of u, v, and w.
 
     Args:
       kernel_op: An object holding a library of kernel operations.
+      deriv_lib: An instance of the derivatives library.
       replica_id: The index of the current TPU replica.
       replicas: A numpy array that maps grid coordinates to replica id numbers.
       scheme: The numerical scheme used to compute the diffusion term.
       mu: The dynamic viscosity.
       grid_spacing: A tuple that holds (dx, dy, dz).
       velocity: A dictionary that has flow vield variables u, v, and w.
-      tau_bc_update_fn: A dictionary of halo_exchange functions for the shear
-        stress tensor.
-      helper_variables: A dictionarry that stores variables that provides
+      helper_variables: A dictionary that stores variables that provides
         additional information for computing the diffusion term, e.g. the
         potential temperature for the Monin-Obukhov similarity theory.
+      tau_bc_update_fn: A dictionary of halo_exchange functions for the shear
+        stress tensor.
 
     Returns:
       A dictionary that holds the diffusion terms in all momentum equations. The
@@ -419,59 +408,74 @@ def diffusion_momentum(
       stored in a list of 3 elements, with the elements being the diffusion
       component in the x, y, and z directions, respectively.
     """
-    grad_central = [
-        lambda f: kernel_op.apply_kernel_op_x(f, 'kDx'),
-        lambda f: kernel_op.apply_kernel_op_y(f, 'kDy'),
-        lambda f: kernel_op.apply_kernel_op_z(f, 'kDz', 'kDzsh'),
-    ]
-    grad_forward = [
-        lambda f: kernel_op.apply_kernel_op_x(f, 'kdx+'),
-        lambda f: kernel_op.apply_kernel_op_y(f, 'kdy+'),
-        lambda f: kernel_op.apply_kernel_op_z(f, 'kdz+', 'kdz+sh'),
-    ]
-
     shear_key = {
         'u': ('xx', 'xy', 'xz'),
         'v': ('yx', 'yy', 'yz'),
-        'w': ('zx', 'zy', 'zz')
+        'w': ('zx', 'zy', 'zz'),
     }
 
     if scheme == numerics_pb2.DiffusionScheme.DIFFUSION_SCHEME_CENTRAL_5:
-      tau = eq_utils.shear_stress(kernel_op, mu, grid_spacing[0],
-                                  grid_spacing[1], grid_spacing[2],
-                                  velocity['u'], velocity['v'], velocity['w'],
-                                  tau_bc_update_fn)
-      diff_op = grad_central
-      grad_width = 2.0
+      tau = eq_utils.shear_stress(
+          deriv_lib,
+          mu,
+          velocity['u'],
+          velocity['v'],
+          velocity['w'],
+          helper_variables,
+          tau_bc_update_fn,
+      )
+
+      def diffusion_fn_1d(key, dim):
+        """Computes the diffusion term for `key` in direction `dim`."""
+        shear = tau[shear_key[key][dim]]
+        return deriv_lib.deriv_centered(shear, dim, helper_variables)
+
+      diff = {
+          key: [diffusion_fn_1d(key, i) for i in range(3)]
+          for key in common.KEYS_VELOCITY
+      }
+      return diff
     elif scheme == numerics_pb2.DiffusionScheme.DIFFUSION_SCHEME_CENTRAL_3:
-      tau = shear_flux_fn_stencil_3(kernel_op, replica_id, replicas, mu,
-                                    grid_spacing[0], grid_spacing[1],
-                                    grid_spacing[2], velocity['u'],
-                                    velocity['v'], velocity['w'],
-                                    helper_variables)
-      diff_op = grad_forward
-      grad_width = 1.0
+      # Compute the stress tensor 𝜏ᵢⱼ, evaluated on faces in dim j.
+      tau = shear_flux_fn_stencil_3(
+          kernel_op,
+          deriv_lib,
+          replica_id,
+          replicas,
+          mu,
+          velocity['u'],
+          velocity['v'],
+          velocity['w'],
+          helper_variables,
+      )
+
+      def tau_deriv(
+          key: Literal['u', 'v', 'w'], dim: Literal[0, 1, 2]
+      ) -> FlowFieldVal:
+        """Computes ∂𝜏ᵢⱼ/∂xⱼ (j=`dim`) with the result evaluated on nodes."""
+        tau_ij = tau[shear_key[key][dim]]
+        return deriv_lib.deriv_face_to_node(tau_ij, dim, helper_variables)
+
+      # Compute the derivatives of the stress tensor, resulting in:
+      # diff['u'] = (∂𝜏₀₀/∂x₀, ∂𝜏₀₁/∂x₁, ∂𝜏₀₂/∂x₂)
+      # diff['v'] = (∂𝜏₁₀/∂x₀, ∂𝜏₁₁/∂x₁, ∂𝜏₁₂/∂x₂)
+      # diff['w'] = (∂𝜏₂₀/∂x₀, ∂𝜏₂₁/∂x₁, ∂𝜏₂₂/∂x₂)
+      diff = dict(
+          u=(tau_deriv('u', 0), tau_deriv('u', 1), tau_deriv('u', 2)),
+          v=(tau_deriv('v', 0), tau_deriv('v', 1), tau_deriv('v', 2)),
+          w=(tau_deriv('w', 0), tau_deriv('w', 1), tau_deriv('w', 2)),
+      )
+      return diff
     elif scheme == numerics_pb2.DiffusionScheme.DIFFUSION_SCHEME_STENCIL_3:
-      return _diffusion_momentum_stencil_3(kernel_op, mu, grid_spacing,
-                                           velocity)
+      return _diffusion_momentum_stencil_3(
+          kernel_op, mu, grid_spacing, velocity
+      )
     else:
-      raise ValueError('{} is not implemented. Available options are: '
-                       '"DIFFUSION_SCHEME_CENTRAL_3", '
-                       '"DIFFUSION_SCHEME_CENTRAL_5", '
-                       '"DIFFUSION_SCHEME_STENCIL_3".'.format(scheme))
-
-    def diffusion_fn(key, dim):
-      """Computes the diffusion term for `key` in direction `dim`."""
-      shear = tau[shear_key[key][dim]]
-      h = grid_spacing[dim]
-      return tf.nest.map_structure(lambda d_flux: d_flux / (grad_width * h),
-                                   diff_op[dim](shear))
-
-    diff = {
-        key: [diffusion_fn(key, i) for i in range(3)
-             ] for key in common.KEYS_VELOCITY
-    }
-
-    return diff
+      raise ValueError(
+          '{} is not implemented. Available options are: '
+          '"DIFFUSION_SCHEME_CENTRAL_3", '
+          '"DIFFUSION_SCHEME_CENTRAL_5", '
+          '"DIFFUSION_SCHEME_STENCIL_3".'.format(scheme)
+      )
 
   return diffusion_fn

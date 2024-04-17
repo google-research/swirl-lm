@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -196,7 +196,7 @@ def _read_input_at_step(
   logging.info('_read_input_at_step tracing starts.')
   read_state = {}
   for fieldname, initial_tensor in state.items():
-    if states_from_file is not None and fieldname not in states_from_file:
+    if states_from_file and fieldname not in states_from_file:
       read_state[fieldname] = initial_tensor
       continue
 
@@ -333,7 +333,7 @@ def _write_output_at_step(
   logging.info('_write_output_at_step tracing starts.')
   write_status = {}
   for fieldname, tensor in state.items():
-    if data_dump_filter is not None and fieldname not in data_dump_filter:
+    if data_dump_filter and fieldname not in data_dump_filter:
       # We still want to fill the return status for all the fields.
       write_status[fieldname] = True
       continue

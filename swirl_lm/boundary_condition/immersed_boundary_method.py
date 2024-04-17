@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -62,11 +62,9 @@ def _apply_3d_kernel(
   result_x = kernel_op.apply_kernel_op_x(f, kernel_name_x)
   result_y = kernel_op.apply_kernel_op_y(f, kernel_name_y)
   result_z = kernel_op.apply_kernel_op_z(f, kernel_name_z, kernel_name_zsh)
-  summed_result = [
-      result_xi + result_yi + result_zi
-      for result_xi, result_yi, result_zi in zip(result_x, result_y, result_z)
-  ]
-  return summed_result
+  return tf.nest.map_structure(
+      lambda a, b, c: a + b + c, result_x, result_y, result_z
+  )
 
 
 def ib_info_map(
@@ -146,10 +144,7 @@ def update_cartesian_grid_method_boundary_coefficients(
   """
   mask_sum = _apply_3d_kernel(interior_mask, kernel_op, kernel_name_x,
                               kernel_name_y, kernel_name_z, kernel_name_zsh)
-  return [
-      tf.math.divide_no_nan(boundary_i, mask_sum_i)
-      for boundary_i, mask_sum_i in zip(boundary, mask_sum)
-  ]
+  return tf.nest.map_structure(tf.math.divide_no_nan, boundary, mask_sum)
 
 
 def get_fluid_solid_interface_z(
@@ -180,17 +175,17 @@ def get_fluid_solid_interface_z(
   fluid_solid_mask = kernel_op.apply_kernel_op_z(ib_interior_mask, 'kSz',
                                                  'kSzsh')
   # Make only the solid-fluid interface 1, and everywhere else 0.
-  fluid_solid_interface_z = [
-      tf.compat.v1.where(
-          tf.greater(mask_i, 1.0), tf.zeros_like(mask_i), mask_i)
-      for mask_i in fluid_solid_mask
-  ]
+  fluid_solid_interface_z = tf.nest.map_structure(
+      lambda mask_i: tf.compat.v1.where(
+          tf.greater(mask_i, 1.0), tf.zeros_like(mask_i), mask_i
+      ),
+      fluid_solid_mask,
+  )
 
   # Leave only the fluid layer as 1, and everywhere else 0.
-  fluid_solid_mask = [
-      fluid_solid_interface_z_i * mask_i for fluid_solid_interface_z_i, mask_i
-      in zip(fluid_solid_interface_z, ib_interior_mask)
-  ]
+  fluid_solid_mask = tf.nest.map_structure(
+      tf.math.multiply, fluid_solid_interface_z, ib_interior_mask
+  )
 
   # Assign 0 in the halos in the z direction assuming that there's no fluid
   # solid interface at the boundary of the domain.
@@ -271,7 +266,7 @@ def interp_1d_coeff_init_fn(
       with tf.control_dependencies([op]):
         return a, b
 
-    local_core_n, mesh_size_non_dim = tf.compat.v1.tpu.outside_compilation(
+    local_core_n, _ = tf.compat.v1.tpu.outside_compilation(
         _check_mesh_size, *(core_n, mesh_size_non_dim)
     )
     # Get part of the surface that is local to the current core.
@@ -363,7 +358,10 @@ class ImmersedBoundaryMethod(object):
     self._halo_dims = (0, 1, 2)
 
     self._params = params
-    self._ib_params = self._params.boundary_models.ib
+    assert (
+        boundary_models := params.boundary_models
+    ) is not None, '`boundary_models` must be set in the config.'
+    self._ib_params = boundary_models.ib
 
   @property
   def type(self):
@@ -592,11 +590,15 @@ class ImmersedBoundaryMethod(object):
     Raises:
       ValueError if `ib` is missing the required mask tensors for the method.
     """
-    f = [
-        tf.compat.v1.where(boundary_i > 0., sign * f_boundary, mask_i * f_i)
-        for boundary_i, mask_i, f_boundary, f_i in zip(
-            boundary_mask, interior_mask, interp_fn(f), f)
-    ]
+    f = tf.nest.map_structure(
+        lambda boundary_i, mask_i, f_boundary, f_i: tf.compat.v1.where(
+            boundary_i > 0.0, sign * f_boundary, mask_i * f_i
+        ),
+        boundary_mask,
+        interior_mask,
+        interp_fn(f),
+        f,
+    )
     if masked_value != 0:
 
       def updated_mask(mask_i: tf.Tensor, boundary_i: tf.Tensor):
@@ -604,11 +606,14 @@ class ImmersedBoundaryMethod(object):
         return tf.math.logical_or(
             tf.greater(mask_i, 0.0), tf.greater(boundary_i, 0.0))
 
-      f = [
-          tf.compat.v1.where(
-              updated_mask(mask_i, b_i), f_i, masked_value * tf.ones_like(f_i))
-          for f_i, mask_i, b_i in zip(f, interior_mask, boundary_mask)
-      ]
+      f = tf.nest.map_structure(
+          lambda f_i, mask_i, b_i: tf.compat.v1.where(
+              updated_mask(mask_i, b_i), f_i, masked_value * tf.ones_like(f_i)
+          ),
+          f,
+          interior_mask,
+          boundary_mask,
+      )
 
     return f
 
@@ -626,16 +631,14 @@ class ImmersedBoundaryMethod(object):
     def fluid_node_avg(val: FlowFieldVal) -> FlowFieldVal:
       """Computes the average of neiboring fluid nodes at the boundary."""
       # Mask out the values inside the solid.
-      val = [
-          val_i * mask_i
-          for val_i, mask_i in zip(val, additional_states['ib_interior_mask'])
-      ]
+      val = tf.nest.map_structure(
+          tf.math.multiply, val, additional_states['ib_interior_mask']
+      )
       # Compute the average over the neighboring fluid values.
       val_sum = _apply_3d_kernel(val, kernel_op, 'kSx', 'kSy', 'kSz', 'kSzsh')
-      return [
-          boundary_i * val_sum_i for boundary_i, val_sum_i in zip(
-              additional_states['ib_boundary'], val_sum)
-      ]
+      return tf.nest.map_structure(
+          tf.math.multiply, additional_states['ib_boundary'], val_sum
+      )
 
     states_new = {}
     states_new.update(states)
@@ -775,19 +778,23 @@ class ImmersedBoundaryMethod(object):
       else:
         target_value = variable.value
 
-      variable_fields = zip(states[variable.name],
-                            additional_states[force_name],
-                            additional_states['ib_interior_mask'])
-
       damping_coeff = variable.damping_coeff if variable.HasField(
           'damping_coeff') else self._ib_params.sponge.damping_coeff
 
       additional_states_new.update({
-          force_name: [
-              update_sponge_force(value, target_value, original_force,
-                                  damping_coeff, mask, variable.override)
-              for value, original_force, mask in variable_fields
-          ]
+          force_name: tf.nest.map_structure(
+              lambda value, original_force, mask: update_sponge_force(
+                  value,
+                  target_value,  # pylint: disable=cell-var-from-loop
+                  original_force,
+                  damping_coeff,  # pylint: disable=cell-var-from-loop
+                  mask,
+                  variable.override,  # pylint: disable=cell-var-from-loop
+              ),
+              states[variable.name],
+              additional_states[force_name],
+              additional_states['ib_interior_mask'],
+          )
       })
 
     return additional_states_new
@@ -824,18 +831,20 @@ class ImmersedBoundaryMethod(object):
 
     def update_rhs(
         value: FlowFieldVal,
-        target_value: tf.Tensor,
+        target_value: tf.Tensor | float,
         damping_coeff: float,
         rhs: FlowFieldVal,
         mask: FlowFieldVal,
     ) -> FlowFieldVal:
       """Updates the right hand side function with direct forcing."""
-      terms = zip(value, rhs, mask)
       coeff = np.power(damping_coeff * self._params.dt, -1)
-      return [
-          r_i * m_i - coeff * (v_i - target_value) * (1.0 - m_i)
-          for v_i, r_i, m_i in terms
-      ]
+      return tf.nest.map_structure(
+          lambda v_i, r_i, m_i: r_i * m_i
+          - coeff * (v_i - target_value) * (1.0 - m_i),
+          value,
+          rhs,
+          mask,
+      )
 
     var_dict = {
         variable.name: variable
@@ -860,10 +869,13 @@ class ImmersedBoundaryMethod(object):
             'damping_coeff') else self._ib_params.direct_forcing.damping_coeff
 
         rhs_updated.update({
-            rhs_name:
-                update_rhs(value, var_dict[key].value, damping_coeff,
-                           additional_states[rhs_name],
-                           additional_states['ib_interior_mask'])
+            rhs_name: update_rhs(
+                value,
+                var_dict[key].value,
+                damping_coeff,
+                additional_states[rhs_name],
+                additional_states['ib_interior_mask'],
+            )
         })
 
     return rhs_updated

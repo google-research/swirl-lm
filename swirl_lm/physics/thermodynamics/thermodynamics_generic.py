@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -83,10 +83,9 @@ class ThermodynamicModel(object):
     """
     del additional_states
 
-    return [
-        self._params.p_thermal * tf.ones_like(zz_i, dtype=TF_DTYPE)
-        for zz_i in zz
-    ]
+    return tf.nest.map_structure(
+        lambda zz_i: self._params.p_thermal * tf.ones_like(zz_i), zz
+    )
 
   def update_density(
       self,

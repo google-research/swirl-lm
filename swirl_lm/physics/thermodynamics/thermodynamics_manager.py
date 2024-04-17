@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -177,7 +177,7 @@ def thermodynamics_factory(params: parameters_lib.SwirlLMParameters):
   """Creates an object of the `ThermodynamicsManager`.
 
   The thermodynamic library will be created based on parameters specified in the
-  simulation configuration file. In the absence of `thermodynamcis` in the
+  simulation configuration file. In the absence of `thermodynamics` in the
   configuration file, we assume that the simulation follows the low-Mach number
   approach.
 
@@ -185,8 +185,8 @@ def thermodynamics_factory(params: parameters_lib.SwirlLMParameters):
     params: The context object that holds parameters in a simulation.
 
   Returns:
-    An object of the thermodynamcis manager, which provides interfaces for the
-    evaluations of thermodynamcis quantities.
+    An object of the thermodynamics manager, which provides interfaces for the
+    evaluations of thermodynamics quantities.
   """
   # The `density_option` will be deprecated.
   if params.thermodynamics is None:

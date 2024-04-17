@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -99,9 +99,9 @@ def get_vmr(
   idx_gases = lookup_gas_optics.idx_gases
   # Indices of background gases for which a global mean VMR is available.
   vmr_gm = [0.0] * len(idx_gases)
-  # Map the gas names in `vmr_lib.vmr_gm` dict to indices consistent with the
-  # RRTMGP `key_species` table.
-  for k, v in vmr_lib.vmr_gm.items():
+  # Map the gas names in `vmr_lib.global_means` dict to indices consistent with
+  # the RRTMGP `key_species` table.
+  for k, v in vmr_lib.global_means.items():
     vmr_gm[idx_gases[k]] = v
 
   vmr = optics_utils.lookup_values(tf.stack(vmr_gm), (species_idx,))

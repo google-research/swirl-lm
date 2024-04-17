@@ -32,7 +32,7 @@ message Thermodynamics {
     // Unsupported solver mode.
     UNKNOWN = 0;
     // The mode for representing density in the low-Mach number variable density
-    // approach. In this approach, the thermodyanmic density is used to compute
+    // approach. In this approach, the thermodynamic density is used to compute
     // all conservative variables, hence there's a strong coupling between the
     // momentum and thermodynamical quantities.
     LOW_MACH = 1;
@@ -81,7 +81,7 @@ message IdealGasLaw {
 message ConstantDensity {}
 
 // A library for parameters required by the water thermodynamics.
-// Next id: 27
+// Next id: 28
 message Water {
   // The gas constant of water vapor, in unit of J/kg/K. The default value is
   // computed based on treating the molecular weight of water as 0.018 kg/mol.
@@ -103,6 +103,11 @@ message Water {
   optional float t_icenuc = 25 [default = 233.0];
   // The triple point pressure, in units of Pa.
   optional float p_triple = 6 [default = 611.7];
+  // The reference pressure used in the definition of potential temperature, in
+  // units of Pa.
+  // TODO(sheide): Double check the consistency of this parameter with
+  // `p_thermal`.
+  optional float p00 = 27 [default = 1e5];
   // The reference specific internal energy of water vapor, in units of J/kg.
   // The default value derived based on CLIMA design doc, Eq. 2.11.
   optional float e_int_v0 = 7 [default = 2.132e6];

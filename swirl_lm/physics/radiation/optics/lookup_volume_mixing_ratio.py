@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -27,117 +27,124 @@
 # limitations under the License.
 """A base data class for the lookup tables of atmospheric optical properties."""
 
+import collections
 import dataclasses
-from typing import Any, Dict
+import json
+from typing import Callable, Dict, Optional
 
-import netCDF4 as nc
+from swirl_lm.physics.radiation.config import radiative_transfer_pb2
 from swirl_lm.physics.radiation.optics import constants
-from swirl_lm.physics.radiation.optics import data_loader_base as loader
+from swirl_lm.physics.radiation.optics import optics_utils
+from swirl_lm.utility import file_io
 from swirl_lm.utility import types
 import tensorflow as tf
 
+FlowFieldVal = types.FlowFieldVal
+OrderedDict = collections.OrderedDict
+
 
 @dataclasses.dataclass(frozen=True)
-class LookupVolumeMixingRatio(loader.DataLoaderBase):
+class LookupVolumeMixingRatio:
   """Lookup table of volume mixing ratio profiles of atmospheric gases."""
 
-  # Reference pressure to be used when interpolating the vmr.
-  p_ref: tf.Tensor
-  # Volume mixing ratio of water vapor by pressure layer `(n_p_ref)`.
-  vmr_h2o: tf.Tensor
-  # Volume mixing ratio of Ozone by pressure layer `(n_p_ref)`.
-  vmr_o3: tf.Tensor
-  # Volume mixing ratio (vmr) global mean (gm) of all other gases keyed by
-  # chemical formula.
-  vmr_gm: types.TensorMap
+  # Volume mixing ratio (vmr) global mean of predominant atmospheric gas
+  # species, keyed by chemical formula.
+  global_means: types.TensorMap
+  # Volume mixing ratio profiles, keyed by chemical formula.
+  profiles: Optional[types.TensorMap] = None
 
   @classmethod
-  def _load_data(
+  def from_proto(
       cls,
-      ds: nc.Dataset,
-      tables: types.VariableMap,
-      site_coord: int,
-      exp_label: int,
-  ) -> Dict[str, Any]:
-    """Preprocesses volume mixing ratios of select atmospheric gases.
-
-    Note that only ozone and water vapor vary with the pressure level. Global
-    means are used for all the other gases.
-
-    Args:
-      ds: The original netCDF Dataset containing the RRTMGP atmospheric state.
-      tables: The extracted data as a dictionary of `tf.Variable`s.
-      site_coord: The site coordinate index, which uniquely identifies a
-        (latitude, longitude, time) triplet.
-      exp_label: The RFMIP experiment label.
-
-    Returns:
-      A dictionary containing dimension information and the RRTMGP data as
-      `tf.Variable`s.
-    """
-    # Mapping from chemical formula to canonical molecular name as they appear
-    # in the atmospheric state table. The _GM suffix denotes the global mean of
-    # the volume mixing ratio.
-    chem_formula_to_table_name_mapping = (
-        ('co2', 'carbon_dioxide_GM'),
-        ('n2o', 'nitrous_oxide_GM'),
-        ('co', 'carbon_monoxide_GM'),
-        ('ch4', 'methane_GM'),
-        ('o2', 'oxygen_GM'),
-        ('n2', 'nitrogen_GM'),
-        ('ccl4', 'carbon_tetrachloride_GM'),
-        ('cfc11', 'cfc11_GM'),
-        ('cfc12', 'cfc12_GM'),
-        ('cfc22', 'hcfc22_GM'),
-        ('hfc143a', 'hfc143a_GM'),
-        ('hfc125', 'hfc125_GM'),
-        ('hfc23', 'hfc23_GM'),
-        ('hfc32', 'hfc32_GM'),
-        ('hfc134a', 'hfc134a_GM'),
-        ('cf4', 'cf4_GM'),
-    )
-    vmr_gm = {}
-    for chem_formula, varname in chem_formula_to_table_name_mapping:
-      vmr_gm[chem_formula] = tables[varname][exp_label] * float(
-          ds[varname].units
-      )
-    # Dry air is a special case that always has a volume mixing ratio of 1
-    # since, by definition, vmr is normalized by the number of moles of dry air.
-    vmr_gm[constants.DRY_AIR_KEY] = constants.DRY_AIR_VMR
-
-    p_ref = ds['pres_layer'][:].data[site_coord, :]
-
-    return dict(
-        p_ref=tf.constant(p_ref),
-        vmr_h2o=tables['water_vapor'][exp_label, site_coord, :],
-        vmr_o3=tables['ozone'][exp_label, site_coord, :],
-        vmr_gm=vmr_gm,
-    )
-
-  @classmethod
-  def from_nc_file(
-      cls,
-      path: str,
-      site_coord: int,
-      exp_label: int,
+      proto: radiative_transfer_pb2.AtmosphericState,
   ) -> 'LookupVolumeMixingRatio':
-    """Instantiates a `LookupVolumeMixingRatio` object from netCDF file.
+    """Instantiates a `LookupVolumeMixingRatio` object from a proto.
 
-    The compressed file should be netCDF parsable and contain the RRTMGP
-    atmospheric state table with gas concentrations as well as data about the
-    solar source and surface optical properties, indexed by `site` and
-    and `exp_label`.
+    The proto contains atmospheric conditions, the path to a json file
+    containing globally averaged volume mixing ratio for various gas species,
+    and the path to a file containing the volume mixing ratio sounding data for
+    certain gas species. The gas species will be identified by their chemical
+    formula in lowercase (e.g., 'h2o`, 'n2o', 'o3'). Each entry of the profile
+    corresponds to the pressure level under 'p_ref', which is a required column.
 
     Args:
-      path: The full path of the zipped netCDF file containing the shortwave
-        absorption coefficient lookup table.
-      site_coord: The site coordinate index, which uniquely identifies a
-        (latitude, longitude, time) triplet.
-      exp_label: The RFMIP experiment label.
+      proto: An instance of `radiative_transfer_pb2.AtmosphericState`.
 
     Returns:
       A `LookupVolumeMixingRatio` object.
     """
-    ds, tables, _ = cls._parse_nc_file(path, exclude_vars=['expt_label'])
-    kwargs = cls._load_data(ds, tables, site_coord, exp_label)
+    vmr_sounding = (
+        file_io.parse_csv_file(proto.vmr_sounding_filepath)
+        if proto.HasField('vmr_sounding_filepath')
+        else None
+    )
+    profiles = None
+    if vmr_sounding is not None:
+      assert (
+          'p_ref' in vmr_sounding
+      ), f'Missing p_ref column in sounding file {proto.vmr_sounding_filepath}'
+      profiles = {
+          key: tf.constant(values, dtype=tf.float32)
+          for key, values in vmr_sounding.items()
+      }
+
+    # Dry air is a special case that always has a volume mixing ratio of 1
+    # since, by definition, vmr is normalized by the number of moles of dry air.
+    global_means = {
+        constants.DRY_AIR_KEY: constants.DRY_AIR_VMR,
+    }
+    if proto.HasField('vmr_global_mean_filepath'):
+      with tf.io.gfile.GFile(proto.vmr_global_mean_filepath, 'r') as f:
+        global_means.update(json.loads(f.read()))
+
+    kwargs = dict(
+        global_means=global_means,
+        profiles=profiles,
+    )
     return cls(**kwargs)
+
+  def _vmr_interpolant_fn(
+      self,
+      p_for_interp: tf.Tensor,
+      vmr_profile: tf.Tensor,
+  ) -> Callable[[tf.Tensor], tf.Tensor]:
+    """Creates a volume mixing ratio interpolant for the given profile."""
+
+    def interpolant_fn(p: tf.Tensor):
+      interp = optics_utils.create_linear_interpolant(
+          tf.math.log(p), tf.math.log(p_for_interp)
+      )
+      return optics_utils.interpolate(
+          vmr_profile, OrderedDict({'p': lambda _: interp})
+      )
+
+    return interpolant_fn
+
+  def reconstruct_vmr_fields_from_pressure(
+      self,
+      pressure: FlowFieldVal,
+  ) -> Dict[str, FlowFieldVal]:
+    """Reconstructs volume mixing ratio fields for a given pressure field.
+
+    The volume mixing ratio fields are reconstructed for the gas species that
+    have spatially variable profiles available from sounding data.
+
+    Args:
+      pressure: The pressure field, in Pa.
+
+    Returns:
+      A dictionary keyed by chemical formula of volume mixing ratio fields
+      interpolated to the 3D grid.
+    """
+    if self.profiles is not None:
+      p_for_interp = self.profiles['p_ref']
+
+      return {
+          k: tf.nest.map_structure(
+              self._vmr_interpolant_fn(p_for_interp, profile), pressure
+          )
+          for k, profile in self.profiles.items()
+          if k != 'p_ref'
+      }
+
+    return {}

@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -50,7 +50,9 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
     }
     self._p_thermal = params.p_thermal
 
-    model_params = params.thermodynamics
+    assert (
+        model_params := params.thermodynamics
+    ) is not None, 'Thermodynamics must be set in the config.'
     self._t_s = model_params.ideal_gas_law.t_s
     w_inert = (
         self._molecular_weights[INERT_SPECIES] if INERT_SPECIES
@@ -61,13 +63,15 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
     self._height = model_params.ideal_gas_law.height
     self._delta_t = model_params.ideal_gas_law.delta_t
     self._const_theta = (
-        model_params.ideal_gas_law.const_theta
-        if model_params.ideal_gas_law.HasField('const_theta') else None)
+        tf.constant(model_params.ideal_gas_law.const_theta)
+        if model_params.ideal_gas_law.HasField('const_theta')
+        else None
+    )
 
   @staticmethod
   def density_by_ideal_gas_law(
       p: tf.Tensor,
-      r: tf.Tensor,
+      r: tf.Tensor | float,
       t: tf.Tensor,
   ) -> tf.Tensor:
     """Computes the density following the ideal gas law.
@@ -109,10 +113,11 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
     if zz is None:
       return theta
 
-    return [
-        theta_i * (p_i / self._p_thermal)**self.kappa
-        for theta_i, p_i in zip(theta, self.p_ref(zz, additional_states))
-    ]
+    return tf.nest.map_structure(
+        lambda theta_i, p_i: theta_i * (p_i / self._p_thermal) ** self.kappa,
+        theta,
+        self.p_ref(zz, additional_states),
+    )
 
   def temperature_to_potential_temperature(
       self,
@@ -138,10 +143,11 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
     if zz is None:
       return t
 
-    return [
-        t_i * (p_i / self._p_thermal)**(-self.kappa)
-        for t_i, p_i in zip(t, self.p_ref(zz, additional_states))
-    ]
+    return tf.nest.map_structure(
+        lambda t_i, p_i: t_i * (p_i / self._p_thermal) ** (-self.kappa),
+        t,
+        self.p_ref(zz, additional_states),
+    )
 
   def p_ref(
       self,
@@ -196,8 +202,11 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
               (1.0 - thermodynamics_utils.G * z / self.cp_d / self._const_theta)
               **(1.0 / self.kappa))
 
-    return ([pressure(zz_i) for zz_i in zz] if self._const_theta is None else
-            [pressure_const_theta(zz_i) for zz_i in zz])
+    return (
+        tf.nest.map_structure(pressure, zz)
+        if self._const_theta is None
+        else tf.nest.map_structure(pressure_const_theta, zz)
+    )
 
   def t_ref(self, zz: Optional[FlowFieldVal] = None) -> FlowFieldVal:
     """Generates the reference temperature considering the geopotential.
@@ -213,24 +222,32 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
     Returns:
       The reference temperature as a function of height.
     """
-    zz = [
-        tf.constant(0, dtype=TF_DTYPE),
-    ] * self._params.nz if zz is None else zz
+    if zz is None:
+      if self._params.use_3d_tf_tensor:
+        zz = tf.zeros((self._params.nz, 1, 1), TF_DTYPE)
+      else:
+        zz = [tf.constant(0, dtype=TF_DTYPE)] * self._params.nz
 
     def temperature() -> FlowFieldVal:
       """Computes the reference temperature following the presumed profile."""
-      return [
-          self._t_s - self._delta_t * tf.math.tanh(z / self._height) for z in zz
-      ]
+      return tf.nest.map_structure(
+          lambda z: self._t_s - self._delta_t * tf.math.tanh(z / self._height),
+          zz,
+      )
 
     def temperature_const_theta() -> FlowFieldVal:
       """Computes reference temperature for constant potential temperature."""
-      return self._potential_temperature_to_temperature([
-          self._const_theta,
-      ] * self._params.nz, zz)
+      if self._params.use_3d_tf_tensor:
+        theta = self._const_theta * tf.ones((self._params.nz, 1, 1), TF_DTYPE)
+      else:
+        theta = [self._const_theta] * self._params.nz
+      return self._potential_temperature_to_temperature(theta, zz)
 
-    return (temperature()
-            if self._const_theta is None else temperature_const_theta())
+    return (
+        temperature()
+        if self._const_theta is None
+        else temperature_const_theta()
+    )
 
   def rho_ref(
       self,
@@ -248,14 +265,18 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
       The reference density as a function of height.
     """
     if zz is None:
-      zz = [tf.constant(0, dtype=TF_DTYPE)] * self._params.nz
+      if self._params.use_3d_tf_tensor:
+        zz = tf.zeros((self._params.nz, 1, 1), TF_DTYPE)
+      else:
+        zz = [tf.constant(0, dtype=TF_DTYPE)] * self._params.nz
 
-    return [
-        self.density_by_ideal_gas_law(p_ref, self.r_d, t_ref)  # pytype: disable=wrong-arg-types  # always-use-return-annotations
-        for p_ref, t_ref in zip(
-            self.p_ref(zz, additional_states), self.t_ref(zz)
-        )
-    ]
+    return tf.nest.map_structure(
+        lambda p_ref, t_ref: self.density_by_ideal_gas_law(
+            p_ref, self.r_d, t_ref
+        ),
+        self.p_ref(zz, additional_states),
+        self.t_ref(zz),
+    )
 
   def update_density(
       self,
@@ -263,8 +284,13 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
       additional_states: FlowFieldMap,
   ) -> FlowFieldVal:
     """Updates the density with the ideal gas law."""
-    zz = additional_states.get('zz', [tf.constant(0, dtype=TF_DTYPE)] *
-                               self._params.nz)
+    zz = additional_states.get('zz')
+    input_3d_tf_tensor = isinstance(list(states.values())[0], tf.Tensor)
+    if zz is None:
+      if input_3d_tf_tensor:
+        zz = tf.zeros((self._params.nz, 1, 1), TF_DTYPE)
+      else:
+        zz = [tf.constant(0, dtype=TF_DTYPE)] * self._params.nz
 
     if 'T' in states:
       t = states['T']
@@ -284,24 +310,27 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
 
     if scalars:
       scalars.update({
-          INERT_SPECIES:
-              thermodynamics_utils.compute_ambient_air_fraction(scalars)
+          INERT_SPECIES: thermodynamics_utils.compute_ambient_air_fraction(
+              scalars
+          )
       })
       sc_reg = thermodynamics_utils.regularize_scalar_sum(scalars)
     else:
       sc_reg = {
-          INERT_SPECIES: [
-              tf.ones_like(sc_i, dtype=TF_DTYPE)
-              for sc_i in list(states.values())[0]
-          ]
+          INERT_SPECIES: tf.nest.map_structure(
+              tf.ones_like, list(states.values())[0]
+          )
       }
 
     mixture_molecular_weight = (
         thermodynamics_utils.compute_mixture_molecular_weight(
             self._molecular_weights, sc_reg))
 
-    return [
-        self.density_by_ideal_gas_law(p_i, R_U / w_mix_i, t_i)
-        for p_i, w_mix_i, t_i in zip(
-            self.p_ref(zz, additional_states), mixture_molecular_weight, t)
-    ]
+    return tf.nest.map_structure(
+        lambda p_i, w_mix_i, t_i: self.density_by_ideal_gas_law(
+            p_i, R_U / w_mix_i, t_i
+        ),
+        self.p_ref(zz, additional_states),
+        mixture_molecular_weight,
+        t,
+    )

@@ -68,7 +68,7 @@ message BoundaryCondition {
         [default = NONREFLECTING_LOCAL_MAX];
   }
 
-  // The information of a boundary condition for a specific fase.
+  // The information of a boundary condition for a specific face.
   // Next id: 6.
   message BoundaryInfo {
     // The dimension of the boundary condition.

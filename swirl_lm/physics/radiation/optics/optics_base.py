@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -51,6 +51,10 @@ class OpticsScheme(metaclass=abc.ABCMeta):
         lambda f: kernel_op.apply_kernel_op_y(f, 'shift_dny'),
         lambda f: kernel_op.apply_kernel_op_z(f, 'shift_dnz', 'shift_dnzsh'),
     )[g_dim]
+    self.cloud_optics_lw = None
+    self.cloud_optics_sw = None
+    self.gas_optics_lw = None
+    self.gas_optics_sw = None
 
   @abc.abstractmethod
   def compute_lw_optical_properties(

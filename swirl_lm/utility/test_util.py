@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Library for common operations used in distributed tests."""
+"""Library for common operations used in tests."""
 
 import numpy as np
 from swirl_lm.utility import common_ops
@@ -125,3 +125,55 @@ def merge_output(
                                                     halos[1]:halos[1] + ny,
                                                     halos[2]:halos[2] + nz]
   return merged_result
+
+
+def extract_1d_slice_in_dim(
+    f_3d: tf.Tensor, dim: int, other_idx: int
+) -> tf.Tensor:
+  """Extracts 1D slice of `f_3d` along `dim`.
+
+  For example, if dim == 1 and other_idx == 4, return f[4, :, 4].
+
+  Args:
+    f_3d: The 3D tensor to extract the slice from.
+    dim: The dimension along which to extract the slice.
+    other_idx: The other indices to extract the slice from.
+
+  Returns:
+    The 1D slice of `f_3d` along `dim`.
+  """
+  observe_slice = [other_idx, other_idx, other_idx]
+  observe_slice[dim] = slice(None)
+  f_1d_slice = f_3d[tuple(observe_slice)]
+  return f_1d_slice
+
+
+def convert_to_3d_tensor_and_tile(
+    f_1d: tf.Tensor, dim: int, num_repeats: int
+) -> tf.Tensor:
+  """Converts 1D tensor `f_1d` to a tiled 3D tensor.
+
+  For example, if len(f_1d) == 8, dim == 1, and num_repeats == 4, then
+  f.shape = (4, 8, 4).
+
+  Args:
+    f_1d: The 1D tensor to convert to 3D.
+    dim: The dimension along which `f_1d` is laid out.
+    num_repeats: The number of times to repeat the tensor in dimensions other
+      than `dim`.
+
+  Returns:
+    The 3D tensor `f_3d`, where f_3d.shape[dim] == len(f_1d), and
+      f_3d.shape[j] == num_repeats for j != dim.
+  """
+  # Convert f_1d to 3D tensor f where the direction of variation is along
+  # dim. Result: f.shape[dim] = len(f_1d), and f.shape[j] = 1 for j != dim.
+  slices = [tf.newaxis, tf.newaxis, tf.newaxis]
+  slices[dim] = slice(None)
+  f = f_1d[tuple(slices)]
+
+  # Tile f to a 3D tensor that is repeated in other dimensions.
+  repeats = [num_repeats, num_repeats, num_repeats]
+  repeats[dim] = 1
+  f_3d = tf.tile(f, multiples=repeats)
+  return f_3d

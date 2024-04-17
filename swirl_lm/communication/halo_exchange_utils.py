@@ -1,4 +1,4 @@
-# Copyright 2023 The swirl_lm Authors.
+# Copyright 2024 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -72,9 +72,9 @@ BoundaryConditionsSpec = Sequence[Optional[_DimBoundaryConditions]]
 
 class SideType(enum.Enum):
   """A class defining the type of axis side."""
-  NONE = 0  # Not a side.
-  LOW = 1  # The low side of an axis.
-  HIGH = 2  # The high side of an axis.
+  NONE = -1  # Not a side.
+  LOW = 0  # The low side of an axis.
+  HIGH = 1  # The high side of an axis.
 
 homogeneous_bcs = lambda rank=3: [[(BCType.DIRICHLET, 0.)] * 2] * rank
 

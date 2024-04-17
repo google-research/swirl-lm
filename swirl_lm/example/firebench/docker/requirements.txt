@@ -1,0 +1,5 @@
+absl-py
+apache-beam[gcp]
+gcsfs
+xarray
+xarray_beam

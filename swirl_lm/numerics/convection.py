@@ -650,6 +650,43 @@ def face_interp_fn_quick(
   return quick_fn
 
 
+def face_interp_fn_flux_limiter(
+    dim: int,
+    interp_scheme: ConvectionScheme,
+) -> Callable[[FlowFieldVal], tuple[FlowFieldVal, FlowFieldVal]]:
+  """Generates a function that performs interpolation using a limiter scheme.
+
+  Args:
+    dim: The dimension that is normal to the face where the interpolation is
+      performed.
+    interp_scheme: The scheme for interpolation. Schemes that are currently
+      supported CONVECTION_SCHEME_FLUX_LIMITER_VAN_LEER,
+        CONVECTION_SCHEME_FLUX_LIMITER_MUSCL.
+
+  Returns:
+    A function that interpolates values of a variable onto faces that are normal
+    to `dim`.
+  """
+  dims = ('x', 'y', 'z')
+
+  if interp_scheme == numerics_pb2.CONVECTION_SCHEME_FLUX_LIMITER_VAN_LEER:
+    limiter_type = interpolation.FluxLimiterType.VAN_LEER
+  elif interp_scheme == numerics_pb2.CONVECTION_SCHEME_FLUX_LIMITER_MUSCL:
+    limiter_type = interpolation.FluxLimiterType.MUSCL
+  else:
+    raise NotImplementedError(
+        f'{interp_scheme} is not supported. Available options are:'
+        f' {numerics_pb2.CONVECTION_SCHEME_FLUX_LIMITER_VAN_LEER},'
+        f' {numerics_pb2.CONVECTION_SCHEME_FLUX_LIMITER_MUSCL}.'
+    )
+
+  def interp_fn(state: FlowFieldVal) -> Tuple[FlowFieldVal, FlowFieldVal]:
+    """Computes the face value of `state` with limiter scheme."""
+    return interpolation.flux_limiter(state, dims[dim], limiter_type)
+
+  return interp_fn
+
+
 def face_interp_fn_weno(
     dim: int,
     order: int = 3,
@@ -807,6 +844,11 @@ def convection_from_flux(
     interp_fn = face_interp_fn_first_order_upwind(dim)
   elif interp_scheme == numerics_pb2.CONVECTION_SCHEME_QUICK:
     interp_fn = face_interp_fn_quick(dim)
+  elif interp_scheme in (
+      numerics_pb2.CONVECTION_SCHEME_FLUX_LIMITER_VAN_LEER,
+      numerics_pb2.CONVECTION_SCHEME_FLUX_LIMITER_MUSCL,
+  ):
+    interp_fn = face_interp_fn_flux_limiter(dim, interp_scheme)
   elif interp_scheme == numerics_pb2.CONVECTION_SCHEME_WENO_3:
     interp_fn = face_interp_fn_weno(dim, order=2)
   elif interp_scheme == numerics_pb2.CONVECTION_SCHEME_WENO_3_NN:
@@ -943,6 +985,8 @@ def convection_term(
   if scheme in (
       ConvectionScheme.CONVECTION_SCHEME_UPWIND_1,
       ConvectionScheme.CONVECTION_SCHEME_QUICK,
+      ConvectionScheme.CONVECTION_SCHEME_FLUX_LIMITER_VAN_LEER,
+      ConvectionScheme.CONVECTION_SCHEME_FLUX_LIMITER_MUSCL,
       ConvectionScheme.CONVECTION_SCHEME_WENO_3,
       ConvectionScheme.CONVECTION_SCHEME_WENO_3_NN,
       ConvectionScheme.CONVECTION_SCHEME_WENO_5,
@@ -976,6 +1020,8 @@ def convection_term(
         ', '.join(ConvectionScheme.Name(scheme) for scheme in
                   [ConvectionScheme.CONVECTION_SCHEME_UPWIND_1,
                    ConvectionScheme.CONVECTION_SCHEME_QUICK,
+                   ConvectionScheme.CONVECTION_SCHEME_FLUX_LIMITER_VAN_LEER,
+                   ConvectionScheme.CONVECTION_SCHEME_FLUX_LIMITER_MUSCL,
                    ConvectionScheme.CONVECTION_SCHEME_WENO_3,
                    ConvectionScheme.CONVECTION_SCHEME_WENO_3_NN,
                    ConvectionScheme.CONVECTION_SCHEME_WENO_5,

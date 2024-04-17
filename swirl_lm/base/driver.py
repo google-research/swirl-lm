@@ -17,7 +17,7 @@
 import functools
 import os
 import time
-from typing import Any, Dict, Optional, Sequence, Tuple, TypeVar, Union
+from typing import Any, Dict, Optional, Sequence, Tuple, TypeAlias, TypeVar, Union
 
 from absl import flags
 from absl import logging
@@ -91,9 +91,10 @@ CKPT_DIR_FORMAT = '{filename_prefix}-ckpts/'
 COMPLETION_FILE = 'DONE'
 _MAX_UVW_CFL = 'max_uvw_cfl'
 
-Array = Any
-PerReplica = Any
-Structure = Any
+Array: TypeAlias = Any
+PerReplica: TypeAlias = Any
+Structure: TypeAlias = Any
+FlowFieldVal: TypeAlias = types.FlowFieldVal
 T = TypeVar('T')
 S = TypeVar('S')
 
@@ -350,9 +351,10 @@ def _state_has_nan_inf(state: PerReplica, replicas: Array) -> bool:
 
 
 def _compute_max_uvw_and_cfl(
-    state: PerReplica, grid_spacings: tuple[float, float, float],
-    use_stretched_grid: tuple[bool, bool, bool], additional_states,
-    replicas: Array) -> tf.Tensor:
+    state: PerReplica,
+    grid_spacings: tuple[FlowFieldVal, FlowFieldVal, FlowFieldVal],
+    replicas: Array,
+) -> tf.Tensor:
   """Computes global maximum values of abs(u_i)/d_i and sum(abs(u_i)/d_i).
 
   Maximum value (across cells) of sum(abs(u_i)/d_i) is used in computing CFL as
@@ -362,36 +364,37 @@ def _compute_max_uvw_and_cfl(
 
   Args:
     state: State dictionary container per-replica values.
-    grid_spacings: Coordinate grid spacing for each dimension.
-    use_stretched_grid: Whether to use a stretched grid in each of the three
-      dimensions.
-    additional_states: The additional states, which should contain the stretched
-      grid parameters if using a stretched grid.
+    grid_spacings: Physical grid spacing as 1D field for each dimension.
     replicas: Mapping from grid coordinates to replica id numbers.
 
   Returns:
     A tensor of length 4 with maximum values for abs(u)/dx, abs(v)/dy and
     abs(w)/dz, and sum(abs(u_i)/d_i).
   """
-  del additional_states  # Needed for the stretched grid.
-  if any(use_stretched_grid):
-    raise NotImplementedError('CFL for stretched grid is not yet implemented.')
+  divide = lambda a, b: common_ops.map_structure_3d(tf.divide, a, b)
 
   out = []
   for u, d in zip(['u', 'v', 'w'], grid_spacings):
-    out.append(common_ops.global_reduce(
-        tf.math.abs(state[u]) / d,
-        tf.math.reduce_max,
-        replicas.reshape([1, -1]),
-    ))
+    out.append(
+        common_ops.global_reduce(
+            divide(tf.math.abs(state[u]), d),
+            tf.math.reduce_max,
+            replicas.reshape([1, -1]),
+        )
+    )
 
   dx, dy, dz = grid_spacings
-  out.append(common_ops.global_reduce(
-      (tf.math.abs(state['u']) / dx + tf.math.abs(state['v']) / dy +
-       tf.math.abs(state['w']) / dz),
-      tf.math.reduce_max,
-      replicas.reshape([1, -1]),
-  ))
+  out.append(
+      common_ops.global_reduce(
+          (
+              divide(tf.math.abs(state['u']), dx)
+              + divide(tf.math.abs(state['v']), dy)
+              + divide(tf.math.abs(state['w']), dz)
+          ),
+          tf.math.reduce_max,
+          replicas.reshape([1, -1]),
+      )
+  )
   return tf.convert_to_tensor(out)
 
 
@@ -527,15 +530,25 @@ def _one_cycle(
           )
 
       if SAVE_MAX_UVW_AND_CFL.value:
+        grid_spacings_1d: tuple[FlowFieldVal, FlowFieldVal, FlowFieldVal] = (
+            tuple(
+                params.physical_grid_spacing(
+                    dim, params.use_3d_tf_tensor, additional_states
+                )
+                for dim in (0, 1, 2)
+            )
+        )
         updated_state[_MAX_UVW_CFL] = tf.tensor_scatter_nd_add(
             state[_MAX_UVW_CFL],
-            tf.convert_to_tensor([[cycle_step_id, 0],
-                                  [cycle_step_id, 1],
-                                  [cycle_step_id, 2],
-                                  [cycle_step_id, 3]]),
-            _compute_max_uvw_and_cfl(updated_state, params.grid_spacings,
-                                     params.use_stretched_grid,
-                                     additional_states, logical_replicas),
+            tf.convert_to_tensor([
+                [cycle_step_id, 0],
+                [cycle_step_id, 1],
+                [cycle_step_id, 2],
+                [cycle_step_id, 3],
+            ]),
+            _compute_max_uvw_and_cfl(
+                updated_state, grid_spacings_1d, logical_replicas
+            ),
         )
 
       if SAVE_LAST_VALID_STEP.value:

@@ -31,6 +31,7 @@ enum NumericalFlux {
 }
 
 // Defines the types of convection schemes.
+// Next id: 10
 enum ConvectionScheme {
   // The default option where no scheme is used. Should results in an error.
   CONVECTION_SCHEME_UNKNOWN = 0;
@@ -48,6 +49,10 @@ enum ConvectionScheme {
   CONVECTION_SCHEME_CENTRAL_2 = 3;
   // The fourth order central differencing shceme.
   CONVECTION_SCHEME_CENTRAL_4 = 4;
+  // The Van Leer flux limiter.
+  CONVECTION_SCHEME_FLUX_LIMITER_VAN_LEER = 8;
+  // The MUSCL scheme.
+  CONVECTION_SCHEME_FLUX_LIMITER_MUSCL = 9;
 }
 
 // Defines the types of diffusion schemes.

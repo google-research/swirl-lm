@@ -29,6 +29,7 @@ dependencies = [
     "six",
     "swirl-dynamics@git+https://github.com/google-research/swirl-dynamics",
     "tensorflow",
+    "vtk",
 ]
 
 # This is set automatically by flit using `swirl_lm.__version__`

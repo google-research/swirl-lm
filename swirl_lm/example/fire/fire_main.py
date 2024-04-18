@@ -147,7 +147,7 @@ def main(_):
         params,
         logical_coordinates,
     )
-    driver.solver(
+    driver.solver_loop(
         strategy,
         logical_coordinates,
         init_state,

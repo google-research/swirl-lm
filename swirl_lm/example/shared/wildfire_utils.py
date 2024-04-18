@@ -769,8 +769,6 @@ class WildfireUtils:
     self.v_init = np.float32(self.v_init)
     self.u_mean = self.u_init
     self.v_mean = self.v_init
-    pass
-
 
   def vegetation_drag_update_fn(
       self,

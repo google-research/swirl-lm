@@ -20,6 +20,7 @@ from multiprocessing import pool
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
+import vtk
 import tensorflow as tf
 
 _TF_DTYPE = tf.float32
@@ -591,3 +592,75 @@ def coordinates_to_indices(
         dtype=int)
 
   return c_indices, indices
+
+
+def write_vtk_file(
+    swirl_solution: List[np.ndarray],
+    outfile_name: str,
+    varnames: List[str],
+    time_value: float,
+    grid_res: Tuple[float, float, float],
+    origin: Optional[Tuple[float, float, float]] = (0.0, 0.0, 0.0),
+) -> None:
+  """
+  Converts swirllm solution at a specific step to VTK for visualization
+  in ParaView. Multiple solution variables at the same time step can
+  be written to the same VTK file. Uses the .vti format for structured data.
+  Requires fully merged 3D solution fields without halos.
+
+  Args:
+    swirl_solution: List of merged 3D np.ndarray representing swirllm
+      solution fields without halos, e.g., `u`, `v`, `w`, etc.
+      Each np.ndarray must be in z-y-x order which is required by VTK.
+    outfile_name: Name of the output vti-file
+    varnames: List of names of the swirllm solution variables to be 
+      stored in a given vti-file,
+      e.g., `u`, `v`, `w`, etc. 
+      These names will show up as `Attribute Names` in ParaView.
+    time_value: Physical time of the swirllm solution,
+      i.e., step_number * dt
+    grid_res: A 3-tuple of (dx, dy, dz), indicating the grid spacing in
+      x, y, and z dimension in meters. 
+    origin: A 3-tuple of (x0, y0, z0), indicating the origin in
+      x, y, z dimension. When left unset, (0.0, 0.0, 0.0) is assumed.
+  """
+  assert len(swirl_solution) == len(varnames), (
+      'List of solution arrays should have equal length to number of'
+      ' variable names.'
+      f' Got {len(swirl_solution)} solution arrays, but'
+      f' {len(varnames)} variable names.'
+  )
+
+  dims = swirl_solution[0].shape
+ 
+  # Create a VTK image data object
+  vtk_data = vtk.vtkImageData()
+
+  # Dimensions need to be provided in x-y-z order. However, the
+  # np.ndarray are given in z-y-x order, thus `dims[2]` corresponds
+  # to x-dimension, `dims[1]` to y-dimension, and `dims[0]` to
+  # z-dimension. 
+  vtk_data.SetDimensions(dims[2], dims[1], dims[0])
+  vtk_data.SetSpacing(grid_res)
+  vtk_data.SetOrigin(origin)
+
+  # Convert arrays to VTK data arrays and set names
+  for array, name in zip(swirl_solution, varnames):
+    # Assuming all arrays are single precision floats
+    vtk_array = vtk.vtkFloatArray()
+    vtk_array.SetNumberOfComponents(1)
+    vtk_array.SetNumberOfTuples(array.size)
+    vtk_array.SetVoidArray(array, array.size, 1)
+    vtk_array.SetName(name)
+    vtk_data.GetPointData().AddArray(vtk_array)
+
+    # Set time value
+    vtk_data.GetInformation().Set(
+      vtk.vtkDataObject.DATA_TIME_STEP(),
+      time_value)
+
+  # Write to .vti file
+  writer = vtk.vtkXMLImageDataWriter()
+  writer.SetFileName("{}.vti".format(outfile_name))
+  writer.SetInputData(vtk_data)
+  writer.Write()

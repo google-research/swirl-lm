@@ -717,24 +717,22 @@ def solver(
     A tuple of the final state on each replica.
   """
   # Initialize the TPU.
-  logging.info('Entering solver_loop.')
+  if params is None:
+    params = parameters_lib.params_from_config_file_flag()
   strategy, logical_coordinates = get_strategy_and_coordinates(params)
   init_state = get_init_state(customized_init_fn, strategy, params,
                               logical_coordinates)
-  return solver_loop(strategy, logical_coordinates, init_state)
+  return solver_loop(strategy, logical_coordinates, init_state, params)
 
 
 def solver_loop(
     strategy,
     logical_coordinates,
     init_state,
-    params_input: Optional[Union[parameters_lib.SwirlLMParameters, Any]] = None,
+    params: Union[parameters_lib.SwirlLMParameters, Any],
 ):
   """Runs the solver on an initialized TPU system starting with `init_state`."""
   # Obtain params either from the provided input or the flags.
-  params = params_input
-  if params is None:
-    params = parameters_lib.params_from_config_file_flag()
   params.save_to_file(FLAGS.data_dump_prefix)
 
   logging.info('Entering solver_loop.')

@@ -101,8 +101,8 @@ from absl import logging
 from swirl_lm.base import driver
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.example.fire import fire
-from swirl_lm.example.shared import wildfire_utils
 from swirl_lm.example.fire import fire_uq
+from swirl_lm.example.shared import wildfire_utils
 
 
 def main(_):
@@ -110,7 +110,7 @@ def main(_):
   uq_sampler = fire_uq.FireUQSampler()
   fd_samples, md_samples, ws_samples = uq_sampler.generate_samples()
   data_dump_prefixes = uq_sampler.generate_data_dump_prefixes(
-    flags.FLAGS.data_dump_prefix
+      flags.FLAGS.data_dump_prefix
   )
 
   params = parameters_lib.params_from_config_file_flag()
@@ -126,10 +126,10 @@ def main(_):
     fire_utils.fuel_density = fd_samples[i]
     fire_utils.moisture_density = md_samples[i]
     fire_utils.update_wind_speed(ws_samples[i])
-    logging.info(f'Start UQ Case {i}')
-    logging.info(f'Current fuel density: {fd_samples[i]}')
-    logging.info(f'Current moisture density: {md_samples[i]}')
-    logging.info(f'Current wind speed: {ws_samples[i]}')
+    logging.info('Start UQ Case %s', i)
+    logging.info('Current fuel density: %s', fd_samples[i])
+    logging.info('Current moisture density: %s', md_samples[i])
+    logging.info('Current wind speed: %s', ws_samples[i])
     flags.FLAGS.data_dump_prefix = data_dump_prefixes[i]
 
     # Redefinition of simulation-variable necessary so wind-speed gets updated
@@ -138,19 +138,20 @@ def main(_):
     params.source_update_fn_lib = simulation.source_term_update_fn()
     params.additional_states_update_fn = simulation.additional_states_update_fn
     params.preprocessing_states_update_fn = simulation.pre_simulation_update_fn
-    params.postprocessing_states_update_fn = simulation.post_simulation_update_fn
+    params.postprocessing_states_update_fn = (
+        simulation.post_simulation_update_fn)
 
     init_state = driver.get_init_state(
-      simulation.initialization,
-      strategy,
-      params,
-      logical_coordinates,
+        simulation.initialization,
+        strategy,
+        params,
+        logical_coordinates,
     )
     driver.solver(
-      strategy,
-      logical_coordinates,
-      init_state,
-      params
+        strategy,
+        logical_coordinates,
+        init_state,
+        params
     )
 
 

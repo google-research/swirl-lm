@@ -120,7 +120,7 @@ def main(_):
   params.additional_states_update_fn = simulation.additional_states_update_fn
   params.preprocessing_states_update_fn = simulation.pre_simulation_update_fn
   params.postprocessing_states_update_fn = simulation.post_simulation_update_fn
-  strategy, logical_coordinates = driver.strategy_and_coordinates(params)
+  strategy, logical_coordinates = driver.get_strategy_and_coordinates(params)
 
   for i in range(uq_sampler.start_id, uq_sampler.end_id):
     fire_utils.fuel_density = fd_samples[i]

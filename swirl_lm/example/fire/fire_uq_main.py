@@ -101,13 +101,13 @@ from absl import logging
 from swirl_lm.base import driver
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.example.fire import fire
-from swirl_lm.example.fire import fire_uq
+from swirl_lm.example.fire import fire_uq_sampler
 from swirl_lm.example.shared import wildfire_utils
 
 
 def main(_):
 
-  uq_sampler = fire_uq.FireUQSampler()
+  uq_sampler = fire_uq_sampler.FireUQSampler()
   fd_samples, md_samples, ws_samples = uq_sampler.generate_samples()
   data_dump_prefixes = uq_sampler.generate_data_dump_prefixes(
       flags.FLAGS.data_dump_prefix

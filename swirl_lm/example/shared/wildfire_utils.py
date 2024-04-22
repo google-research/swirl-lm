@@ -759,14 +759,11 @@ class WildfireUtils:
       self.init_fn_t = temperature_init_fn(self.config, self.t_var)
 
   def update_wind_speed(self, wind_speed):
-    self.u_init = wind_speed * np.cos(
-        _WIND_ANGLE.value * np.pi / 180.0
-    )
-    self.v_init = wind_speed * np.sin(
-        _WIND_ANGLE.value * np.pi / 180.0
-    )
-    self.u_init = np.float32(self.u_init)
-    self.v_init = np.float32(self.v_init)
+    """Updates the wind speed to `wind_speed` (using the angle from flags)."""
+    self.u_init = np.float32(
+        wind_speed * np.cos(_WIND_ANGLE.value * np.pi / 180.0)
+    self.v_init = np.float32(
+        wind_speed * np.sin(_WIND_ANGLE.value * np.pi / 180.0)
     self.u_mean = self.u_init
     self.v_mean = self.v_init
 

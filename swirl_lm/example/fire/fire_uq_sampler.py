@@ -49,19 +49,19 @@ _WIND_SPEED_UB = flags.DEFINE_float(
 _MODIFY_INDIVIDUAL = flags.DEFINE_bool(
     'modify_indiviual',
     False,
-    'Whether to modify the different values used in uncertainty quantification'
-    'one at a time. This produces only 4 trajectories and should only be used'
+    'Whether to modify the different values used in uncertainty quantification '
+    'one at a time. This produces only 4 trajectories and should only be used '
     'for validation.'
 )
 _READ_UQ_FILE = flags.DEFINE_bool(
     'read_uq_file',
     False,
-    'Whether to read the UQ-parameters from a file',
+    'Whether to read the UQ-parameters from a file.',
 )
 _UQ_FILENAME = flags.DEFINE_string(
     'uq_filename',
     './large_scale_uq_params.npy',
-    'The location of the .npy file that contains the uq values'
+    'The location of the .npy file that contains the uq values.'
 )
 _UQ_START_ID = flags.DEFINE_integer(
     'uq_start_id',
@@ -75,7 +75,8 @@ _UQ_END_ID = flags.DEFINE_integer(
 )
 
 
-def load_uq_values_from_file():
+def load_uq_values_from_file() -> np.ndarray:
+  """Loads and returns the data in --uq_filename."""
   with tf.io.gfile.GFile(_UQ_FILENAME.value, 'rb') as f:
     return np.load(f)
 
@@ -117,6 +118,7 @@ class FireUQSampler:
     return (upper_bound - lower_bound) * norm_samples + lower_bound
 
   def number_of_samples(self):
+    """Returns the number of samples used in UQ."""
     if _MODIFY_INDIVIDUAL.value:
       return 4
     elif _READ_UQ_FILE.value:
@@ -129,38 +131,37 @@ class FireUQSampler:
     """Generates samples for random variables considered in UQ.
 
     Returns:
-      fuel_density_samples, moisture_density_samples, wind_speed_samples
+      fuel_density_samples, moisture_density_samples, wind_speed_samples.
     """
     if _READ_UQ_FILE.value:
       uq_values = load_uq_values_from_file()
       fuel_density_samples = np.float32(uq_values[:, 0])
       moisture_density_samples = np.float32(uq_values[:, 1])
       wind_speed_samples = np.float32(uq_values[:, 2])
+    elif _MODIFY_INDIVIDUAL.value:
+      fuel_density_samples = np.ones(4) * _FUEL_DENSITY_LB.value
+      fuel_density_samples[1] = _FUEL_DENSITY_UB.value
+      moisture_content_samples = np.ones(4) * _MOISTURE_CONTENT_LB.value
+      moisture_content_samples[2] = _MOISTURE_CONTENT_UB.value
+      moisture_density_samples = (moisture_content_samples *
+                                  fuel_density_samples)
+      wind_speed_samples = np.ones(4) * _WIND_SPEED_LB.value
+      wind_speed_samples[3] = _WIND_SPEED_UB.value
     else:
-      if _MODIFY_INDIVIDUAL.value:
-        fuel_density_samples = np.ones(4) * _FUEL_DENSITY_LB.value
-        fuel_density_samples[1] = _FUEL_DENSITY_UB.value
-        moisture_content_samples = np.ones(4) * _MOISTURE_CONTENT_LB.value
-        moisture_content_samples[2] = _MOISTURE_CONTENT_UB.value
-        moisture_density_samples = (moisture_content_samples *
-                                    fuel_density_samples)
-        wind_speed_samples = np.ones(4) * _WIND_SPEED_LB.value
-        wind_speed_samples[3] = _WIND_SPEED_UB.value
-      else:
-        norm_samples = self._get_norm_samples(_N_SAMPLES_UQ.value, 3)
-        fuel_density_samples = self._shift_scale(
-            _FUEL_DENSITY_LB.value, _FUEL_DENSITY_UB.value, norm_samples[:, 0]
-        )
-        moisture_content_samples = self._shift_scale(
-            _MOISTURE_CONTENT_LB.value,
-            _MOISTURE_CONTENT_UB.value,
-            norm_samples[:, 1]
-        )
-        moisture_density_samples = (moisture_content_samples *
-                                    fuel_density_samples)
-        wind_speed_samples = self._shift_scale(
-            _WIND_SPEED_LB.value, _WIND_SPEED_UB.value, norm_samples[:, 2]
-        )
+      norm_samples = self._get_norm_samples(_N_SAMPLES_UQ.value, 3)
+      fuel_density_samples = self._shift_scale(
+          _FUEL_DENSITY_LB.value, _FUEL_DENSITY_UB.value, norm_samples[:, 0]
+      )
+      moisture_content_samples = self._shift_scale(
+          _MOISTURE_CONTENT_LB.value,
+          _MOISTURE_CONTENT_UB.value,
+          norm_samples[:, 1]
+      )
+      moisture_density_samples = (moisture_content_samples *
+                                  fuel_density_samples)
+      wind_speed_samples = self._shift_scale(
+          _WIND_SPEED_LB.value, _WIND_SPEED_UB.value, norm_samples[:, 2]
+      )
     return fuel_density_samples, moisture_density_samples, wind_speed_samples
 
   def generate_data_dump_prefixes(self, data_dump_prefix):

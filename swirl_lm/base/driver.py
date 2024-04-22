@@ -587,7 +587,7 @@ def get_init_state(
     customized_init_fn: Union[types.InitFn, Any],
     strategy: tf.distribute.TPUStrategy,
     params: parameters_lib.SwirlLMParameters,
-    logical_coordinates: np.ndarray,
+    logical_coordinates: Array,
 ) -> driver_tpu.PerReplica:
   """Creates the initial state using `customized_init_fn`."""
   t_start = time.time()
@@ -728,7 +728,7 @@ def solver(
 
 def solver_loop(
     strategy: tf.distribute.TPUStrategy,
-    logical_coordinates: np.ndarray,
+    logical_coordinates: Array,
     init_state: driver_tpu.PerReplica,
     params: Union[parameters_lib.SwirlLMParameters, Any],
 ):

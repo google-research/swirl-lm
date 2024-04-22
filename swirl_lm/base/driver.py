@@ -571,6 +571,7 @@ def _one_cycle(
 
 
 def get_strategy_and_coordinates(params: parameters_lib.SwirlLMParameters):
+  """Prepares the TPU strategy and the coordinates of the partition."""
   computation_shape = np.array([params.cx, params.cy, params.cz])
   logging.info('Computation_shape is %s', str(computation_shape))
   strategy = driver_tpu.initialize_tpu(
@@ -584,10 +585,10 @@ def get_strategy_and_coordinates(params: parameters_lib.SwirlLMParameters):
 
 def get_init_state(
     customized_init_fn: Union[types.InitFn, Any],
-    strategy,
-    params,
-    logical_coordinates,
-):
+    strategy: tf.distribute.TPUStrategy,
+    params: parameters_lib.SwirlLMParameters,
+    logical_coordinates: np.ndarray,
+) -> driver_tpu.PerReplica:
   """Creates the initial state using `customized_init_fn`."""
   t_start = time.time()
 
@@ -726,9 +727,9 @@ def solver(
 
 
 def solver_loop(
-    strategy,
-    logical_coordinates,
-    init_state,
+    strategy: tf.distribute.TPUStrategy,
+    logical_coordinates: np.ndarray,
+    init_state: driver_tpu.PerReplica,
     params: Union[parameters_lib.SwirlLMParameters, Any],
 ):
   """Runs the solver on an initialized TPU system starting with `init_state`."""

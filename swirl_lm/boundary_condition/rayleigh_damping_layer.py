@@ -388,7 +388,6 @@ class RayleighDampingLayer(object):
           coordinates,
           initial_value_fn,
           pad_mode='SYMMETRIC',
-          num_boundary_points=0,
           mesh_choice=initializer.MeshChoice.PARAMS,
       )
     # pylint: disable=g-long-lambda

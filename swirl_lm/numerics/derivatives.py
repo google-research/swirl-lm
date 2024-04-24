@@ -110,7 +110,7 @@ class Derivatives:
       kernel_op: get_kernel_fn.ApplyKernelOp,
       use_3d_tf_tensor: bool,
       grid_spacings: tuple[float, float, float],
-      use_stretched_grid_in_dim: tuple[bool, bool, bool],
+      use_stretched_grid: tuple[bool, bool, bool],
   ):
     """Instantiates a derivatives library.
 
@@ -144,12 +144,12 @@ class Derivatives:
       kernel_op: Kernel op library.
       use_3d_tf_tensor: Whether to use a 3D tensor or a list of 2D tensors.
       grid_spacings: Coordinate grid spacing for each dimension.
-      use_stretched_grid_in_dim: Whether to use stretched grid in each dim.
+      use_stretched_grid: Whether to use stretched grid in each dim.
     """
     self._kernel_op = kernel_op
     self._use_3d_tf_tensor = use_3d_tf_tensor
     self._grid_spacings = grid_spacings
-    self._use_stretched_grid_in_dim = use_stretched_grid_in_dim
+    self._use_stretched_grid = use_stretched_grid
 
   def _backward_difference(self, f: FlowFieldVal, dim: int) -> FlowFieldVal:
     """Computes the backward difference in the given dimension."""
@@ -212,7 +212,7 @@ class Derivatives:
       nodes in the other dimensions.
     """
     df_dim_face = self._backward_difference(f, dim)
-    if self._use_stretched_grid_in_dim[dim]:
+    if self._use_stretched_grid[dim]:
       h_face_key = stretched_grid_util.h_face_key(dim)
       h_face = additional_states[h_face_key]
       df_dxdim_face = common_ops.map_structure_3d(
@@ -248,7 +248,7 @@ class Derivatives:
       The derivative of f along dim, evaluated at nodes.
     """
     df_dim = self._forward_difference(f_face, dim)
-    if self._use_stretched_grid_in_dim[dim]:
+    if self._use_stretched_grid[dim]:
       h_key = stretched_grid_util.h_key(dim)
       h = additional_states[h_key]
       df_dx_dim = common_ops.map_structure_3d(
@@ -280,7 +280,7 @@ class Derivatives:
       The derivative of f along dim, evaluated at nodes.
     """
     df_dim = self._centered_difference(f, dim)
-    if self._use_stretched_grid_in_dim[dim]:
+    if self._use_stretched_grid[dim]:
       h_key = stretched_grid_util.h_key(dim)
       h = additional_states[h_key]
       df_dx_dim = common_ops.map_structure_3d(
@@ -300,5 +300,5 @@ class Derivatives:
         custom_kernel_op,
         self._use_3d_tf_tensor,
         self._grid_spacings,
-        self._use_stretched_grid_in_dim,
+        self._use_stretched_grid,
     )

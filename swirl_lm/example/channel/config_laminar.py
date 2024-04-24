@@ -46,7 +46,6 @@ GRID_PBTXT = """
   # The size of the convolution kernel to be used for fundamental numerical
   # operations.
   kernel_size: 16
-  num_boundary_points: 0
 """
 
 SIM_PBTXT = """

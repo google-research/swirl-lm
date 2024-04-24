@@ -571,9 +571,53 @@ def _one_cycle(
   return strategy.run(step_fn, args=(init_state,))
 
 
+def get_strategy_and_coordinates(params: parameters_lib.SwirlLMParameters):
+  """Prepares the TPU strategy and the coordinates of the partition."""
+  computation_shape = np.array([params.cx, params.cy, params.cz])
+  logging.info('Computation_shape is %s', str(computation_shape))
+  strategy = driver_tpu.initialize_tpu(
+      tpu_address=FLAGS.target, computation_shape=computation_shape
+  )
+  num_replicas = strategy.num_replicas_in_sync
+  logging.info('TPU is initialized. Number of replicas is %d.', num_replicas)
+  logical_coordinates = tpu_util.grid_coordinates(computation_shape).tolist()
+  return strategy, logical_coordinates
+
+
+def get_init_state(
+    customized_init_fn: Union[types.InitFn, Any],
+    strategy: tf.distribute.TPUStrategy,
+    params: parameters_lib.SwirlLMParameters,
+    logical_coordinates: Array,
+) -> driver_tpu.PerReplica:
+  """Creates the initial state using `customized_init_fn`."""
+  t_start = time.time()
+
+  init_fn = _init_fn(params, customized_init_fn)
+  # Wrapping `init_fn` with tf.function so it is not retraced unnecessarily for
+  # every core/device.
+  state = driver_tpu.distribute_values(
+      strategy,
+      value_fn=tf.function(init_fn),
+      logical_coordinates=logical_coordinates,
+  )
+
+  # Accessing the values in state to synchronize the client so the main thread
+  # will wait here until the `state` is initialized and all remote operations
+  # are done.
+  replica_values = state['replica_id'].values
+  logging.info('State initialized. Replicas are : %s', str(replica_values))
+  t_post_init = time.time()
+  logging.info(
+      'Initialization stage done. Took %f secs.', t_post_init - t_start
+  )
+
+  return state
+
+
 def solver(
     customized_init_fn: Union[types.InitFn, Any],
-    params_input: Optional[Union[parameters_lib.SwirlLMParameters, Any]] = None,
+    params: Optional[Union[parameters_lib.SwirlLMParameters, Any]] = None,
 ):
   """Runs the Navier-Stokes Solver with TF2 Distribution strategy.
 
@@ -668,29 +712,35 @@ def solver(
   Args:
     customized_init_fn: The function that initializes the flow field. The
       function needs to be replica dependent.
-    params_input: An instance of parameters that will be used in the simulation,
+    params: An instance of parameters that will be used in the simulation,
       e.g. the mesh size, fluid properties.
 
   Returns:
     A tuple of the final state on each replica.
   """
-
-  # Obtain params either from the provided input or the flags.
-  params = params_input
   if params is None:
     params = parameters_lib.params_from_config_file_flag()
+  # Initialize the TPU.
+  strategy, logical_coordinates = get_strategy_and_coordinates(params)
+  init_state = get_init_state(customized_init_fn, strategy, params,
+                              logical_coordinates)
+  return solver_loop(strategy, logical_coordinates, init_state, params)
+
+
+def solver_loop(
+    strategy: tf.distribute.TPUStrategy,
+    logical_coordinates: Array,
+    init_state: driver_tpu.PerReplica,
+    params: Union[parameters_lib.SwirlLMParameters, Any],
+):
+  """Runs the solver on an initialized TPU system starting with `init_state`."""
+  # Obtain params either from the provided input or the flags.
   params.save_to_file(FLAGS.data_dump_prefix)
 
-  # Initialize the TPU.
-  logging.info('Entering solver.')
-  computation_shape = np.array([params.cx, params.cy, params.cz])
-  logging.info('Computation_shape is %s', str(computation_shape))
-  strategy = driver_tpu.initialize_tpu(
-      tpu_address=FLAGS.target, computation_shape=computation_shape
-  )
+  logging.info('Entering solver_loop.')
+  t_pre_restore = time.time()
+
   num_replicas = strategy.num_replicas_in_sync
-  logging.info('TPU is initialized. Number of replicas is %d.', num_replicas)
-  logical_coordinates = tpu_util.grid_coordinates(computation_shape).tolist()
   # In order to save and restore from the filesystem, we use tf.train.Checkpoint
   # on the step id. The `step_id` Variable should be placed on the TPU device so
   # that we don't block TPU execution when writing the state to filenames
@@ -787,27 +837,7 @@ def solver(
   )
   logging.info('read_state function created.')
 
-  t_start = time.time()
-
-  init_fn = _init_fn(params, customized_init_fn)
-  # Wrapping `init_fn` with tf.function so it is not retraced unnecessarily for
-  # every core/device.
-  state = driver_tpu.distribute_values(
-      strategy,
-      value_fn=tf.function(init_fn),
-      logical_coordinates=logical_coordinates,
-  )
-
-  # Accessing the values in state to synchronize the client so the main thread
-  # will wait here until the `state` is initialized and all remote operations
-  # are done.
-  replica_values = state['replica_id'].values
-  logging.info('State initialized. Replicas are : %s', str(replica_values))
-  t_post_init = time.time()
-  logging.info(
-      'Initialization stage done. Took %f secs.', t_post_init - t_start
-  )
-
+  state = init_state
   write_initial_state = False
 
   # Restore from an existing checkpoint if present.
@@ -882,7 +912,7 @@ def solver(
   t_post_restore = time.time()
   logging.info(
       'restore-if-necessary-or-write took %f secs.',
-      t_post_restore - t_post_init,
+      t_post_restore - t_pre_restore,
   )
 
   if params.num_steps < 0:
@@ -930,6 +960,19 @@ def solver(
         params=params,
         model=model,
     )
+
+    if SAVE_MAX_UVW_AND_CFL.value:
+      # CFL number is guaranteed to be identical for all replicas, so take
+      # replica 0 value.
+      cfl_values = params.dt * state[_MAX_UVW_CFL].values[0][:, 3]
+      max_cfl_number_from_cycle = tf.reduce_max(cfl_values)
+      cfl_number_from_last_step = cfl_values[-1]
+      logging.info(
+          'max CFL number from last cycle: %.3f.  CFL number from last step:'
+          ' %.3f',
+          max_cfl_number_from_cycle,
+          cfl_number_from_last_step,
+      )
 
     # Completed number steps are guaranteed to be identical for all replicas, so
     # we are just taking replica 0 value.

@@ -758,6 +758,15 @@ class WildfireUtils:
     else:
       self.init_fn_t = temperature_init_fn(self.config, self.t_var)
 
+  def update_wind_speed(self, wind_speed):
+    """Updates the wind speed (using the angle specified with --wind_angle)."""
+    self.u_init = np.float32(
+        wind_speed * np.cos(_WIND_ANGLE.value * np.pi / 180.0))
+    self.v_init = np.float32(
+        wind_speed * np.sin(_WIND_ANGLE.value * np.pi / 180.0))
+    self.u_mean = self.u_init
+    self.v_mean = self.v_init
+
   def vegetation_drag_update_fn(
       self,
       c_d: float,
@@ -1192,7 +1201,6 @@ class WildfireUtils:
         coordinates,
         init_fn,
         pad_mode=pad_mode,
-        num_boundary_points=0,
         mesh_choice=initializer.MeshChoice.PARAMS,
     )
 

@@ -494,7 +494,6 @@ class ImmersedBoundaryMethod(object):
           coordinates,
           init_fn,
           pad_mode='SYMMETRIC',
-          num_boundary_points=0,
           mesh_choice=initializer.MeshChoice.PARAMS,
       )
 

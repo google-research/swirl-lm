@@ -61,7 +61,6 @@ def _initialize_states(
       coordinates,
       init_fn,
       pad_mode=pad_mode,
-      num_boundary_points=0,
       mesh_choice=initializer.MeshChoice.PARAMS)
 
 

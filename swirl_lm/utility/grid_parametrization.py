@@ -68,11 +68,8 @@ flags.DEFINE_integer(
     1, 'number of splits for processing '
     'output.',
     allow_override=True)
-flags.DEFINE_integer(
-    'num_boundary_points',
-    0,
-    'Number of points to be added to each end of the computational domain.',
-    allow_override=True)
+flags.DEFINE_integer('num_boundary_points', 0, 'Deprecated.',
+                     allow_override=True)
 _STRETCHED_GRID_X_PATH = flags.DEFINE_string(
     'stretched_grid_x_path',
     '',
@@ -104,14 +101,13 @@ def _get_core_n(n: int, halo_width: int) -> Optional[int]:
 def _get_full_grid_size(
     n: int,
     halo_width: int,
-    num_cores: int,
-    num_boundary_points: int = 1,
+    num_cores: int
 ) -> int:
   """The full grid size (includes padding, if any)."""
   core_n = _get_core_n(n, halo_width)
   if not core_n:
     return 1
-  return num_cores * core_n + num_boundary_points * 2
+  return num_cores * core_n
 
 
 def _get_full_uniform_grid(n: Optional[int], l: float) -> tf.Tensor:
@@ -139,32 +135,25 @@ def _get_physical_full_grid_size(
   # there is padding, these values will be overridden.
   return grid_parametrization_pb2.CoordinateInt(
       dim_0=_get_full_grid_size(params.grid_size.dim_0, params.halo_width,
-                                params.computation_shape.dim_0,
-                                params.num_boundary_points),
+                                params.computation_shape.dim_0),
       dim_1=_get_full_grid_size(params.grid_size.dim_1, params.halo_width,
-                                params.computation_shape.dim_1,
-                                params.num_boundary_points),
+                                params.computation_shape.dim_1),
       dim_2=_get_full_grid_size(params.grid_size.dim_2, params.halo_width,
-                                params.computation_shape.dim_2,
-                                params.num_boundary_points))
+                                params.computation_shape.dim_2))
 
 
 def _get_grid_spacing(
-    full_grid_size, length, num_boundary_points: int = 0
+    full_grid_size, length
 ) -> float | None:
   """Get the grid spacing between nodes in a equidistant mesh.
 
   Args:
     full_grid_size: The total number of nodes in the mesh grid.
     length: The size of the domain in a particular dimension.
-    num_boundary_points: Deprecated.
 
   Returns:
     The distance between two adjacent nodes.
   """
-  # The following statement is kept to maintain the behavior of Saint Venant
-  # cases.
-  full_grid_size -= 2 * num_boundary_points
   return length / (full_grid_size - 1) if full_grid_size > 1 else None
 
 
@@ -213,34 +202,24 @@ def _validate_global_coord(
     core_n: int | None,
     num_core: int,
     dim: Literal[0, 1, 2],
-    num_boundary_points: int,
 ) -> None:
   """Checks that global coordinates have the correct number of elements.
 
   Global coordinates do not include the halos. The input args `core_n`,
-  `num_core`, and `num_boundary_points` should come from a `GridParametrization`
-  object.  `core_n` should be the 3-tuple `(params.core_nx, params.core_ny,
-  params.core_nz)`, and `num_core` should be the 3-tuple `(params.nx, params.ny,
-  params.nz)`.
+  and `num_core` should come from a `GridParametrization`  object.  `core_n`
+  should be the 3-tuple `(params.core_nx, params.core_ny, params.core_nz)`, and
+  `num_core` should be the 3-tuple `(params.nx, params.ny, params.nz)`.
 
   Args:
     global_coord: The global coordinates.
     core_n: Number of non-halo points in this dimension.
     num_core: Number of cores in this dimension.
     dim: Which dimension is being considered (only used for an error message).
-    num_boundary_points: Deprecated; should be 0 for all uses.
 
   Raises:
     ValueError: If `global_coord` does not have the correct number of
       elements.
   """
-  if num_boundary_points != 0:
-    logging.info(
-        'Skipping validation of global coordinates in the deprecated case of'
-        ' nonzero `num_boundary_points`.'
-    )
-    return
-
   if core_n is None:
     # There are no non-halo points in this dimension, so there is nothing to
     # validate.
@@ -282,7 +261,6 @@ def _global_xyz_from_config(
     length: tuple[float, float, float],
     core_n: tuple[int | None, int | None, int | None],
     num_core: tuple[int, int, int],
-    num_boundary_points: int,
 ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
   """Returns global coordinates, excluding halo points.
 
@@ -295,7 +273,6 @@ def _global_xyz_from_config(
     length: The length of the domain in each dimension.
     core_n: The number of non-halo points in each dimension.
     num_core: The number of cores in each dimension.
-    num_boundary_points: The number of boundary points in each dimension.
 
   Returns:
     A tuple of global coordinates in each dimension.
@@ -309,10 +286,15 @@ def _global_xyz_from_config(
     )[dim]
     if stretched_grid_path:
       global_coord = _load_array_from_file(stretched_grid_path)
+      logging.info(
+          'Loaded stretched grid in dim %d from file `%s`.',
+          dim,
+          stretched_grid_path,
+      )
     else:
       global_coord = _get_full_uniform_grid(full_grid_size[dim], length[dim])
     _validate_global_coord(
-        global_coord, core_n[dim], num_core[dim], dim, num_boundary_points
+        global_coord, core_n[dim], num_core[dim], dim
     )
     return global_coord
 
@@ -336,7 +318,6 @@ def params_from_flags() -> grid_parametrization_pb2.GridParametrization:
   params.kernel_size = FLAGS.kernel_size
   params.input_chunk_size = FLAGS.input_chunk_size
   params.num_output_splits = FLAGS.num_output_splits
-  params.num_boundary_points = FLAGS.num_boundary_points
   if _STRETCHED_GRID_X_PATH.value:
     params.stretched_grid_paths.dim_0 = _STRETCHED_GRID_X_PATH.value
   if _STRETCHED_GRID_Y_PATH.value:
@@ -406,7 +387,6 @@ class GridParametrization(object):
     self.kernel_size = params.kernel_size
     self.input_chunk_size = params.input_chunk_size
     self.num_output_splits = params.num_output_splits
-    self.num_boundary_points = params.num_boundary_points
 
     self.use_stretched_grid = (
         True if params.stretched_grid_paths.dim_0 else False,
@@ -416,9 +396,9 @@ class GridParametrization(object):
     # Get coordinate grid spacings (valid with or without stretched grid). To be
     # compatible with stretched grids, use these values instead of
     # self.{dx,dy,dz}.
-    dx_uniform = _get_grid_spacing(self.fx, self.lx, self.num_boundary_points)
-    dy_uniform = _get_grid_spacing(self.fy, self.ly, self.num_boundary_points)
-    dz_uniform = _get_grid_spacing(self.fz, self.lz, self.num_boundary_points)
+    dx_uniform = _get_grid_spacing(self.fx, self.lx)
+    dy_uniform = _get_grid_spacing(self.fy, self.ly)
+    dz_uniform = _get_grid_spacing(self.fz, self.lz)
     self.grid_spacings: tuple[float, float, float] = tuple(
         _get_stretched_grid_aware_grid_spacing_in_dim(
             (dx_uniform, dy_uniform, dz_uniform),
@@ -437,7 +417,6 @@ class GridParametrization(object):
         (self.lx, self.ly, self.lz),
         (self.core_nx, self.core_ny, self.core_nz),
         (self.cx, self.cy, self.cz),
-        self.num_boundary_points,
     )
 
   @classmethod
@@ -451,8 +430,7 @@ class GridParametrization(object):
       grid_lengths: Sequence[float],
       computation_shape: Sequence[int],
       subgrid_shape: Optional[Sequence[int]],
-      halo_width: int,
-      num_boundary_points: int = 1,
+      halo_width: int
   ):
     """Creates grid parametrization from specific arguments (grid lengths, etc).
 
@@ -466,7 +444,6 @@ class GridParametrization(object):
       computation_shape: The number of TPU cores assigned to each of three axes.
       subgrid_shape: The subgrid shape in the three dimensions.
       halo_width: The halo width.
-      num_boundary_points: The number of boundary points.
 
     Returns:
       The `GridParametrization` encapsulating the input arguments.
@@ -487,7 +464,6 @@ class GridParametrization(object):
       proto.grid_size.dim_2 = subgrid_shape[2]
 
     proto.halo_width = halo_width
-    proto.num_boundary_points = num_boundary_points
 
     return cls(proto)
 
@@ -559,7 +535,7 @@ class GridParametrization(object):
     # Note: The final grid should return an outer halo of width 1 due to
     # boundary conditions, but does not. So for now we ignore that in the dx,
     # dy, dz computations.
-    return _get_grid_spacing(self.fx, self.lx, self.num_boundary_points)
+    return _get_grid_spacing(self.fx, self.lx)
 
   @property
   def dy(self) -> Optional[float]:
@@ -567,7 +543,7 @@ class GridParametrization(object):
       raise ValueError(
           'Calling .dy when using stretched grid in dim 1 is likely an error!'
       )
-    return _get_grid_spacing(self.fy, self.ly, self.num_boundary_points)
+    return _get_grid_spacing(self.fy, self.ly)
 
   @property
   def dz(self) -> Optional[float]:
@@ -575,25 +551,22 @@ class GridParametrization(object):
       raise ValueError(
           'Calling .dz when using stretched grid in dim 2 is likely an error!'
       )
-    return _get_grid_spacing(self.fz, self.lz, self.num_boundary_points)
+    return _get_grid_spacing(self.fz, self.lz)
 
   @property
   def fx(self):
     """The full grid size in dim 0."""
-    return _get_full_grid_size(self.nx, self.halo_width, self.cx,
-                               self.num_boundary_points)
+    return _get_full_grid_size(self.nx, self.halo_width, self.cx)
 
   @property
   def fy(self):
     """The full grid size in dim 1."""
-    return _get_full_grid_size(self.ny, self.halo_width, self.cy,
-                               self.num_boundary_points)
+    return _get_full_grid_size(self.ny, self.halo_width, self.cy)
 
   @property
   def fz(self):
     """The full grid size in dim 2."""
-    return _get_full_grid_size(self.nz, self.halo_width, self.cz,
-                               self.num_boundary_points)
+    return _get_full_grid_size(self.nz, self.halo_width, self.cz)
 
   @property
   def x(self) -> tf.Tensor:
@@ -634,11 +607,6 @@ class GridParametrization(object):
         which case the full grid can not be evenly distributed across all cores
         without halo.
     """
-    assert self.num_boundary_points == 0, (
-        f'Full grid can not be evenly distributed in dim {dim} because'
-        f' {self.num_boundary_points} boundary points are included.'
-    )
-
     grid_full = (self.x, self.y, self.z)[dim]
     n_local = (self.core_nx, self.core_ny, self.core_nz)[dim]
     i_core = common_ops.get_core_coordinate(replicas, replica_id)[dim]

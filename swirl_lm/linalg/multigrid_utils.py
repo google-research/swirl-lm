@@ -924,7 +924,6 @@ def get_init_fn_from_value_fn_for_homogeneous_bcs(
     b_fn: ValueFunction,
     params: grid_parametrization.GridParametrization,
     coarsest_subgrid_shape: Optional[Sequence[int]] = None,
-    num_boundary_points: int = initializer.DEFAULT_NUM_BOUNDARY_POINTS,
     perm: ThreeIntTuple = initializer.DEFAULT_PERMUTATION) -> InitFn:
   """An multigrid init function with value function input for `b`.
 
@@ -934,9 +933,6 @@ def get_init_fn_from_value_fn_for_homogeneous_bcs(
     b_fn: The initializer function for `b`.
     params: The grid parametrization.
     coarsest_subgrid_shape: The coarsest subgrid shape.
-    num_boundary_points: The number of points on both ends of the boundaries in
-      one dimension that is considered as part of the physical domain, but will
-      be excluded from the computational domain.
     perm: A 3-tuple that defines the permutation ordering for the returned
       tensor. The default is `(2, 0, 1)`. If `None`, permutation is not applied.
 
@@ -945,8 +941,7 @@ def get_init_fn_from_value_fn_for_homogeneous_bcs(
   """
   def init_fn(replica_id, coordinates):
     b = initializer.partial_mesh_for_core(
-        params, coordinates, b_fn, perm=perm,
-        num_boundary_points=num_boundary_points)
+        params, coordinates, b_fn, perm=perm)
     x0 = tf.zeros_like(b)
     dtype = b.dtype.as_numpy_dtype
     ps_rs_init_fn = get_ps_rs_init_fn(params, coarsest_subgrid_shape, dtype)

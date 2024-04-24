@@ -317,7 +317,7 @@ class MoninObukhovSimilarityTheory(object):
     Returns:
       The Oubkhov length normalized height.
     """
-    ln_z_by_z0 = np.log(height / self.z_0)
+    ln_z_by_z0 = tf.math.log(height / self.z_0)
     r_b = self._richardson_number(theta, u1, u2, height)
     max_iter = 10
 
@@ -898,7 +898,6 @@ class MoninObukhovSimilarityTheory(object):
           coordinates,
           initial_value_fn,
           pad_mode='SYMMETRIC',
-          num_boundary_points=0,
           mesh_choice=initializer.MeshChoice.PARAMS,
       )
     # pylint: disable=g-long-lambda
@@ -1282,8 +1281,7 @@ def monin_obukhov_similarity_theory_factory(
 
   Raises:
     ValueError: If `most` is not defined in the parameter context.
-    ValueError: If `gravity_direction` is absent, or is not aligned with a
-      particular dimension.
+    ValueError: If the gravity direction is absent.
     AssertionError: If the first fluid layer is below the tolerated surface
       roughness.
   """
@@ -1296,27 +1294,26 @@ def monin_obukhov_similarity_theory_factory(
         'in the config.'
     )
 
-  eps = np.finfo(np.float32).resolution
-  vertical_dim = -1
-  for i in range(3):
-    if abs(abs(params.gravity_direction[i]) - 1.0) < eps:
-      if vertical_dim == -1:
-        vertical_dim = i
-      else:
-        raise ValueError(
-            f'More than one dimension is defined as gravity dimension '
-            f'({vertical_dim} and {i}), but only one is allowed by the '
-            f'Monin-Obukhov boundary layer model.')
-
-  if vertical_dim == -1:
+  vertical_dim = params.g_dim
+  if vertical_dim is None:
     raise ValueError(
         'Gravity must be defined to use the Monin-Obukhov boundary layer '
         'model.')
 
+  # Get the height of the first fluid layer above the ground.
+  if params.use_stretched_grid[vertical_dim]:
+    # For a stretched grid, the first non-halo grid point coordinate value is
+    # the height above the ground.
+    height = params.global_xyz[vertical_dim][0]
+  else:
+    # Under a uniform grid assumption, because the wall is at the mid-point
+    # face between the first fluid layer and the halo layers, the height of
+    # the first fluid layer above the ground is half of the grid spacing.
+    height = 0.5 * params.grid_spacings[vertical_dim]
+
   # If the height of the first fluid layer is close or below the surface
   # roughness, the wall is considered resolved, and a non-slip wall should be
   # used without the MOST model.
-  height = 0.5 * (params.dx, params.dy, params.dz)[vertical_dim]
   z_0 = _HEIGHT_TO_SURFACE_ROUGHNESS_RATIO_THRESHOLD * boundary_models.most.z_0
   assert height > z_0, (
       f'The height of the first fluid layer ({height} m) is below the tolerated'

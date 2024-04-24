@@ -66,7 +66,6 @@ This example simulates the Tubbs Fire.
      --loading_step=0 \
      --lx=20000.0 --ly=20000.0 --lz=2000.0 \
      --moisture_density=0.01 \
-     --num_boundary_points=0 \
      --num_cycles=60 --num_steps=4000 \
      --nx=512 --ny=512 --nz=20 \
      --cx=2 --cy=2 --cz=32 \

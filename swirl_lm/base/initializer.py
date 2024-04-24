@@ -18,6 +18,7 @@ import enum
 from typing import Callable, List, Literal, Optional, Sequence, Text, Tuple, Union
 
 import numpy as np
+from swirl_lm.utility import common_ops
 from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import types
 import tensorflow as tf
@@ -30,7 +31,6 @@ ValueFunction = Callable[[
 ], tf.Tensor]
 
 DEFAULT_PERMUTATION = (2, 0, 1)
-DEFAULT_NUM_BOUNDARY_POINTS = 2
 _DEFAULT_PAD_MODE = 'CONSTANT'
 _NP_DTYPE = types.NP_DTYPE
 
@@ -49,7 +49,6 @@ def partial_mesh_for_core(
     value_fn: ValueFunction,
     perm: Optional[ThreeIntTuple] = DEFAULT_PERMUTATION,
     pad_mode: Optional[Text] = _DEFAULT_PAD_MODE,
-    num_boundary_points: int = DEFAULT_NUM_BOUNDARY_POINTS,
     mesh_choice: MeshChoice = MeshChoice.DERIVED,
 ) -> tf.Tensor:
   """Generates a partial mesh of a given value function for a core.
@@ -78,9 +77,6 @@ def partial_mesh_for_core(
     pad_mode: Defines the padding applied the returned tensor. Must be
       'CONSTANT', 'REFLECT', 'SYMMETRIC' or `None`. The default is 'CONSTANT'.
       If `None`, padding is not applied.
-    num_boundary_points: The number of points on both ends of the boundaries in
-      one dimension that is considered as part of the physical domain, but will
-      be excluded from the computational domain.
     mesh_choice: Use mesh from `params` if equals `MeshChoice.PARAMS`, and
       derive the mesh from `core_n`, `num_cores`, and `length` if equals
       `MeshChoice.DERIVED`.
@@ -118,15 +114,12 @@ def partial_mesh_for_core(
       mesh = tf.linspace(
           _NP_DTYPE(0.0),
           _NP_DTYPE(length),
-          num_cores * core_n + num_boundary_points,
+          num_cores * core_n,
       )
     else:
       mesh = provided_mesh
 
-    boundary_offset = num_boundary_points // 2
-    start = core_id * core_n + boundary_offset
-    end = start + core_n
-    return mesh[start:end]
+    return common_ops.get_local_slice_of_1d_array(mesh, core_id, core_n, core_n)
 
   lx = params.lx
   ly = params.ly

@@ -52,7 +52,7 @@ class RRTMGP:
     self._halos = config.halo_width
     # The vertical grid spacing used in computing the local water path for an
     # atmospheric grid cell.
-    self._dh = (config.dx, config.dy, config.dz)[g_dim]
+    self._dh = config.grid_spacings[g_dim]
     # Whether stretched grid is used in each dimension.
     self._use_stretched_grid = config.use_stretched_grid
     # The two-stream radiative transfer solver.

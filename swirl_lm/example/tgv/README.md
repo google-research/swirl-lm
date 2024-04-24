@@ -80,7 +80,7 @@ Cloud TPUs.
       --config_filepath=swirl-lm/swirl_lm/example/tgv/tgv_3d.textpb \
       --cx=2 --cy=2 --cz=8 \
       --num_steps=2000 --nx=128 --ny=128 --nz=6 --kernel_size=16 \
-      --halo_width=2 --lx=6.28 --ly=6.28 --lz=6.28 --num_boundary_points=0 \
+      --halo_width=2 --lx=6.28 --ly=6.28 --lz=6.28 \
       --dt=2e-3 --u_mag=1.0 --p_ref=0.0 --rho_ref=1.0
       --target=<TPU> \
       --output_fn_template=tgv_{var}.png

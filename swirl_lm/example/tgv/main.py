@@ -21,7 +21,7 @@ Example command line:
     --data_load_prefix=gs://<GCS_DIR>/data/tgv \
     --config_filepath=tgv_3d.textpb \
     --num_steps=2000 --nx=128 --ny=128 --nz=6 --kernel_size=16 --halo_width=2 \
-    --lx=6.28 --ly=6.28 --lz=6.28 --num_boundary_points=0 --dt=2e-3 \
+    --lx=6.28 --ly=6.28 --lz=6.28 --dt=2e-3 \
     --u_mag=1.0 --p_ref=0.0 --rho_ref=1.0 --target=<TPU> \
     --output_fn_template=gs://<GCS_DIR>/output/tgv_{var}.png
 """
@@ -220,7 +220,7 @@ def taylor_green_vortices(config, v0, p0, rho0, replica_id, coordinates):
     output.update({
         key:
             initializer.partial_mesh_for_core(
-                config, coordinates, get_vortices(key), num_boundary_points=0)
+                config, coordinates, get_vortices(key))
     })
 
   if config.solver_procedure == parameters.SolverProcedure.VARIABLE_DENSITY:

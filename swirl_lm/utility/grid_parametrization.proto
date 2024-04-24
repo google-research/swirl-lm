@@ -126,9 +126,7 @@ message GridParametrization {
   optional int32 input_chunk_size = 7;
   // The number of splits for processing outputs.
   optional int32 num_output_splits = 8;
-  // The number of boundary points to be to each end of the computational
-  // domain.
-  optional int32 num_boundary_points = 10 [default = 1];
+  optional int32 num_boundary_points = 10 [default = 1, deprecated = true];
   // The paths to files containing stretched grid data.
   optional CoordinateStr stretched_grid_paths = 11;
 }

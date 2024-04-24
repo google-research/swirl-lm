@@ -14,7 +14,12 @@
 
 """Library for common operations used in tests."""
 
+import os
+from typing import Any
+
+from absl.testing import absltest
 import numpy as np
+import numpy.typing as npt
 from swirl_lm.utility import common_ops
 import tensorflow as tf
 
@@ -177,3 +182,56 @@ def convert_to_3d_tensor_and_tile(
   repeats[dim] = 1
   f_3d = tf.tile(f, multiples=repeats)
   return f_3d
+
+
+def save_1d_array_to_tempfile(
+    test: absltest.TestCase, array: tf.Tensor
+) -> str:
+  """Saves a 1D array to a tempfile and returns the path to the tempfile."""
+  tempfile = test.create_tempfile()
+  fname = os.path.join(tempfile)
+  np.savetxt(fname, array)
+  return fname
+
+
+def get_np_array(
+    state: Any,
+    varname: str,
+    computation_shape: npt.ArrayLike,
+    halo_width: int,
+) -> npt.NDArray:
+  """Gets the numpy array of a particular variable."""
+  if np.prod(computation_shape) == 1:
+    result = state[varname].numpy()[
+        halo_width:-halo_width, halo_width:-halo_width, halo_width:-halo_width
+    ]
+  else:
+    raise NotImplementedError('Multiple cores not yet implemented.')
+  return result
+
+
+def l_infinity_norm(v: npt.ArrayLike) -> float:
+  return np.max(np.abs(v))
+
+
+def l_infinity_error(field1: npt.ArrayLike, field2: npt.ArrayLike) -> float:
+  err = field1 - field2
+  return l_infinity_norm(err)
+
+
+def compute_power_exponent(x: npt.ArrayLike, y: npt.ArrayLike) -> float:
+  """Estimates a power-law exponent through regression.
+
+  Assume that x, y have a power-law relationship, y = C * x^p. Estimate p
+  through linear regression, using log y = log C + p log x.
+
+  Args:
+    x: Independent variable.
+    y: Dependent variable.
+
+  Returns:
+    The exponent p characterizing the power law.
+  """
+  logy = np.log(y)
+  logx = np.log(x)
+  return np.polyfit(logx, logy, 1)[0]

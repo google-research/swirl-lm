@@ -13,7 +13,20 @@
 # limitations under the License.
 
 # coding=utf-8
-"""A library for the sub-grid scale models in large-eddy simulations."""
+"""A library for the sub-grid scale models in large-eddy simulations.
+
+Note that SGS models are fine tuned for 3D problems. It is not advisable to use
+these models for quasi-2D problems:
+Reference: Awad E, Toorman E, Lacor C. Large eddy simulations for quasi-2D
+turbulence in shallow flows: A comparison between different subgrid scale
+models. Journal of Marine Systems. 2009 Jun 1;77(4):511-28.
+
+Length scale is defined as sqrt(dx**2 + dy**2 + dz**2) or (dx*dy*dz)**(1/3)
+based on the specific model. Hence, for quasi-2D problem along the X-Y plane,
+the dz is arbitrary. In case any SGS model is used for such configurations, lz
+and nz have to carefully set so that an arbitrary value of dz does not pollute
+the turbulent viscosity.
+"""
 
 import functools
 import itertools
@@ -351,9 +364,7 @@ class SgsModel(object):
     elif self._params.WhichOneof('sgs_model_type') == 'vreman':
       diff_t = tf.nest.map_structure(
           lambda nu_t: nu_t / self._params.vreman.pr_t,
-          self.vreman(
-              velocity, self._params.vreman.c_s, additional_states
-          ),
+          self.vreman(velocity, self._params.vreman.c_s, additional_states),
       )
     else:
       raise ValueError(
@@ -430,9 +441,7 @@ class SgsModel(object):
           additional_states,
       )
     elif self._params.WhichOneof('sgs_model_type') == 'vreman':
-      nu_t = self.vreman(
-          field_vars, self._params.vreman.c_s, additional_states
-      )
+      nu_t = self.vreman(field_vars, self._params.vreman.c_s, additional_states)
     else:
       raise ValueError(
           'Unsupported sub-grid scale model {}'.format(
@@ -751,9 +760,7 @@ class SgsModel(object):
         for dim in (0, 1, 2)
     )
     delta_updated = common_ops.map_structure_3d(
-        lambda dx, dy, dz, fb: (dx * dy * dz) ** (1 / 3) * fb,
-        *dx_dy_dz,
-        f_b()
+        lambda dx, dy, dz, fb: (dx * dy * dz) ** (1 / 3) * fb, *dx_dy_dz, f_b()
     )
 
     return tf.nest.map_structure(

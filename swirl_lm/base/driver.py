@@ -30,9 +30,11 @@ from swirl_lm.core import simulation
 from swirl_lm.linalg import poisson_solver
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import stretched_grid
+from swirl_lm.utility import text_util
 from swirl_lm.utility import tpu_util
 from swirl_lm.utility import types
 import tensorflow as tf
+
 
 flags.DEFINE_integer(
     'min_steps_for_output',
@@ -97,6 +99,11 @@ Structure: TypeAlias = Any
 FlowFieldVal: TypeAlias = types.FlowFieldVal
 T = TypeVar('T')
 S = TypeVar('S')
+
+
+class _NonRecoverableError(Exception):
+  """Errors that cannot be recovered from via restarts, e.g., config issues."""
+  pass
 
 
 def _stateless_update_if_present(
@@ -176,7 +183,7 @@ def _get_state_keys(params: parameters_lib.SwirlLMParameters):
   if len(set(essential_keys)) + len(set(additional_keys)) + len(
       set(helper_var_keys)
   ) != len(set(essential_keys + additional_keys + helper_var_keys)):
-    raise ValueError(
+    raise _NonRecoverableError(
         'Duplicated keys detected between the three types of states: '
         f'essential states: {essential_keys}, additional states: '
         f'{additional_keys}, and helper vars: {helper_var_keys}'
@@ -245,7 +252,7 @@ def _get_model(kernel_op, params):
   """Returns the appropriate Navier-Stokes model from `params`."""
   if params.solver_procedure == parameters_lib.SolverProcedure.VARIABLE_DENSITY:
     return simulation.Simulation(kernel_op, params)
-  raise ValueError(
+  raise _NonRecoverableError(
       f'Solver procedure not recognized: {params.solver_procedure}'
   )
 
@@ -371,13 +378,15 @@ def _compute_max_uvw_and_cfl(
     A tensor of length 4 with maximum values for abs(u)/dx, abs(v)/dy and
     abs(w)/dz, and sum(abs(u_i)/d_i).
   """
-  divide = lambda a, b: common_ops.map_structure_3d(tf.divide, a, b)
+  abs_divide = lambda a, b: common_ops.map_structure_3d(
+      lambda c, d: tf.math.abs(c) / d, a, b
+  )
 
   out = []
   for u, d in zip(['u', 'v', 'w'], grid_spacings):
     out.append(
         common_ops.global_reduce(
-            divide(tf.math.abs(state[u]), d),
+            abs_divide(state[u], d),
             tf.math.reduce_max,
             replicas.reshape([1, -1]),
         )
@@ -387,9 +396,9 @@ def _compute_max_uvw_and_cfl(
   out.append(
       common_ops.global_reduce(
           (
-              divide(tf.math.abs(state['u']), dx)
-              + divide(tf.math.abs(state['v']), dy)
-              + divide(tf.math.abs(state['w']), dz)
+              abs_divide(state['u'], dx)
+              + abs_divide(state['v'], dy)
+              + abs_divide(state['w'], dz)
           ),
           tf.math.reduce_max,
           replicas.reshape([1, -1]),
@@ -608,9 +617,8 @@ def get_init_state(
   replica_values = state['replica_id'].values
   logging.info('State initialized. Replicas are : %s', str(replica_values))
   t_post_init = time.time()
-  logging.info(
-      'Initialization stage done. Took %f secs.', t_post_init - t_start
-  )
+  logging.info('Initialization stage took %s.',
+               text_util.seconds_to_string(t_post_init - t_start))
 
   return state
 
@@ -718,13 +726,18 @@ def solver(
   Returns:
     A tuple of the final state on each replica.
   """
-  if params is None:
-    params = parameters_lib.params_from_config_file_flag()
-  # Initialize the TPU.
-  strategy, logical_coordinates = get_strategy_and_coordinates(params)
-  init_state = get_init_state(customized_init_fn, strategy, params,
-                              logical_coordinates)
-  return solver_loop(strategy, logical_coordinates, init_state, params)
+  try:
+    if params is None:
+      params = parameters_lib.params_from_config_file_flag()
+    # Initialize the TPU.
+    strategy, logical_coordinates = get_strategy_and_coordinates(params)
+    init_state = get_init_state(customized_init_fn, strategy, params,
+                                logical_coordinates)
+    return solver_loop(strategy, logical_coordinates, init_state, params)
+  except _NonRecoverableError:
+    logging.exception('Non-recoverable error in solve - returning None '
+                      'instead of raising an exception to avoid automatic '
+                      'restarts.')
 
 
 def solver_loop(
@@ -755,7 +768,7 @@ def solver_loop(
     # are pointing to the same place. We do not allow this to happen as some
     # files could get overwritten and it can be very confusing.
     if input_dir == output_dir:
-      raise ValueError(
+      raise _NonRecoverableError(
           'Please check your configuration. The loading directory is '
           f'set to be the same as the output directory {output_dir}, this '
           'will cause confusion and potentially over-write important data. '
@@ -773,7 +786,7 @@ def solver_loop(
     loading_subdir = os.path.join(input_dir, str(params.loading_step))
     states_from_file = list(params.states_from_file)
     if not tf.io.gfile.exists(loading_subdir):
-      raise ValueError(
+      raise _NonRecoverableError(
           f'--data_load_prefix was set to {FLAGS.data_load_prefix} and '
           f'loading step is {params.loading_step} but no restart files are '
           f'found in {loading_subdir}.'
@@ -910,13 +923,11 @@ def solver_loop(
     ckpt_manager.save()
 
   t_post_restore = time.time()
-  logging.info(
-      'restore-if-necessary-or-write took %f secs.',
-      t_post_restore - t_pre_restore,
-  )
+  logging.info('restore-if-necessary-or-write took %s.',
+               text_util.seconds_to_string(t_post_restore - t_pre_restore))
 
   if params.num_steps < 0:
-    raise ValueError(
+    raise _NonRecoverableError(
         '`num_steps` should not be negative but it was set to'
         f' {params.num_steps}.'
     )
@@ -924,7 +935,7 @@ def solver_loop(
       params.num_steps > 0
       and (step_id_value() - params.start_step) % params.num_steps != 0
   ):
-    raise ValueError(
+    raise _NonRecoverableError(
         'Incompatible step_id detected. `step_id` is expected '
         'to be `start_step` + N * `num_steps` but (step_id: {}, '
         'start_step: {}, num_steps: {}) is detected. Maybe the '
@@ -961,12 +972,18 @@ def solver_loop(
         model=model,
     )
 
+    # Completed number steps are guaranteed to be identical for all replicas, so
+    # we are just taking replica 0 value.
+    completed_steps = _local_state(strategy, num_steps_completed)[0].numpy()
+    step_id.assign_add(completed_steps)
+
     if SAVE_MAX_UVW_AND_CFL.value:
       # CFL number is guaranteed to be identical for all replicas, so take
       # replica 0 value.
-      cfl_values = params.dt * state[_MAX_UVW_CFL].values[0][:, 3]
+      cfl_values = params.dt * _local_state(
+          strategy, state[_MAX_UVW_CFL])[0].numpy()[:, 3]
       max_cfl_number_from_cycle = tf.reduce_max(cfl_values)
-      cfl_number_from_last_step = cfl_values[-1]
+      cfl_number_from_last_step = cfl_values[completed_steps - 1]
       logging.info(
           'max CFL number from last cycle: %.3f.  CFL number from last step:'
           ' %.3f',
@@ -974,11 +991,7 @@ def solver_loop(
           cfl_number_from_last_step,
       )
 
-    # Completed number steps are guaranteed to be identical for all replicas, so
-    # we are just taking replica 0 value.
-    completed_steps = _local_state(strategy, num_steps_completed)[0].numpy()
-    step_id.assign_add(completed_steps)
-    # Did not complete a full cycle.
+    # Check if we did not complete a full cycle.
     if completed_steps < params.num_steps:
       logging.info(
           'Non-convergence detected. Early exit from cycle %d at step %d.'
@@ -1002,7 +1015,7 @@ def solver_loop(
       ckpt_manager.sync()
       # Mark simulation as complete.
       _write_completion_file(output_dir)
-      raise ValueError(
+      raise _NonRecoverableError(
           f'Non-convergence detected. Early exit from cycle {cycle} at step '
           f'{step_id_value() + 1}. The last valid state at step '
           f'{step_id_value()} has been saved in the specified output path.'
@@ -1018,12 +1031,18 @@ def solver_loop(
         str(replica_id_values),
     )
     t1 = time.time()
+    # "Recover" float64 precision for dt by rounding the 32 bit value to 6
+    # significant digits and then converting back to float. The assumption is
+    # that dt is user specified with 6 or less significant digits.
+    dt64 = float(np.format_float_positional(params.dt, 6, fractional=False))
     logging.info(
-        'Completed total %d steps (%d cycles) so far. Took %f secs '
-        'for the last cycle (%d steps).',
+        'Completed total %d steps (%d cycles, %s simulation time) so far. '
+        'Took %s for the last cycle (%d steps).',
         step_id_value(),
         cycle + 1,
-        t1 - t0,
+        text_util.seconds_to_string(int(step_id_value()) * dt64,
+                                    precision=dt64),
+        text_util.seconds_to_string(t1 - t0),
         params.num_steps,
     )
 
@@ -1055,7 +1074,8 @@ def solver_loop(
           write_status,
       )
     t2 = time.time()
-    logging.info('Writing output & checkpoint took %f secs.', t2 - t1)
+    logging.info('Writing output & checkpoint took %s.',
+                 text_util.seconds_to_string(t2 - t1))
 
   # Wait for checkpoint manager before marking completion.
   ckpt_manager.sync()

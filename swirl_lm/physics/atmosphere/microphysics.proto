@@ -22,4 +22,8 @@ message Kessler {}
 
 // Parameters required by the one-moment microphysics. The full implementation
 // of the model is in microphysics_one_moment.
-message OneMoment {}
+message OneMoment {
+  // Humidity source is clipped such that
+  //     q + source * dt >= humidity_source_term_limiter_k * q.
+  optional float humidity_source_term_limiter_k = 1 [default = 0.5];
+}

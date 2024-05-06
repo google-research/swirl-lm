@@ -317,7 +317,7 @@ class RayleighDampingLayer(object):
         sponge_infos, periodic_dims)
 
     logging.info(
-        'Sponge layer will be applied for the following variables with'
+        'Sponge layer will be applied for the following variables with '
         'following values: %r', self._target_values)
 
   def _get_sponge_force(

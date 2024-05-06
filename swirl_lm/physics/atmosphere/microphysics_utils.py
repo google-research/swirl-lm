@@ -27,16 +27,28 @@
 # limitations under the License.
 """A library of helper functions for the microphysics models."""
 
+from typing import TypeAlias
+
+from google.protobuf import message
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.physics.atmosphere import microphysics_generic
 from swirl_lm.physics.atmosphere import microphysics_kw1978
 from swirl_lm.physics.atmosphere import microphysics_one_moment
+from swirl_lm.physics.atmosphere import microphysics_pb2
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import water
 
+ModelParamsType: TypeAlias = (microphysics_pb2.Kessler |
+                              microphysics_pb2.OneMoment)
+
+
+def get_model_params_from_proto(msg: message.Message) -> ModelParamsType:
+  """Returns the proto that has been set in the microphysics 'oneof'."""
+  return getattr(msg, msg.WhichOneof('microphysics'))
+
 
 def select_microphysics(
-    model_name: str,
+    model_params: ModelParamsType,
     params: parameters_lib.SwirlLMParameters,
     thermodynamics: thermodynamics_manager.ThermodynamicsManager,
 ) -> microphysics_generic.MicrophysicsAdapter:
@@ -45,12 +57,14 @@ def select_microphysics(
       '`water` is required as the thermodynamics model to use'
       f' microphysics models, but {thermodynamics.model} is provided.'
   )
-  if model_name == 'kessler':
+  if isinstance(model_params, microphysics_pb2.Kessler):
     return microphysics_kw1978.Adapter(params, thermodynamics.model)
-  elif model_name == 'one_moment':
-    return microphysics_one_moment.Adapter(params, thermodynamics.model)
+  elif isinstance(model_params, microphysics_pb2.OneMoment):
+    return microphysics_one_moment.Adapter(params, thermodynamics.model,
+                                           model_params)
   else:
     raise NotImplementedError(
-        f'{model_name} is not a valid microphysics model.'
-        ' Available options are `kessler`, `one_moment`.'
+        f'{model_params} is not a known params type for microphysics model.'
+        ' Available options are `microphysics_pb2.Kessler` and'
+        ' `microphysics_pb2.OneMoment`.'
     )

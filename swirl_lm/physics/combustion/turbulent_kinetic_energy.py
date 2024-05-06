@@ -13,11 +13,13 @@
 # limitations under the License.
 
 """A library for the turbulent kinetic energy (TKE) modeling."""
+
 import functools
 
 import numpy as np
 from swirl_lm.numerics import filters
 from swirl_lm.physics.combustion import turbulent_kinetic_energy_pb2
+from swirl_lm.utility import common_ops
 from swirl_lm.utility import composite_types
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
@@ -34,7 +36,9 @@ def _update_local_halos(value: FlowFieldVal, halo_width: int) -> FlowFieldVal:
   if halo_width < 1:
     raise ValueError(
         '`halo_width` has to be greater than 1. {} is provided.'.format(
-            halo_width))
+            halo_width
+        )
+    )
 
   if not isinstance(value, tf.Tensor):
     # pylint: disable=g-complex-comprehension
@@ -42,11 +46,16 @@ def _update_local_halos(value: FlowFieldVal, halo_width: int) -> FlowFieldVal:
         tf.pad(
             value_i[halo_width:-halo_width, halo_width:-halo_width],
             paddings=((halo_width, halo_width), (halo_width, halo_width)),
-            mode='SYMMETRIC') for value_i in value[halo_width:-halo_width]
+            mode='SYMMETRIC',
+        )
+        for value_i in value[halo_width:-halo_width]
     ]
     # pylint: enable=g-complex-comprehension
-    return [value_xy_valid[0]
-           ] * halo_width + value_xy_valid + [value_xy_valid[-1]] * halo_width
+    return (
+        [value_xy_valid[0]] * halo_width
+        + value_xy_valid
+        + [value_xy_valid[-1]] * halo_width
+    )
   else:
     return tf.pad(
         value[
@@ -77,7 +86,8 @@ def _local_box_filter_3d(state: FlowFieldVal) -> FlowFieldVal:
   halo_update_fn = functools.partial(_update_local_halos, halo_width=1)
 
   return filters.global_box_filter_3d(
-      state, halo_update_fn, filter_width=3, num_iter=1)
+      state, halo_update_fn, filter_width=3, num_iter=1
+  )
 
 
 def constant_tke_update_function(tke_value: float) -> StatesUpdateFn:
@@ -137,7 +147,10 @@ def algebraic_tke_update_function() -> StatesUpdateFn:
       params: grid_parametrization.GridParametrization,
   ) -> FlowFieldMap:
     """Updates 'tke' in `additional_states`."""
-    del kernel_op, replica_id, replicas, params
+    del kernel_op, replica_id, replicas
+
+    if any(params.use_stretched_grid):
+      raise ValueError('Algebraic TKE model does not support stretched grids.')
 
     u_mean = _local_box_filter_3d(states['u'])
     v_mean = _local_box_filter_3d(states['v'])
@@ -201,20 +214,31 @@ def turbulent_viscosity_tke_update_function() -> StatesUpdateFn:
     del kernel_op, replica_id, replicas, states
 
     if 'nu_t' not in additional_states.keys():
-      raise ValueError('`nu_t` is required to use the turbulence viscosity to '
-                       'compute the TKE.')
+      raise ValueError(
+          '`nu_t` is required to use the turbulence viscosity to '
+          'compute the TKE.'
+      )
 
-    delta = np.power(params.dx * params.dy * params.dz, 1.0 / 3.0)
+    use_3d_tf_tensor = isinstance(additional_states['nu_t'], tf.Tensor)
+    dx_dy_dz = tuple(
+        params.physical_grid_spacing(dim, use_3d_tf_tensor, additional_states)
+        for dim in (0, 1, 2)
+    )
+    delta = common_ops.map_structure_3d(
+        lambda dx, dy, dz: (dx * dy * dz) ** (1 / 3), *dx_dy_dz
+    )
     tke = tf.nest.map_structure(
-        lambda nu_t_i: tf.square(nu_t_i / (c_k * delta)),
+        lambda nu_t_i, delta_i: tf.square(nu_t_i / (c_k * delta_i)),
         additional_states['nu_t'],
+        delta,
     )
 
     updated_additional_states = {}
     for key, value in additional_states.items():
       if key == 'tke':
         updated_additional_states.update(
-            {'tke': _update_local_halos(tke, params.halo_width)})
+            {'tke': _update_local_halos(tke, params.halo_width)}
+        )
       else:
         updated_additional_states.update({key: value})
 

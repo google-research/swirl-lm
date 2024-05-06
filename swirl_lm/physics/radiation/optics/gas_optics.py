@@ -185,7 +185,14 @@ def _compute_relative_abundance_interpolant(
     )
   vmr_ref_ratio = tf.math.divide(vmr_ref[0], vmr_ref[1])
   combined_vmr = vmr_for_interp[0] + vmr_ref_ratio * vmr_for_interp[1]
-  relative_abundance = tf.math.divide(vmr_for_interp[0], combined_vmr)
+  # Consistent with how the RRTM absorption coefficient tables are designed, the
+  # relative abundance defaults to 0.5 when the volume mixing ratio of both
+  # dominant species is exactly 0.
+  relative_abundance = tf.where(
+      condition=tf.greater(combined_vmr, 0.0),
+      x=vmr_for_interp[0] / combined_vmr,
+      y=0.5 * tf.ones_like(combined_vmr),
+  )
   interpolant = _mixing_fraction_interpolant(
       relative_abundance, lookup_gas_optics.n_mixing_fraction
   )

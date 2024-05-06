@@ -75,6 +75,7 @@ import numpy as np
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.physics import constants
 from swirl_lm.physics.atmosphere import microphysics_generic
+from swirl_lm.physics.atmosphere import microphysics_pb2
 from swirl_lm.physics.thermodynamics import water
 from swirl_lm.utility import types
 import tensorflow as tf
@@ -746,9 +747,14 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
   _one_moment: OneMoment
 
   def __init__(
-      self, params: parameters_lib.SwirlLMParameters, water_model: water.Water
+      self,
+      params: parameters_lib.SwirlLMParameters,
+      water_model: water.Water,
+      one_moment_params: microphysics_pb2.OneMoment,
   ):
     self._one_moment = OneMoment(params, water_model)
+    self._dt = params.dt
+    self._one_moment_params = one_moment_params
 
   def terminal_velocity(
       self,
@@ -785,6 +791,76 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
         coeff, states['rho_thermal'], states[varname]
     )
 
+  def _humidity_source_for_rain_and_snow(
+      self,
+      states: types.FlowFieldMap,
+      thermo_states: types.FlowFieldMap,
+      coeff: Union[Rain, Snow],
+      include_autoconversion_and_accretion: bool,
+  ):
+    """Computes humidity source and clips it to (1 - k) * q / dt.
+
+    Physically q cannot be negative, but instead of limiting the source such
+    that
+
+      q + source * dt >= 0
+
+    we limit the source to reduce q to a fraction k of its current value (to
+    leave room for convection, etc.).
+
+      q + source * dt >= kq
+      source >= -(1 - k)q / dt
+
+    Args:
+      states: A dictionary that holds all flow field variables.
+      thermo_states: A dictionary that holds all thermodynamics variables.
+      coeff: A Rain, Snow dataclass object that stores constant parameters.
+      include_autoconversion_and_accretion: Whether to include
+        autoconversion and accretion in the computation.
+
+    Returns:
+      The clipped source term.
+    """
+    q_p = (
+        thermo_states.get('q_r', states['q_r']) if isinstance(coeff, Rain)
+        else thermo_states.get('q_s', states['q_s'])
+    )
+    aut_and_acc = self._one_moment.autoconversion_and_accretion(
+        coeff,
+        thermo_states['T'],
+        states['rho_thermal'],
+        thermo_states['q_v'],
+        q_p,
+        thermo_states['q_l'],
+        thermo_states['q_c'],
+    )
+    evap_subl = self._one_moment.evaporation_sublimation(
+        coeff,
+        thermo_states['T'],
+        states['rho_thermal'],
+        thermo_states['q_v'],
+        q_p,
+        thermo_states['q_l'],
+        thermo_states['q_c'],
+    )
+
+    def _add_and_clip(q_p, aut_and_acc, evap_subl):
+      # Clip the humidity source to be not less than -(1 - k) * q / dt so that
+      # q stays >= 0.
+      #
+      # In case q ends up being negative for some other reason, we also clip the
+      # input q to be >= 0. Otherwise, the clipping on the humidity source will
+      # introduce an artificial positive source for negative q values
+      # potentially masking other problems.
+      if include_autoconversion_and_accretion:
+        source = aut_and_acc - evap_subl
+      else:
+        source = -evap_subl
+      k = self._one_moment_params.humidity_source_term_limiter_k
+      return tf.maximum(source, (-(1 - k) * tf.maximum(q_p, 0.0) / self._dt))
+
+    return tf.nest.map_structure(_add_and_clip, q_p, aut_and_acc, evap_subl)
+
   def humidity_source_fn(
       self,
       varname: str,
@@ -809,60 +885,44 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
     Raises:
       NotImplementedError If `varname` is not one of `q_t`, `q_r`, or `q_s`.
     """
-    del additional_states
-
     q_v = tf.nest.map_structure(
         tf.math.subtract, thermo_states['q_t'], thermo_states['q_c']
     )
 
-    source = tf.nest.map_structure(tf.zeros_like, states[varname])
-
     if varname == 'q_r':
-      coeffs = [Rain()]
+      return self._humidity_source_for_rain_and_snow(
+          states,
+          thermo_states | {'q_v': q_v},
+          Rain(),
+          include_autoconversion_and_accretion=True,
+      )
     elif varname == 'q_s':
-      coeffs = [Snow()]
+      return self._humidity_source_for_rain_and_snow(
+          states,
+          thermo_states | {'q_v': q_v},
+          Snow(),
+          include_autoconversion_and_accretion=True,
+      )
     elif varname == 'q_t':
-      coeffs = [Rain(), Snow()]
+      return tf.nest.map_structure(
+          lambda src_rain, src_snow: tf.math.negative(src_rain + src_snow),
+          self._humidity_source_for_rain_and_snow(
+              states,
+              thermo_states | {'q_v': q_v},
+              Rain(),
+              include_autoconversion_and_accretion=True,
+          ),
+          self._humidity_source_for_rain_and_snow(
+              states,
+              thermo_states | {'q_v': q_v},
+              Snow(),
+              include_autoconversion_and_accretion=True,
+          ))
     else:
       raise NotImplementedError(
           f'{varname} is not a valid humidity type for the 1-moment'
           ' microphysics. Available options are: `q_t`, `q_r`, and `q_s`.'
       )
-
-    for coeff in coeffs:
-      q_p = (
-          thermo_states['q_r']
-          if isinstance(coeff, Rain)
-          else thermo_states['q_s']
-      )
-      aut_and_acc = self._one_moment.autoconversion_and_accretion(
-          coeff,
-          thermo_states['T'],
-          states['rho_thermal'],
-          q_v,
-          q_p,
-          thermo_states['q_l'],
-          thermo_states['q_c'],
-      )
-
-      evap_subl = self._one_moment.evaporation_sublimation(
-          coeff,
-          thermo_states['T'],
-          states['rho_thermal'],
-          q_v,
-          q_p,
-          thermo_states['q_l'],
-          thermo_states['q_c'],
-      )
-
-      source = tf.nest.map_structure(
-          lambda s, a, e: s + a - e, source, aut_and_acc, evap_subl
-      )
-
-    if varname == 'q_t':
-      source = tf.nest.map_structure(tf.math.negative, source)
-
-    return tf.nest.map_structure(tf.math.multiply, source, states['rho'])
 
   def potential_temperature_source_fn(
       self,
@@ -896,8 +956,8 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
     source = tf.nest.map_structure(tf.zeros_like, states['rho'])
 
     phase_params = (
-        (Rain(), self._one_moment.water_model.lh_v0, states['q_r']),
-        (Snow(), self._one_moment.water_model.lh_s0, states['q_s']),
+        (Rain(), self._one_moment.water_model.lh_v0),
+        (Snow(), self._one_moment.water_model.lh_s0),
     )
 
     cp = self._one_moment.water_model.cp_m(
@@ -920,42 +980,18 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
 
       return source_fn
 
-    for coeff, lh, q in phase_params:
+    for coeff, lh in phase_params:
       # Calculate source terms for vapor and liquid conversions, respectively.
       # Use that c_{q_v->q_r/s} = -c_{q_r/s->q_v}, i.e., the negation of the
       # evaporation/sublimation rate.
-      water_source = tf.nest.map_structure(
-          tf.math.negative,
-          self._one_moment.evaporation_sublimation(
-              coeff,
-              thermo_states['T'],
-              states['rho_thermal'],
-              thermo_states['q_v'],
-              q,
-              thermo_states['q_l'],
-              thermo_states['q_c'],
-          ),
+      water_source = self._humidity_source_for_rain_and_snow(
+          states,
+          thermo_states,
+          coeff,
+          include_autoconversion_and_accretion=(varname == 'theta_li'),
       )
 
-      if varname == 'theta_li':
-        # Get conversion rates and energy source from cloud water/ice to rain/
-        # snow. This source term applies to the liquid-ice potential temperature
-        # only.
-        water_source = tf.nest.map_structure(
-            tf.math.add,
-            water_source,
-            self._one_moment.autoconversion_and_accretion(
-                coeff,
-                thermo_states['T'],
-                states['rho_thermal'],
-                thermo_states['q_v'],
-                q,
-                thermo_states['q_l'],
-                thermo_states['q_c'],
-            ),
-        )
-
-      # Converts water mass fraction conversion rates to an energy source term.
+     # Converts water mass fraction conversion rates to an energy source term.
       theta_source = tf.nest.map_structure(
           energy_source_fn(lh),
           states['rho'],

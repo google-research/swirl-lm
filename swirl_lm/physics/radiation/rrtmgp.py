@@ -19,6 +19,7 @@ from typing import Optional
 import numpy as np
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.physics.atmosphere import microphysics_one_moment
+from swirl_lm.physics.atmosphere import microphysics_pb2
 from swirl_lm.physics.radiation.rte import two_stream
 from swirl_lm.physics.thermodynamics import water
 from swirl_lm.utility import common_ops
@@ -66,7 +67,7 @@ class RRTMGP:
     self._atmospheric_state = self._two_stream_solver.atmospheric_state
     # Library for 1-moment microphysics.
     self._microphysics_lib = microphysics_one_moment.Adapter(
-        config, self._water
+        config, self._water, microphysics_pb2.OneMoment()
     )
 
   def _compute_cloud_path(

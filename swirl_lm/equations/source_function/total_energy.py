@@ -88,12 +88,13 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
           'A microphysics model is required to consider precipitation in the'
           ' total energy equation.'
       )
-      microphysics_model_name = self._scalar_params.total_energy.WhichOneof(
-          'microphysics'
+      microphysics_model_params = (
+          microphysics_utils.get_model_params_from_proto(
+              self._scalar_params.total_energy)
       )
       self._microphysics = (
           microphysics_utils.select_microphysics(
-              microphysics_model_name, self._params, self._thermodynamics
+              microphysics_model_params, self._params, self._thermodynamics
           )
       )
 

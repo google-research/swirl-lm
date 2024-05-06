@@ -87,12 +87,13 @@ class Humidity(scalar_generic.ScalarGeneric):
           'condensation in the humidity equation, and to compute the humidity '
           'variables `q_r` and `q_s`.'
       )
-      microphysics_model_name = self._scalar_params.humidity.WhichOneof(
-          'microphysics'
+      microphysics_model_params = (
+          microphysics_utils.get_model_params_from_proto(
+              self._scalar_params.humidity)
       )
       self._microphysics = (
           microphysics_utils.select_microphysics(
-              microphysics_model_name, self._params, self._thermodynamics
+              microphysics_model_params, self._params, self._thermodynamics
           )
       )
 

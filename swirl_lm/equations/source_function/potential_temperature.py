@@ -90,12 +90,13 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
             'A microphysics model is required to consider evaporation or '
             'condensation in the potential temperature equation.'
         )
-        microphysics_model_name = (
-            self._scalar_params.potential_temperature.WhichOneof('microphysics')
+        microphysics_model_params = (
+            microphysics_utils.get_model_params_from_proto(
+                self._scalar_params.potential_temperature)
         )
         self._microphysics = (
             microphysics_utils.select_microphysics(
-                microphysics_model_name, self._params, self._thermodynamics
+                microphysics_model_params, self._params, self._thermodynamics
             )
         )
 

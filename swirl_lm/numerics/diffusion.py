@@ -378,7 +378,7 @@ def diffusion_momentum(
       scheme: numerics_pb2.DiffusionScheme,
       mu: FlowFieldVal,
       grid_spacing: Tuple[float, float, float],
-      velocity: FlowFieldMap,
+      states: FlowFieldMap,
       helper_variables: FlowFieldMap,
       tau_bc_update_fn: Optional[
           Dict[Text, Callable[[FlowFieldVal], FlowFieldVal]]
@@ -394,7 +394,7 @@ def diffusion_momentum(
       scheme: The numerical scheme used to compute the diffusion term.
       mu: The dynamic viscosity.
       grid_spacing: A tuple that holds (dx, dy, dz).
-      velocity: A dictionary that has flow vield variables u, v, and w.
+      states: A dictionary that has flow field variables u, v, w, and rho.
       helper_variables: A dictionary that stores variables that provides
         additional information for computing the diffusion term, e.g. the
         potential temperature for the Monin-Obukhov similarity theory.
@@ -418,9 +418,9 @@ def diffusion_momentum(
       tau = eq_utils.shear_stress(
           deriv_lib,
           mu,
-          velocity['u'],
-          velocity['v'],
-          velocity['w'],
+          states['u'],
+          states['v'],
+          states['w'],
           helper_variables,
           tau_bc_update_fn,
       )
@@ -443,9 +443,10 @@ def diffusion_momentum(
           replica_id,
           replicas,
           mu,
-          velocity['u'],
-          velocity['v'],
-          velocity['w'],
+          states['u'],
+          states['v'],
+          states['w'],
+          states['rho'],
           helper_variables,
       )
 
@@ -468,7 +469,7 @@ def diffusion_momentum(
       return diff
     elif scheme == numerics_pb2.DiffusionScheme.DIFFUSION_SCHEME_STENCIL_3:
       return _diffusion_momentum_stencil_3(
-          kernel_op, mu, grid_spacing, velocity
+          kernel_op, mu, grid_spacing, states
       )
     else:
       raise ValueError(

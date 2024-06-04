@@ -208,7 +208,12 @@ def laplacian_and_inv_diagonal_fns(
                      f'be {rank}.')
 
   grid_lengths = grid_lengths or (1,) * rank
-  dxs = [length / (s - 1) for length, s in zip(grid_lengths, shape)]
+
+  # `s` includes the 1 halo pixel on each of the 2 ends. To be consistent with
+  # the grid parametrization where the inner grids represent the nodes of the
+  # interior domain that spans the `grid_lengths`, the grid space should be
+  # computed with the 2 side halo nodes removed.
+  dxs = [length / (s - 3) for length, s in zip(grid_lengths, shape)]
   diag = -2 * sum([dx**-2 for dx in dxs])
 
   def laplacian(x: Tiles) -> Tiles:

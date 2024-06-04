@@ -301,6 +301,47 @@ def _global_xyz_from_config(
   return tuple(get_full_grid(dim) for dim in (0, 1, 2))
 
 
+def _extend_grid(grid: tf.Tensor, halo_width: int) -> tf.Tensor:
+  """Extends a 1D grid with extrapolation into halos on the 2 ends.
+
+  The grid spacing in the halo repeats its nearest neighbor in grid.
+
+  Note that in case the mesh only has 1 point, we copy the value of this point
+  to all halos.
+
+  Args:
+    grid: A 1D grid.
+    halo_width: The number of points to be extended to the grid on each end of
+      the grid.
+
+  Returns:
+    The grid extended `halo_width` number of points with linear extrapolation on
+    both ends.
+  """
+  def single_point():
+    """Generates a mesh of a same value when `grid` is a single point."""
+    return grid[0] * tf.ones((halo_width * 2 + 1), dtype=grid.dtype)
+
+  def regular_mesh():
+    """Generates a mesh with linearly extrapolated halos."""
+    d0 = grid[1] - grid[0]
+    d1 = grid[-1] - grid[-2]
+    ext = np.linspace(1, halo_width, halo_width)
+    ext_0 = grid[0] - d0 * ext[::-1]
+    ext_1 = grid[-1] + d1 * ext
+    return tf.concat([ext_0, grid, ext_1], axis=0)
+
+  # Note that we have to use the static shape here. Condition with results from
+  # tf.shape() will provide a tf.Tensor, which can only be used in the context
+  # of tf.cond. Because tf.cond will compile both branches regardless of the
+  # condition, and `grid` is valid in only one of the branches at a time, we
+  # have to take advantage of the static shape of the grid.
+  if grid.shape[0] < 2:
+    return single_point()
+  else:
+    return regular_mesh()
+
+
 def params_from_flags() -> grid_parametrization_pb2.GridParametrization:
   """Returns a GridParametrization protobuf from flags."""
   params = grid_parametrization_pb2.GridParametrization()
@@ -418,6 +459,10 @@ class GridParametrization(object):
         (self.core_nx, self.core_ny, self.core_nz),
         (self.cx, self.cy, self.cz),
     )
+
+    self.global_xyz_with_halos = [
+        _extend_grid(x, self.halo_width) for x in self.global_xyz
+    ]
 
   @classmethod
   def create_from_flags(cls):
@@ -583,7 +628,7 @@ class GridParametrization(object):
     """The full grid in dim 2."""
     return self.global_xyz[2]
 
-  def _grid_local(
+  def grid_local(
       self,
       replica_id: tf.Tensor,
       replicas: np.ndarray,
@@ -607,35 +652,40 @@ class GridParametrization(object):
         which case the full grid can not be evenly distributed across all cores
         without halo.
     """
-    grid_full = (self.x, self.y, self.z)[dim]
+    coord = common_ops.get_core_coordinate(replicas, replica_id)
+    return self.grid_local_with_coord(coord, dim, include_halo)
+
+  def grid_local_with_coord(
+      self,
+      coord: tuple[tf.Tensor | int, tf.Tensor | int, tf.Tensor | int],
+      dim: int,
+      include_halo: bool = True,
+  ) -> tf.Tensor:
+    """The local grid in `dim`.
+
+    Args:
+      coord: The coordinates of the current core in the partition.
+      dim: The dimension of the grid.
+      include_halo: An option of whether to include coordinates of halos in the
+        returned grid.
+
+    Returns:
+      The grid in dim `dim` local to `replica_id`.
+
+    Raises:
+      AssertionError: If the full grid includes additional boundary points, in
+        which case the full grid can not be evenly distributed across all cores
+        without halo.
+    """
     n_local = (self.core_nx, self.core_ny, self.core_nz)[dim]
-    i_core = common_ops.get_core_coordinate(replicas, replica_id)[dim]
+    i_core = coord[dim]
 
     if include_halo:
-      # Assumes uniform grid spacing inside halos, which equals the grid spacing
-      # on the corresponding end.
-      # Note that tf.linspace is used here instead of tf.range. This is because
-      # tf.range requires static input, but the input, core_id, is run time
-      # determined.
-      grid_lo = (
-          tf.cast(
-              tf.linspace(-self.halo_width, -1, self.halo_width),
-              grid_full.dtype,
-          )
-          * (grid_full[1] - grid_full[0])
-          + grid_full[0]
-      )
-      grid_hi = (
-          tf.cast(
-              tf.linspace(1, self.halo_width, self.halo_width), grid_full.dtype
-          )
-          * (grid_full[-1] - grid_full[-2])
-          + grid_full[-1]
-      )
-      grid_full = tf.concat([grid_lo, grid_full, grid_hi], axis=0)
-      halo_multiplier = tf.constant(1, dtype=i_core.dtype)
+      grid_full = self.global_xyz_with_halos[dim]
+      halo_multiplier = tf.constant(1, dtype=tf.int32)
     else:
-      halo_multiplier = tf.constant(0, dtype=i_core.dtype)
+      grid_full = (self.x, self.y, self.z)[dim]
+      halo_multiplier = tf.constant(0, dtype=tf.int32)
 
     indices = tf.cast(tf.linspace(
         i_core * n_local,
@@ -651,7 +701,7 @@ class GridParametrization(object):
       replicas: np.ndarray,
   ) -> tf.Tensor:
     """The local grid in dim 0 without halo."""
-    return self._grid_local(replica_id, replicas, 0, False)
+    return self.grid_local(replica_id, replicas, 0, False)
 
   def y_local(
       self,
@@ -659,7 +709,7 @@ class GridParametrization(object):
       replicas: np.ndarray,
   ) -> tf.Tensor:
     """The local grid in dim 1 without halo."""
-    return self._grid_local(replica_id, replicas, 1, False)
+    return self.grid_local(replica_id, replicas, 1, False)
 
   def z_local(
       self,
@@ -667,7 +717,7 @@ class GridParametrization(object):
       replicas: np.ndarray,
   ) -> tf.Tensor:
     """The local grid in dim 2 without halo."""
-    return self._grid_local(replica_id, replicas, 2, False)
+    return self.grid_local(replica_id, replicas, 2, False)
 
   def x_local_ext(
       self,
@@ -675,7 +725,7 @@ class GridParametrization(object):
       replicas: np.ndarray,
   ) -> tf.Tensor:
     """The local grid in dim 0 with halo."""
-    return self._grid_local(replica_id, replicas, 0, True)
+    return self.grid_local(replica_id, replicas, 0, True)
 
   def y_local_ext(
       self,
@@ -683,7 +733,7 @@ class GridParametrization(object):
       replicas: np.ndarray,
   ) -> tf.Tensor:
     """The local grid in dim 1 with halo."""
-    return self._grid_local(replica_id, replicas, 1, True)
+    return self.grid_local(replica_id, replicas, 1, True)
 
   def z_local_ext(
       self,
@@ -691,7 +741,7 @@ class GridParametrization(object):
       replicas: np.ndarray,
   ) -> tf.Tensor:
     """The local grid in dim 2 with halo."""
-    return self._grid_local(replica_id, replicas, 2, True)
+    return self.grid_local(replica_id, replicas, 2, True)
 
   @property
   def input_chunks(self) -> List[Tuple[int, int]]:

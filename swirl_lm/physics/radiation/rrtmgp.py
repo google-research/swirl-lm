@@ -38,7 +38,6 @@ class RRTMGP:
   def __init__(
       self,
       config: parameters_lib.SwirlLMParameters,
-      g_dim: int,
   ):
     self._kernel_op = config.kernel_op
     self._kernel_op.add_kernel({
@@ -48,12 +47,12 @@ class RRTMGP:
     # A thermodynamics manager that handles moisture related physics.
     self._water = water.Water(config)
     # The vertical dimension.
-    self._g_dim = g_dim
+    self._g_dim = config.g_dim
     # The number of ghost points on a side of the subgrid.
     self._halos = config.halo_width
     # The vertical grid spacing used in computing the local water path for an
     # atmospheric grid cell.
-    self._dh = config.grid_spacings[g_dim]
+    self._dh = config.grid_spacings[self._g_dim]
     # Whether stretched grid is used in each dimension.
     self._use_stretched_grid = config.use_stretched_grid
     # The two-stream radiative transfer solver.
@@ -61,7 +60,7 @@ class RRTMGP:
         config.radiative_transfer,
         config,
         self._kernel_op,
-        g_dim,
+        self._g_dim,
     )
     # Data library containing atmospheric gas concentrations.
     self._atmospheric_state = self._two_stream_solver.atmospheric_state
@@ -91,7 +90,7 @@ class RRTMGP:
       replicas: np.ndarray,
       states: FlowFieldMap,
       additional_states: FlowFieldMap,
-      sfc_temperature: Optional[FlowFieldVal] = None,
+      sfc_temperature: Optional[FlowFieldVal | float] = None,
   ):
     """Computes the local heating rate due to radiative transfer.
 
@@ -108,8 +107,7 @@ class RRTMGP:
       additional_states: A dictionary that holds all helper variables and must
         include temperatue (`T`).
       sfc_temperature: The optional surface temperature [K] represented as
-        either a 3D `tf.Tensor` or as a list of 2D `tf.Tensor`s but having a
-        single vertical dimension.
+        either a 3D field having a single vertical dimension or as a scalar.
 
     Returns:
       A `FlowFieldVal` for the local heating rate due to radiative fluxes [K/s].

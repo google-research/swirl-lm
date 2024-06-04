@@ -35,6 +35,10 @@ GRID_PBTXT = """
     dim_1: 64
     dim_2: 64
   }
+  # An indicator of mesh stretching in each dimension.
+  stretched_grid_paths {
+      dim_1: 'swirl_lm/example/channel/test_data/y_120.txt'
+  }
   # The width of the ghost cells on each side of the domain. It is set to 2
   # considering the stencil width of the QUICK scheme.
   halo_width: 2
@@ -51,7 +55,7 @@ SIM_PBTXT = """
   solver_procedure: VARIABLE_DENSITY
   convection_scheme: CONVECTION_SCHEME_QUICK
   time_integration_scheme: TIME_SCHEME_CN_EXPLICIT_ITERATION
-  enable_rhie_chow_correction: true
+  enable_rhie_chow_correction: false
   enable_scalar_recorrection: true
   use_3d_tf_tensor: true
   num_sub_iterations: 3
@@ -62,19 +66,8 @@ SIM_PBTXT = """
   }
   pressure {
     solver {
-      fast_diagonalization {
-        halo_width: 2
-        cutoff: 1e-6
-        boundary_condition_low {
-          dim_0: BC_TYPE_NEUMANN
-          dim_1: BC_TYPE_NEUMANN
-          dim_2: BC_TYPE_PERIODIC
-        }
-        boundary_condition_high  {
-          dim_0: BC_TYPE_NEUMANN
-          dim_1: BC_TYPE_NEUMANN
-          dim_2: BC_TYPE_PERIODIC
-        }
+      jacobi {
+        max_iterations: 20 halo_width: 2 omega: 0.67
       }
     }
     num_d_rho_filter: 0

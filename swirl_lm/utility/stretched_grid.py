@@ -115,10 +115,8 @@ def _get_global_coord_and_h_with_halos_nonperiodic(
     halo_width: int,
 ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
   """Gets the coordinate and scale factors for a nonperiodic dimension."""
-  h_no_halos, h_face_no_halos = compute_h_and_hface_from_coordinate_levels(
-      s_no_halos
-  )
-
+  # We extend the coordinates into the halos first, then compute the scale
+  # factors.
   ds_first = s_no_halos[1] - s_no_halos[0]
   ds_last = s_no_halos[-1] - s_no_halos[-2]
   pad_left = s_no_halos[0] + ds_first * tf.range(
@@ -128,21 +126,7 @@ def _get_global_coord_and_h_with_halos_nonperiodic(
       1, halo_width + 1, dtype=tf.float32
   )
   global_coord = tf.concat([pad_left, s_no_halos, pad_right], axis=0)
-
-  # Pad the scale factors, extrapolating the scale factors as constant. Use
-  # `h_face_no_halos` when extrapolating left because the location of
-  # `h_face_no_halos[0]` is to the left of that of `h_no_halos[0]`, and vice
-  # versa when extrapolating right.
-  h_pad_left = h_face_no_halos[0] * tf.ones(halo_width, dtype=tf.float32)
-  h_pad_right = h_no_halos[-1] * tf.ones(halo_width, dtype=tf.float32)
-
-  # Note: the padding on the right is always the last element of `h_no_halos`,
-  # and the padding on the left is always the first element of `h_face_no_halos`
-  # for both `h` and `h_face`. This is the most sensible way to treat
-  # extrapolating into the halos. However, in practice it makes no difference
-  # because the values of the scale factors in the halos do not matter.
-  h = tf.concat([h_pad_left, h_no_halos, h_pad_right], axis=0)
-  h_face = tf.concat([h_pad_left, h_face_no_halos, h_pad_right], axis=0)
+  h, h_face = compute_h_and_hface_from_coordinate_levels(global_coord)
   return global_coord, h, h_face
 
 

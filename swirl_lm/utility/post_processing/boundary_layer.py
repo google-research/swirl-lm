@@ -65,6 +65,7 @@ class BoundaryLayer():
       v: np.ndarray,
       w: np.ndarray,
       theta: np.ndarray,
+      rho: np.ndarray,
   ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Computes the momentum and heat fluxes at the ground level.
 
@@ -73,6 +74,7 @@ class BoundaryLayer():
       v: The velocity component in the y direction.
       w: The velocity component in the z direction.
       theta: The potential temperature.
+      rho: The density.
 
     Returns:
       A tuple with the first and second components being the wall shear stresses
@@ -84,6 +86,7 @@ class BoundaryLayer():
         'v': tf.convert_to_tensor(v, dtype=_TF_DTYPE),
         'w': tf.convert_to_tensor(w, dtype=_TF_DTYPE),
         'theta': tf.convert_to_tensor(theta, dtype=_TF_DTYPE),
+        'rho': tf.convert_to_tensor(rho, dtype=_TF_DTYPE),
     }
 
     return self.return_fn(
@@ -94,6 +97,7 @@ class BoundaryLayer():
       theta: np.ndarray,
       u1: np.ndarray,
       u2: np.ndarray,
+      rho: np.ndarray,
       height: Optional[float] = None,
   ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Computes the momentum and heat fluxes at the ground level.
@@ -104,6 +108,7 @@ class BoundaryLayer():
         to the vertical direction).
       u2: The second velocity component in the horizontal plane (perpendicular
         to the vertical direction).
+      rho: The density.
       height: The distance from the wall to the first grid point. If not
         provided, it will be set according to the grid spacing in the
         simulation configuration provided in the contructor.
@@ -114,10 +119,10 @@ class BoundaryLayer():
       along the first and second dimension in the horizontal plane,
       respectively, and the last component being the wall heat flux.
     """
-    z = 0.5 * self.most.height if height is None else height
+    z = self.most.height if height is None else height
 
     return self.return_fn(
-        self.most._surface_shear_stress_and_heat_flux(theta, u1, u2, z))  # pylint: disable=protected-access
+        self.most._surface_shear_stress_and_heat_flux(theta, u1, u2, rho, z))  # pylint: disable=protected-access
 
   def obukhov_length_scale(
       self,

@@ -112,7 +112,7 @@ class TwoStreamSolver:
       temperature: FlowFieldVal,
       molecules: FlowFieldVal,
       vmr_fields: Optional[Dict[str, FlowFieldVal]] = None,
-      sfc_temperature: Optional[FlowFieldVal] = None,
+      sfc_temperature: Optional[FlowFieldVal | float] = None,
       cloud_r_eff_liq: Optional[FlowFieldVal] = None,
       cloud_path_liq: Optional[FlowFieldVal] = None,
       cloud_r_eff_ice: Optional[FlowFieldVal] = None,
@@ -146,8 +146,7 @@ class TwoStreamSolver:
       vmr_fields: An optional dictionary containing precomputed volume mixing
         ratio fields, keyed by the chemical formula.
       sfc_temperature: The optional surface temperature represented as either a
-        3D `tf.Tensor` or as a list of 2D `tf.Tensor`s but having a single
-        vertical dimension [K].
+        3D field having a single vertical dimension or as a scalar [K].
       cloud_r_eff_liq: The effective radius of cloud droplets [m].
       cloud_path_liq: The cloud liquid water path in each atmospheric grid cell
         [kg/m²].
@@ -168,6 +167,12 @@ class TwoStreamSolver:
           self._optics_lib.gas_optics_lw.idx_gases[k]: v
           for k, v in vmr_fields.items()
       }
+    if isinstance(sfc_temperature, float):
+      # Create a plane for the surface temperature representation.
+      sfc_temperature = tf.nest.map_structure(
+          lambda x: sfc_temperature * tf.ones_like(x),
+          self._rte_utils.slice(pressure, self._g_dim, 0, 0)
+      )
 
     def step_fn(igpt, cumulative_flux):
       lw_optical_props = dict(

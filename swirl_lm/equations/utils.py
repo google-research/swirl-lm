@@ -149,6 +149,7 @@ _ShearFluxFnArgTypes = [
     FlowFieldVal,
     FlowFieldVal,
     FlowFieldVal,
+    FlowFieldVal,
     FlowFieldMap | None,
 ]
 
@@ -182,6 +183,7 @@ def shear_flux(
       u: FlowFieldVal,
       v: FlowFieldVal,
       w: FlowFieldVal,
+      rho: FlowFieldVal,
       helper_variables: FlowFieldMap,
   ) -> FlowFieldMap:
     """Computes the viscous shear stress on the cell faces.
@@ -212,6 +214,7 @@ def shear_flux(
       u: Velocity component in the x dimension, with updated boundary condition.
       v: Velocity component in the y dimension, with updated boundary condition.
       w: Velocity component in the z dimension, with updated boundary condition.
+      rho: Density of the flow field.
       helper_variables: A dictionary that stores variables that provides
         additional information for computing the diffusion term, e.g. the
         potential temperature for the Monin-Obukhov similarity theory.
@@ -343,7 +346,13 @@ def shear_flux(
       if 'theta' not in helper_variables:
         raise ValueError('`theta` is missing for the MOS model.')
 
-      helper_vars = {'u': u, 'v': v, 'w': w, 'theta': helper_variables['theta']}
+      helper_vars = {
+          'u': u,
+          'v': v,
+          'w': w,
+          'theta': helper_variables['theta'],
+          'rho': rho,
+      }
 
       # Get the surface shear stress.
       tau_s1, tau_s2, _ = most.surface_shear_stress_and_heat_flux_update_fn(
@@ -524,21 +533,21 @@ def source_by_subsidence_velocity(
 
 
 def buoyancy_source(
-    kernel_op: get_kernel_fn.ApplyKernelOp,
     rho: FlowFieldVal,
     rho_0: FlowFieldVal,
     params: parameters_lib.SwirlLMParameters,
     dim: int,
+    additional_states: FlowFieldMap,
 ) -> FlowFieldVal:
   """Computes the gravitational force of the momentum equation.
 
   Args:
-    kernel_op: A library of finite difference operators.
     rho: The density of the flow field.
     rho_0: The reference density of the environment.
     params: The simulation parameter context. `thermodynamics.solver_mode` is
       used here.
     dim: The spatial dimension that this source corresponds to.
+    additional_states: Mapping that contains the optional scale factors.
 
   Returns:
     The source term of the momentum equation due to buoyancy.
@@ -551,8 +560,9 @@ def buoyancy_source(
 
   # Computes the gravitational force.
   drho = filters.filter_op(
-      kernel_op,
+      params,
       tf.nest.map_structure(drho_fn, rho, rho_0),
+      additional_states,
       order=2)
   return tf.nest.map_structure(
       lambda drho_i: drho_i * params.gravity_direction[dim] * constants.G, drho)

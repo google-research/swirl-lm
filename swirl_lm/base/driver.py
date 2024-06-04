@@ -159,7 +159,7 @@ def _get_state_keys(params: parameters_lib.SwirlLMParameters):
   # u: velocity in dimension 0;
   # v: velocity in dimension 1;
   # w: velocity in dimension 2;
-  # p: pressure.
+  # p: pressure. p in LOW_MACH mode and p/ρ₀ in ANELASTIC mode.
   essential_keys = ['u', 'v', 'w', 'p'] + params.transport_scalars_names
   if params.solver_procedure == parameters_lib.SolverProcedure.VARIABLE_DENSITY:
     essential_keys += ['rho']
@@ -437,6 +437,15 @@ def _one_cycle(
       'Tracing and compiling of _one_cycle starts. This can take up to 30 min.'
   )
   essential_keys, additional_keys, helper_var_keys = _get_state_keys(params)
+
+  init_state_keys = set(init_state.keys())
+  keys_declared_in_params = (set(essential_keys) | set(additional_keys) |
+                             set(helper_var_keys))
+  logging.info('Keys in init_state but not in params: %s',
+               sorted(init_state_keys - keys_declared_in_params))
+  logging.info('Keys in params but not in init_state: %s',
+               sorted(keys_declared_in_params - init_state_keys))
+
   computation_shape = np.array([params.cx, params.cy, params.cz])
   logical_replicas = np.arange(
       strategy.num_replicas_in_sync, dtype=np.int32

@@ -655,7 +655,6 @@ class WildfireUtils:
         _INFLOW_Y_LY.value,
         _INFLOW_Y_LZ.value,
     )
-    self.delta = (self.config.dx, self.config.dy, self.config.dz)
     self.mesh_size = (self.config.core_nx, self.config.core_ny,
                       self.config.core_nz)
 
@@ -884,6 +883,12 @@ class WildfireUtils:
     Raises:
       ValueError: If `inflow_dim` is neither 0 nor 1.
     """
+    if any(self.config.use_stretched_grid):
+      raise NotImplementedError(
+          'Synthetic inflow turbulence is not available for stretched mesh.'
+      )
+
+    delta = (self.config.dx, self.config.dy, self.config.dz)
     if inflow_dim == 0:
       velocity_mean = self.u_mean
       length_scale = self.inflow_length_scales_x
@@ -902,7 +907,7 @@ class WildfireUtils:
 
     inflow_face = 0 if velocity_mean > 0 else 1
     return synthetic_turbulent_inflow.SyntheticTurbulentInflow(
-        length_scale, self.delta, self.mesh_size, inflow_dim, inflow_face)
+        length_scale, delta, self.mesh_size, inflow_dim, inflow_face)
 
   def init_fn_ones(self, xx: tf.Tensor, yy: tf.Tensor, zz: tf.Tensor, lx: float,
                    ly: float, lz: float, coord: ThreeIntTuple) -> tf.Tensor:

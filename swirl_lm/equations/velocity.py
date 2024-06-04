@@ -322,8 +322,9 @@ class Velocity(object):
         """Computes the RHS of the momentum equation in `dim`."""
         f = states[_KEYS_VELOCITY[dim]]
 
-        gravity = eq_utils.buoyancy_source(self._kernel_op, rho_mix, rho_ref,
-                                           self._params, dim)
+        gravity = eq_utils.buoyancy_source(
+            rho_mix, rho_ref, self._params, dim, additional_states
+        )
         # Computes the convection term.
         g_corr = None if np.abs(
             self._gravity_vec[dim]) < _G_THRESHOLD else gravity
@@ -355,17 +356,12 @@ class Velocity(object):
         diff = diff_all[_KEYS_VELOCITY[dim]]
 
         # Computes the pressure gradient.
+        dp_dh = self._deriv_lib.deriv_centered(p, dim, additional_states)
         if (
             self._thermodynamics.solver_mode
             == thermodynamics_pb2.Thermodynamics.ANELASTIC
         ):
-          alpha = tf.nest.map_structure(tf.math.reciprocal, rho_ref)
-          a_p = tf.nest.map_structure(tf.math.multiply, alpha, p)
-          d_ap_dh = self._deriv_lib.deriv_centered(a_p, dim, additional_states)
-          # Modified pressure gradient term.
-          dp_dh = tf.nest.map_structure(tf.math.multiply, rho_ref, d_ap_dh)
-        else:
-          dp_dh = self._deriv_lib.deriv_centered(p, dim, additional_states)
+          dp_dh = tf.nest.map_structure(tf.math.multiply, rho_ref, dp_dh)
 
         # Computes external forcing terms.
         force = forces[dim] if forces[dim] is not None else (
@@ -611,10 +607,14 @@ class Velocity(object):
             'zz', tf.nest.map_structure(tf.zeros_like, template_state))
         rho_ref = self._thermodynamics.rho_ref(zz, additional_states)
         diagnostics.update({
-            buoyancy_key:
-            eq_utils.buoyancy_source(
-                self._kernel_op, states_0['rho_thermal'], rho_ref,
-                self._params, i)})
+            buoyancy_key: eq_utils.buoyancy_source(
+                states_0['rho_thermal'],
+                rho_ref,
+                self._params,
+                i,
+                additional_states,
+            )
+        })
     return diagnostics
 
   def prediction_step(
@@ -751,13 +751,15 @@ class Velocity(object):
     """
     dt = self._params.dt
 
-    rho_mid = common_ops.average(states[_KEY_RHO], states_0[_KEY_RHO])
-    if (self._thermodynamics.solver_mode ==
-        thermodynamics_pb2.Thermodynamics.ANELASTIC):
-      # For anelastic, `dp` represents α₀ δp through the end of this function.
-      dp = tf.nest.map_structure(tf.math.divide, states[common.KEY_DP], rho_mid)
-    else:
-      dp = states[common.KEY_DP]
+    if (
+        self._thermodynamics.solver_mode
+        == thermodynamics_pb2.Thermodynamics.ANELASTIC
+    ):
+      rho_mid = states[_KEY_RHO]
+    else:  # Thermodynamics.LOW_MACH
+      rho_mid = common_ops.average(states[_KEY_RHO], states_0[_KEY_RHO])
+
+    dp = states[common.KEY_DP]  # δp for LOW_MACH; α₀ δp for ANELASTIC
 
     def correction_fn(
         rho_u_j: FlowFieldVal, rho: FlowFieldVal, grad_j_dp: FlowFieldVal

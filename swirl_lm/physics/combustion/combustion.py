@@ -123,9 +123,7 @@ def combustion_step(
 
     # Determines the turbulent kinetic energy that is required to compute the
     # reaction source term due to wood combustion.
-    additional_states_tke = {}
-    if 'nu_t' in additional_states:
-      additional_states_tke['nu_t'] = additional_states['nu_t']
+    additional_states_tke = dict(additional_states)
     additional_states_tke['tke'] = additional_states.get(
         'tke', tf.nest.map_structure(tf.zeros_like, states['u'])
     )

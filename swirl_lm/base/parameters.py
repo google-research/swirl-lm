@@ -15,8 +15,10 @@
 """Library for input config for the incompressible Navier-Stokes solver."""
 
 import copy
+import json
 import os
 import os.path
+import sys
 from typing import Callable, List, Literal, Mapping, Optional, Sequence, Tuple, TypeAlias
 
 from absl import flags
@@ -876,13 +878,25 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     """
     if self.g_dim == 0:
       grid_vertical = self.x_local_ext(replica_id, replicas)
-      return [grid_vertical[:, tf.newaxis]] * self.nz
+      return (
+          grid_vertical[tf.newaxis, :, tf.newaxis]
+          if self.use_3d_tf_tensor
+          else [grid_vertical[:, tf.newaxis]] * self.nz
+      )
     elif self.g_dim == 1:
       grid_vertical = self.y_local_ext(replica_id, replicas)
-      return [grid_vertical[tf.newaxis, :]] * self.nz
+      return (
+          grid_vertical[tf.newaxis, tf.newaxis, :]
+          if self.use_3d_tf_tensor
+          else [grid_vertical[tf.newaxis, :]] * self.nz
+      )
     elif self.g_dim == 2:
       grid_vertical = self.z_local_ext(replica_id, replicas)
-      return tf.unstack(grid_vertical, num=self.nz)
+      return (
+          grid_vertical[:, tf.newaxis, tf.newaxis]
+          if self.use_3d_tf_tensor
+          else tf.unstack(grid_vertical, num=self.nz)
+      )
     else:
       return [tf.zeros((1, 1), dtype=types.TF_DTYPE)] * self.nz
 
@@ -972,6 +986,8 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     """Saves configuration protos as text to files with the given prefix."""
     output_dir, _ = os.path.split(prefix)
     tf.io.gfile.makedirs(output_dir)
+    with tf.io.gfile.GFile(f'{prefix}_cmdline_args.json', 'w') as f:
+      f.write(json.dumps(sys.argv))
     with tf.io.gfile.GFile(f'{prefix}_swirl_lm.pbtxt', 'w') as f:
       f.write(text_format.MessageToString(self.swirl_lm_parameters_proto))
     with tf.io.gfile.GFile(get_grid_pbtxt_path(prefix), 'w') as f:

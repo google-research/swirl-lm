@@ -292,6 +292,25 @@ class Derivatives:
       )
     return df_dx_dim
 
+  def deriv_2_node(
+      self, f: FlowFieldVal, dim: int, additional_states: FlowFieldMap
+  ):
+    """Given `f` on nodes, computes the second order derivative of it on nodes.
+
+    Compute the partial derivative ∂²f/∂xⱼ², where j = `dim`. The resulting
+    field is evaluated on nodes. The derivative is 2nd-order-accurate.
+
+    Args:
+      f: A 3D field f, evaluated at nodes.
+      dim: The dimension along which to compute the derivative.
+      additional_states: Mapping that contains the optional scale factors.
+
+    Returns:
+      The derivative of f along dim, evaluated at nodes.
+    """
+    df_dh_face = self.deriv_node_to_face(f, dim, additional_states)
+    return self.deriv_face_to_node(df_dh_face, dim, additional_states)
+
   def create_copy_with_custom_kernel_op(
       self, custom_kernel_op: get_kernel_fn.ApplyKernelOp
   ) -> Self:

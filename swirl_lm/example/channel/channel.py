@@ -93,15 +93,25 @@ class Channel:
     def init_fn_u_parabola(xx, yy, zz, lx, ly, lz, coord):
       """Generates a parabola as inflow condition."""
       del xx, zz, lx, lz, coord
-      y_min = -0.5 * self.params.dy
-      y_max = ly + 0.5 * self.params.dy
-      p_max = (0.5 * ly - y_min) * (0.5 * ly - y_max)
+
+      if self.params.use_stretched_grid[1]:
+        # Here we assume that the stretched mesh is defined from -L / 2 to
+        # L / 2.
+        y_min = -0.5 * self.params.ly
+        y_max = 0.5 * self.params.ly
+        p_max = y_min * y_max
+      else:
+        y_min = -0.5 * self.params.dy
+        y_max = ly + 0.5 * self.params.dy
+        p_max = (0.5 * ly - y_min) * (0.5 * ly - y_max)
       return c / p_max * (yy - y_min) * (yy - y_max)
 
     def init_fn_t_ramp(xx, yy, zz, lx, ly, lz, coord):
       """Generates a ramp for temperature decreases with increasing height."""
       del xx, zz, lx, lz, coord
-      return t_max * tf.ones_like(yy) + yy / ly * (t_min - t_max)
+      return t_max * tf.ones_like(yy) + (yy - self.params.y[0]) / ly * (
+          t_min - t_max
+      )
 
     logging.info('Creating initial fields.')
     output = {

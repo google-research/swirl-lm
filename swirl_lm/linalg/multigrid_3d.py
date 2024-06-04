@@ -227,7 +227,7 @@ def poisson_mg_cycle_fn_for_one_core(  # pytype: disable=annotation-type-mismatc
     weight: The weight used in the Jacobi smoothing. The default value is
       the canonical `2 / 3` (in many cases this is the optimal value).
     coarsest_full_grid_shape: The shape of the coarsest full grid. If `None`,
-      `(3, 3, 3)` is used.
+      `(4, 4, 4)` is used.
     params: The grid parametrization.
     prs: Prolong/restrict matrices per dim per level.
     use_a_inv: If `False`, smooth at the coarsest level instead of solving
@@ -265,7 +265,7 @@ def poisson_mg_cycle_fn_for_one_core(  # pytype: disable=annotation-type-mismatc
                                   params=params)
 
   if not coarsest_full_grid_shape:
-    coarsest_full_grid_shape = (3, 3, 3)
+    coarsest_full_grid_shape = (4, 4, 4)
   if prs is None:
     prs = multigrid_utils.prolong_restrict_matrices_from_shapes(
         full_grid_shape, coarsest_full_grid_shape, computation_shape, dtype)
@@ -334,7 +334,7 @@ def poisson_mg_cycle_fn(  # pytype: disable=annotation-type-mismatch  # numpy-sc
     dtype: The dtype.
   """
   if not coarsest_subgrid_shape:
-    coarsest_subgrid_shape = (3, 3, 3)
+    coarsest_subgrid_shape = (4, 4, 4)
   computation_shape = (params.cx, params.cy, params.cz)
   full_grid_lengths = (params.lx, params.ly, params.lz)
 
@@ -377,7 +377,7 @@ def poisson_mg_cycle_step_fn(  # pytype: disable=annotation-type-mismatch  # num
   if boundary_conditions is None:
     boundary_conditions = halo_exchange_utils.homogeneous_bcs()
   if not coarsest_subgrid_shape:
-    coarsest_subgrid_shape = (3, 3, 3)
+    coarsest_subgrid_shape = (4, 4, 4)
   homogeneous_boundary_conditions = (
       multigrid_utils.get_homogeneous_boundary_conditions(
           boundary_conditions))

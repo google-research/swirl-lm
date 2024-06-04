@@ -66,6 +66,8 @@ _PHI_M = 0.0
 # The threshold of the ratio between the height of the first fluid layer and the
 # surface roughness.
 _HEIGHT_TO_SURFACE_ROUGHNESS_RATIO_THRESHOLD = 1.1
+# Name of key to use for constant exchange coefficient for momentum flux.
+_MOMENTUM_FLUX_EXCHANGE_COEFF_KEY = 'momentum'
 
 
 class MoninObukhovSimilarityTheory(object):
@@ -360,11 +362,36 @@ class MoninObukhovSimilarityTheory(object):
 
     return theta
 
+  def _surface_shear_stress(
+      self,
+      rho: tf.Tensor,
+      u_j: tf.Tensor,
+      u_mag: tf.Tensor,
+      drag_coefficient: float,
+  ) -> tf.Tensor:
+    """Computes the surface shear stress for a given drag coefficient.
+
+    Reference: CLIMA Atmosphere Model.
+
+    Args:
+      rho: The density at the first level above ground.
+      u_j: The j-th component of the fluid velocity in the first level above
+        ground.
+      u_mag: The magnitude of the horizontal fluid velocity in the first level
+        above ground.
+      drag_coefficient: The drag coefficient.
+
+    Returns:
+      The surface shear stress for a given velocity component.
+    """
+    return -rho * drag_coefficient * u_j * u_mag
+
   def _surface_shear_stress_and_heat_flux(
       self,
       theta: FlowFieldVal,
       u1: FlowFieldVal,
       u2: FlowFieldVal,
+      rho: FlowFieldVal,
       height: float,
   ) -> Tuple[FlowFieldVal, FlowFieldVal, FlowFieldVal]:
     """Computes the surface shear stress and heat flux.
@@ -379,25 +406,13 @@ class MoninObukhovSimilarityTheory(object):
         ground.
       u1: The first component of the free stream velocity.
       u2: The second component of the free stream velocity.
+      rho: The density at the first node above ground.
       height: The height of the first grid point.
 
     Returns:
       A 3 component tuple, with elements being (in order) the surface shear
       stress for velocity component u1 and u2, and the surface heat flux.
     """
-    zeta = self._normalized_height(theta, u1, u2, height)
-    phi_m, phi_h = self._stability_correction_function(zeta, theta)
-
-    u_mag = tf.nest.map_structure(lambda u, v: tf.math.sqrt(u**2 + v**2), u1,
-                                  u2)
-
-    def surface_shear_stress(
-        u_i: tf.Tensor,
-        u_r: tf.Tensor,
-        phi: tf.Tensor,
-    ) -> tf.Tensor:
-      """Computes the surface shear stress for a specific velocity component."""
-      return -_KAPPA**2 * u_r * u_i / (tf.math.log(height / self.z_0) - phi)**2
 
     def surface_heat_flux(
         theta_i: tf.Tensor,
@@ -408,12 +423,37 @@ class MoninObukhovSimilarityTheory(object):
       return (self.t_s - theta_i) * u_s_i * _KAPPA / (
           tf.math.log(height / self.z_0) - phi)
 
-    tau_13 = tf.nest.map_structure(surface_shear_stress, u1, u_mag, phi_m)
-    tau_23 = tf.nest.map_structure(surface_shear_stress, u2, u_mag, phi_m)
+    def most_drag_coefficient(phi_m, rho):
+      return _KAPPA**2 / (rho * (tf.math.log(height / self.z_0) - phi_m)**2)
+
+    u_mag = tf.nest.map_structure(
+        lambda u, v: tf.math.sqrt(u**2 + v**2), u1, u2
+    )
+    zeta = self._normalized_height(theta, u1, u2, height)
+    phi_m, phi_h = self._stability_correction_function(zeta, theta)
+
+    if _MOMENTUM_FLUX_EXCHANGE_COEFF_KEY in self.exchange_coeff:
+      # Use a fixed drag coefficient for momentum flux, bypassing the more
+      # complicated MOST theory.
+      drag_coefficient = self.exchange_coeff[_MOMENTUM_FLUX_EXCHANGE_COEFF_KEY]
+    else:
+      # Compute the drag coefficient using the nonlinear MOST model.
+      drag_coefficient = tf.nest.map_structure(
+          most_drag_coefficient, phi_m, rho
+      )
+
+    tau_13 = tf.nest.map_structure(
+        self._surface_shear_stress, rho, u1, u_mag, drag_coefficient
+    )
+    tau_23 = tf.nest.map_structure(
+        self._surface_shear_stress, rho, u2, u_mag, drag_coefficient
+    )
 
     u_s = tf.nest.map_structure(
-        lambda t_13, t_23: tf.math.pow(t_13**2 + t_23**2, 0.25), tau_13, tau_23)
-
+        lambda t_13, t_23: tf.math.pow(t_13**2 + t_23**2, 0.25),
+        tau_13,
+        tau_23,
+    )
     q_3 = tf.nest.map_structure(surface_heat_flux, theta, u_s, phi_h)
 
     if self.dbg:
@@ -452,8 +492,12 @@ class MoninObukhovSimilarityTheory(object):
     theta = self._maybe_regularize_potential_temperature(
         common_ops.get_face(states['theta'], self.vertical_dim, 0,
                             self.halo_width)[0])
+    rho = common_ops.get_face(states['rho'], self.vertical_dim, 0,
+                              self.halo_width)[0]
 
-    return self._surface_shear_stress_and_heat_flux(theta, u1, u2, self.height)
+    return self._surface_shear_stress_and_heat_flux(
+        theta, u1, u2, rho, self.height
+    )
 
   def _exchange_coefficient(
       self,

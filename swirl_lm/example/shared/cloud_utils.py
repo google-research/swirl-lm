@@ -56,51 +56,12 @@ _OMEGA = 7.2721e-5
 _STEP_SIZE = 0.3
 
 
-def _cumsum_along_zlist(
-    replica_id: tf.Tensor,
-    replicas: np.ndarray,
-    f: FlowFieldVal,
-    f_0: tf.Tensor,
-) -> FlowFieldVal:
-  """Performs cumulative sum for `f` along the list direction.
-
-  Args:
-    replica_id: The index of the current core.
-    replicas: A 3D array of the topology of the partition.
-    f: The 3D tensor to be integrated.
-    f_0: The starting value of integration.
-
-  Returns:
-    The cumulative sum of `f` along the list direction globally.
-  """
-  _, _, iz = common_ops.get_core_coordinate(replicas, replica_id)
-  group_assignment = common_ops.group_replicas(replicas, 2)
-
-  sum_local = tf.cond(
-      pred=tf.equal(iz, 0),
-      true_fn=lambda: f_0 * tf.ones_like(f[0]),
-      false_fn=lambda: tf.zeros_like(f[0]))
-  cumsum_local = []
-  for f_i in f:
-    cumsum_local.append(f_i + sum_local)
-    sum_local += f_i
-
-  cumsum_global = common_ops.global_reduce(sum_local[tf.newaxis, ...],
-                                           tf.math.cumsum, group_assignment)
-  cumsum_prev = tf.cond(
-      pred=tf.equal(iz, 0),
-      true_fn=lambda: tf.zeros_like(sum_local),
-      false_fn=lambda: tf.squeeze(cumsum_global[iz - 1, ...]))
-
-  return tf.nest.map_structure(lambda s: s + cumsum_prev, cumsum_local)
-
-
 def _slice_in_dim(
-    f: types.FlowFieldVal,
+    f: tf.Tensor,
     start_index: int,
     slice_len: int,
     dim: int,
-) -> FlowFieldVal:
+) -> tf.Tensor:
   """Slices the field along a given dimension.
 
   Args:
@@ -113,29 +74,20 @@ def _slice_in_dim(
     The slice of the field `f` along `dim` starting at the index
     `start_index` and spanning `slice_len` grid points.
   """
-  f_is_tensor = isinstance(f, tf.Tensor)
   slice_in_dim = slice(start_index, start_index + slice_len)
-  if f_is_tensor:
-    # Handles the case of single 3D tensor. Shifts `dim` to conform with the
-    # 2-0-1 3D tensor orientation.
-    shifted_dim = (dim + 1) % 3
-    slices = [slice(None), slice(None), slice(None)]
-    slices[shifted_dim] = slice_in_dim
-    return f[slices]
-  if dim == 2:  # Slice along Python list.
-    return f[start_index:start_index + slice_len]
-  slices = [slice(None), slice(None)]
-  slices[dim] = slice_in_dim
-  return tf.nest.map_structure(lambda t: t[slices], f)
+  shifted_dim = (dim + 1) % 3
+  slices = [slice(None), slice(None), slice(None)]
+  slices[shifted_dim] = slice_in_dim
+  return f[slices]
 
 
 def _cumsum(
     replica_id: tf.Tensor,
     replicas: np.ndarray,
-    f: FlowFieldVal,
-    f_0: FlowFieldVal,
+    f: tf.Tensor,
+    f_0: tf.Tensor,
     dim: int,
-) -> FlowFieldVal:
+) -> tf.Tensor:
   """Performs cumulative sum for `f` along `dim`.
 
   Args:
@@ -151,36 +103,27 @@ def _cumsum(
   core_i = common_ops.get_core_coordinate(replicas, replica_id)[dim]
   group_assignment = common_ops.group_replicas(replicas, dim)
 
-  f_is_tensor = isinstance(f, tf.Tensor)
-  if dim == 2 and not f_is_tensor:
-    return _cumsum_along_zlist(replica_id, replicas, f, f_0[0])
-
   f_0 = tf.cond(
       pred=tf.equal(core_i, 0),
       true_fn=lambda: f_0,
-      false_fn=lambda: tf.nest.map_structure(tf.zeros_like, f_0),
+      false_fn=lambda: tf.zeros_like(f_0),
   )
-  axis = (dim + 1) % 3 if f_is_tensor else dim
-  cumsum_local = tf.nest.map_structure(
-      lambda a, b: tf.math.cumsum(a, axis=axis) + b, f, f_0
-  )
-  n = tf.cast(
-      cumsum_local.shape[axis] if f_is_tensor else cumsum_local[0].shape[dim],
-      tf.int32)
+  shifted_dim = (dim + 1) % 3
+  cumsum_local = tf.math.cumsum(f, axis=shifted_dim) + f_0
+  n = tf.cast(cumsum_local.shape[shifted_dim], tf.int32)
   sum_local = _slice_in_dim(cumsum_local, n-1, 1, dim)
 
   def global_reduce_fn(x):
     return common_ops.global_reduce(
         x[tf.newaxis, ...], tf.math.cumsum, group_assignment)
 
-  cumsum_global = tf.nest.map_structure(global_reduce_fn, sum_local)
+  cumsum_global = global_reduce_fn(sum_local)
   cumsum_prev = tf.cond(
       pred=tf.equal(core_i, 0),
-      true_fn=lambda: tf.nest.map_structure(tf.zeros_like, sum_local),
-      false_fn=lambda: tf.nest.map_structure(  # pylint: disable=g-long-lambda
-          lambda x: tf.squeeze(x[core_i - 1, ...], axis=0), cumsum_global),
+      true_fn=lambda: tf.zeros_like(sum_local),
+      false_fn=lambda: tf.squeeze(cumsum_global[core_i - 1, ...], axis=0),
   )
-  return tf.nest.map_structure(tf.math.add, cumsum_local, cumsum_prev)
+  return cumsum_local + cumsum_prev
 
 
 def compute_buoyancy_balanced_hydrodynamic_pressure(
@@ -214,19 +157,41 @@ def compute_buoyancy_balanced_hydrodynamic_pressure(
     g_dim: The dimension of the vertical direction.
     params: SwirlLMParameters that contains the configuration for the
       simulation.
-    additional_states: Dictionary of helper variables.
+    additional_states: Dictionary of helper variables, used for stretched grid
+      arrays.
 
   Returns:
     The hydrodynamic pressure that balances the buoyancy term numerically.
   """
-  b = utils.buoyancy_source(kernel_op, rho, rho_0, params, g_dim)
+  use_3d_tf_tensor = isinstance(rho, tf.Tensor)
+  if not use_3d_tf_tensor:
+    # Transform the required stretched grid arrays from list-of-2D to 3D format.
+    stretched_grid_states = stretched_grid_util.get_helper_variables(
+        additional_states
+    )
+    additional_states_3d = {
+        key: tf.stack(value) for key, value in stretched_grid_states.items()
+    }
+    p_3d = compute_buoyancy_balanced_hydrodynamic_pressure(
+        kernel_op,
+        replica_id,
+        replicas,
+        tf.stack(rho),
+        tf.stack(rho_0),
+        g_dim,
+        params,
+        additional_states_3d,
+    )
+    return tf.unstack(p_3d)
+
+  del kernel_op
+  b = utils.buoyancy_source(rho, rho_0, params, g_dim, additional_states)
 
   # In ANELASTIC mode, the gradient to be balanced is for the buoyancy
   # normalized by the reference density.
   if params.solver_mode == thermodynamics_pb2.Thermodynamics.ANELASTIC:
-    b = tf.nest.map_structure(tf.math.divide, b, rho_0)
+    b = b / rho_0
 
-  n_vec = (params.nx, params.ny, params.nz)
   core_n = (params.core_nx, params.core_ny, params.core_nz)[g_dim]
   cores = (params.cx, params.cy, params.cz)[g_dim]
   # Total number of grid points along the vertical direction.
@@ -239,32 +204,11 @@ def compute_buoyancy_balanced_hydrodynamic_pressure(
     paddings[g_dim] = (low_n, high_n)
     return common_ops.pad(t, paddings)
 
-  def binary_mask_along_zlist(
-      even: bool,
-  ) -> FlowFieldVal:
-    """Creates a binary mask with 1's at the even (or odd) vertical indices."""
-    core_i = common_ops.get_core_coordinate(replicas, replica_id)[g_dim]
-    offset = 1 if even else 0
-    first_binary_element = tf.math.mod(
-        tf.linspace(offset, global_n - 1 + offset, global_n)[core_i * core_n], 2
-    )
-    broadcastable_mask = tf.cond(
-        pred=tf.equal(first_binary_element, 1),
-        true_fn=lambda: [(z + 1) % 2 for z in list(range(core_n))],
-        false_fn=lambda: [z % 2 for z in list(range(core_n))],
-    )
-    return tf.nest.map_structure(
-        lambda x: tf.cast(x, dtype=_DTYPE), broadcastable_mask
-    )
-
   def binary_mask_like(
       f: types.FlowFieldVal,
       even: bool,
   ) -> FlowFieldVal:
     """Creates a mask like `f` with 1's at alternating vertical indices."""
-    f_is_tensor = isinstance(f, tf.Tensor)
-    if g_dim == 2 and not f_is_tensor:
-      return binary_mask_along_zlist(even)
     core_i = common_ops.get_core_coordinate(replicas, replica_id)[g_dim]
     offset = 1 if even else 0
     sequence = tf.slice(
@@ -273,28 +217,19 @@ def compute_buoyancy_balanced_hydrodynamic_pressure(
         [core_n],
     )
     binary_sequence = tf.cast(tf.math.mod(sequence, 2), dtype=_DTYPE)
-    if f_is_tensor:  # 3-D tensor.
-      shifted_dim = (g_dim + 1) % 3
-      broadcast_shape = [1, 1, 1]
-      broadcast_shape[shifted_dim] = core_n
-      broadcastable_mask = tf.reshape(binary_sequence, broadcast_shape)
-    else:  # z-list.
-      broadcast_shape = [1, 1]
-      broadcast_shape[g_dim] = core_n
-      edge_mask = tf.reshape(binary_sequence, broadcast_shape)
-      # Must replicate the mask along the list dimension for broadcasting to
-      # work as expected with tensor lists.
-      broadcastable_mask = [edge_mask] * n_vec[2]
-    ones = tf.nest.map_structure(tf.ones_like, f)
-    return tf.nest.map_structure(tf.multiply, ones, broadcastable_mask)
+    shifted_dim = (g_dim + 1) % 3
+    broadcast_shape = [1, 1, 1]
+    broadcast_shape[shifted_dim] = core_n
+    broadcastable_mask = tf.reshape(binary_sequence, broadcast_shape)
+    ones = tf.ones_like(f)
+    return ones * broadcastable_mask
 
   # Compute the buoyancy multiplied by twice the grid spacing.
   if params.use_stretched_grid[g_dim]:
     h = additional_states[stretched_grid_util.h_key(g_dim)]
-    b_dz = common_ops.map_structure_3d(lambda b, h: 2.0 * b * h, b, h)
   else:
     h = params.grid_spacings[g_dim]
-    b_dz = tf.nest.map_structure(lambda b: 2.0 * b * h, b)
+  b_dz = 2 * b * h
 
   # Remove the halos along the vertical direction.
   b_dz = _slice_in_dim(b_dz, halo_width, core_n, g_dim)
@@ -304,62 +239,40 @@ def compute_buoyancy_balanced_hydrodynamic_pressure(
   even_mask = binary_mask_like(b_dz, even=True)
   odd_mask = binary_mask_like(b_dz, even=False)
 
-  b_dz_even = tf.nest.map_structure(tf.multiply, b_dz, even_mask)
-  b_dz_odd = tf.nest.map_structure(tf.multiply, b_dz, odd_mask)
+  b_dz_even = even_mask * b_dz
+  b_dz_odd = odd_mask * b_dz
 
   # Prepend a 0 to the buoyancy terms to make them align with the corresponding
   # pressure levels.
   b_dz_even = pad_in_vertical(b_dz_even, 1, 0)
   b_dz_odd = pad_in_vertical(b_dz_odd, 1, 0)
   # Integrate the buoyancy tensors to get the pressure.
-  zeros = tf.nest.map_structure(
-      tf.zeros_like, _slice_in_dim(b_dz_odd, 0, 1, g_dim))
+  zeros = tf.zeros_like(_slice_in_dim(b_dz_odd, 0, 1, g_dim))
   p_even = _cumsum(replica_id, replicas, b_dz_odd, zeros, g_dim)
-  p_even = tf.nest.map_structure(
-      tf.multiply,
-      _slice_in_dim(p_even, 0, core_n, g_dim),
-      even_mask)
+  p_even = even_mask * _slice_in_dim(p_even, 0, core_n, g_dim)
 
   # Shifting the starting point of integration of the odd part so that the
   # overall profile is smooth.
-  if g_dim == 2 and isinstance(b_dz_even, Sequence):
-    p_1 = [0.5 * tf.math.add_n(p_even[:3]) - b_dz_even[0]]
-  else:
-    axis = g_dim if isinstance(b_dz_even, Sequence) else (g_dim + 1) % 3
-    p_1 = tf.nest.map_structure(
-        lambda x, y: 0.5 * tf.math.reduce_sum(x, axis=axis, keepdims=True) - y,
-        _slice_in_dim(p_even, 0, 3, g_dim),
-        _slice_in_dim(b_dz_even, 0, 1, g_dim),
-    )
+  shifted_dim = (g_dim + 1) % 3
+  p_1a = _slice_in_dim(p_even, 0, 3, g_dim)
+  p_1b = _slice_in_dim(b_dz_even, 0, 1, g_dim)
+  p_1 = 0.5 * tf.math.reduce_sum(p_1a, axis=shifted_dim, keepdims=True) - p_1b
+
   p_odd = _cumsum(replica_id, replicas, b_dz_even, p_1, g_dim)
-  p_odd = tf.nest.map_structure(
-      tf.multiply, _slice_in_dim(p_odd, 0, core_n, g_dim), odd_mask)
+  p_odd = odd_mask * _slice_in_dim(p_odd, 0, core_n, g_dim)
 
   # Combine the 2 tensors into one and update values in the halos. Note that
   # only the layer of halo that is closest to the interior domain matters, which
   # is used to compute the pressure gradient at the first fluid point.
-  p = tf.nest.map_structure(tf.math.add, p_even, p_odd)
+  p = p_even + p_odd
   # The lower boundary condition corresponding to the innermost halo (p_l) must
   # satisfy p[1] - p_l = b_dz[0]
-  p_l = tf.nest.map_structure(
-      tf.math.subtract,
-      _slice_in_dim(p, 1, 1, g_dim),
-      _slice_in_dim(b_dz, 0, 1, g_dim),
-  )
+  p_l = _slice_in_dim(p, 1, 1, g_dim) - _slice_in_dim(b_dz, 0, 1, g_dim)
   # The upper boundary condition (p_h) must satisfy p_h - p[n-2] = bd_z[n-1],
   # where n-1 is the index of the last internal fluid layer.
-  p_h = tf.nest.map_structure(
-      tf.math.add,
-      _slice_in_dim(p, core_n - 2, 1, g_dim),
-      _slice_in_dim(b_dz, core_n - 1, 1, g_dim),
+  p_h = _slice_in_dim(p, core_n - 2, 1, g_dim) + _slice_in_dim(
+      b_dz, core_n - 1, 1, g_dim
   )
-  # If the boundary condition is set along the list dimension, the halo exchange
-  # expects the boundary plane represented as a 2D tensor. Otherwise, if set
-  # along one of the tensor dimensions, a list of thin tensors of dimension
-  # (1, ny) or (nx, 1) is expected.
-  if g_dim == 2 and isinstance(p_l, Sequence):
-    p_l = p_l[0]
-    p_h = p_h[0]
 
   p = pad_in_vertical(p, halo_width, halo_width)
   bc = [[(halo_exchange.BCType.NEUMANN, 0.0)] * 2] * 3
@@ -384,12 +297,8 @@ def compute_buoyancy_balanced_hydrodynamic_pressure(
       width=halo_width,
   )
 
-  # In ANELASTIC mode, the gradient to be balanced is for the buoyancy
-  # normalized by the reference density. We recover the pressure by multiplying
-  # the reference density back.
-  if params.solver_mode == thermodynamics_pb2.Thermodynamics.ANELASTIC:
-    p = tf.nest.map_structure(tf.math.multiply, p, rho_0)
-
+  # In LOW_MACH mode, the output represents the hydrodynamic pressure p.  In
+  # ANELASTIC mode, the output represents p / rho_ref.
   return p
 
 

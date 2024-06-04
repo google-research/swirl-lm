@@ -307,8 +307,12 @@ def laplacian_and_inv_diagonal_fns(
     raise ValueError('The size of grid_lengths ({}) must be equal to the '
                      'rank ({}).'.format(len(full_grid_lengths), rank))
 
+  # `s` includes the 1 halo pixel on each of the 2 ends. To be consistent with
+  # the grid parametrization where the inner grids represent the nodes of the
+  # interior domain that spans the `grid_lengths`, the grid space should be
+  # computed with the 2 side halo nodes removed.
   dxs = [
-      length / (s - 1) for length, s in zip(full_grid_lengths, full_grid_shape)
+      length / (s - 3) for length, s in zip(full_grid_lengths, full_grid_shape)
   ]
   diag = -2 * sum([dx**-2 for dx in dxs])
 
@@ -576,29 +580,27 @@ def prolong_restrict_matrices(
   dimension at that level.
 
   To give an example, suppose in 3 dimensions `start_shape` is `(7, 21, 4)`
-  and `end_shape` is `(3, 3, 3)`. The first element of the returned
+  and `end_shape` is `(4, 4, 4)`. The first element of the returned
   prolongation matrices list will consist of three prolongation matrices, one
   for each dimension, with shapes
-    `(7, 4), (21, 11), (4, 3)`.
-  The next element will have shapes or values
-    `(4, 3), (11, 6), None`,
-  and the last element will have shapes or values
-     `None, (6, 3), None`.
+    `(7, 4), (21, 11), None`.
+  The next and the final element will have shapes or values
+    `None, (11, 6), None`,
   The sequence stops because for every dimension the value is `None` or the
   smaller shape is (in this example) 3.
 
   Args:
     start_shape: The starting grid shape.
     end_shape: The ending grid shape. Each element must be greater than or equal
-      to 3.
+      to 4.
 
   Returns:
     A tuple of (prolongation_matrices, restriction_matrices) corresponding to
     the reduction in size from `start_shape` to `end_shape`.
   """
-  if min(end_shape) < 3:
+  if min(end_shape) < 4:
     raise ValueError(f'Each element of `end_shape` ({end_shape}) must be '
-                     'greater than 2.')
+                     'greater than 3.')
   if any(np.array(start_shape) - np.array(end_shape)) < 0:
     raise ValueError(f'Each element of `start_shape` ({start_shape}) must be '
                      f'greater than or equal to `end_shape` ({end_shape}).')
@@ -690,11 +692,11 @@ def prolong_restrict_matrices_from_params(  # pytype: disable=annotation-type-mi
     one corresponding to `coarsest_subgrid_shape`.
   """
   if not coarsest_subgrid_shape:
-    coarsest_subgrid_shape = (3, 3, 3)
+    coarsest_subgrid_shape = (4, 4, 4)
 
-  if min(coarsest_subgrid_shape) < 3:
+  if min(coarsest_subgrid_shape) < 4:
     raise ValueError('Each element of `coarsest_subgrid_shape` '
-                     f'({coarsest_subgrid_shape}) must be greater than 2.')
+                     f'({coarsest_subgrid_shape}) must be greater than 3.')
 
   if any(
       np.array((params.nx, params.ny, params.nz)) -
@@ -819,7 +821,7 @@ def get_ps_rs_init_fn(params: grid_parametrization.GridParametrization,  # pytyp
   """
   computation_shape = params.cx, params.cy, params.cz
   if not coarsest_subgrid_shape:
-    coarsest_subgrid_shape = (3, 3, 3)
+    coarsest_subgrid_shape = (4, 4, 4)
   ps_per_level, rs_per_level = prolong_restrict_matrices_from_params(
       params, coarsest_subgrid_shape, dtype)
 
@@ -1311,7 +1313,6 @@ def get_multigrid_helper_var_keys(
           ]
       )
   )
-
   return list(
       f'{varname}-{level}_{dim}'  # pylint: disable=g-complex-comprehension
       for varname, level, dim in itertools.product(

@@ -62,7 +62,7 @@ message MoninObukhovSimilarityTheory {
   // The minimum potential temperature for the model evaluation.
   optional float theta_min = 14 [default = 280.0];
 
-  // Defines a generic type for the reference value of a scalar in the MOST
+  // Defines a generic type for a reference value in the MOST
   // model.
   // Next id: 3
   message MOSTScalarRef {
@@ -75,9 +75,9 @@ message MoninObukhovSimilarityTheory {
   // Specifies the reference value at the sea surface level.
   repeated MOSTScalarRef sea_level_ref = 15;
 
-  // Specifies the exchange coefficient (if applicable) of scalars. If this
-  // field is provided, the exchange/drag coefficient for this particular
-  // variable will override the on computed from MOST.
+  // Specifies the exchange coefficient (if applicable) of scalars or momentum.
+  // If this field is provided, the exchange/drag coefficient for this
+  // particular variable will override the one computed from MOST.
   repeated MOSTScalarRef exchange_coeff = 17;
 
   // Specifies scalars to which MOST is applied.

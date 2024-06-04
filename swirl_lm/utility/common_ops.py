@@ -444,7 +444,7 @@ def reshape_to_broadcastable(
 
 def get_local_slice_of_1d_array(
     v: tf.Tensor, core_id: int, core_n: int, n: int
-):
+) -> tf.Tensor:
   """Retrieves the values local to `core_id` from a global 1D array `v`.
 
   Args:

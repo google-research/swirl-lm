@@ -443,14 +443,9 @@ class Pressure(object):
         params, self._kernel_op, self._pressure_params.solver)
 
     self._gravity_vec = params.gravity_direction or (0, 0, 0)
-
     # Find the direction of gravity. Only vector along a particular dimension is
     # considered currently.
-    self.g_dim = None
-    for i in range(3):
-      if np.abs(np.abs(self._gravity_vec[i]) - 1.0) < _G_THRESHOLD:
-        self.g_dim = i
-        break
+    self.g_dim = params.g_dim
 
     self._halo_dims = (0, 1, 2)
     self._replica_dims = (0, 1, 2)
@@ -550,10 +545,6 @@ class Pressure(object):
         == thermodynamics_pb2.Thermodynamics.ANELASTIC
     )
     multiply = lambda a, b: tf.nest.map_structure(tf.multiply, a, b)
-
-    if anelastic:
-      # For anelastic, `dp` represents α₀ δp through the end of this function.
-      dp = tf.nest.map_structure(tf.divide, dp, rho)
 
     # Compute the one-grid-spacing derivative terms.
     derivs_1h = []
@@ -743,7 +734,8 @@ class Pressure(object):
     # Note that the solution that is denoted as `dp` from the Poisson solver has
     # different meanings under different modes of thermodynamics. In the low
     # Mach number model, `dp` is the pressure correction; in the anelastic mode,
-    # it is the product of the specific volume and the pressure correction.
+    # it is the product of the reference specific volume and the pressure
+    # correction.
     poisson_solution = self._solver.solve(
         replica_id,
         replicas,
@@ -790,10 +782,6 @@ class Pressure(object):
             log_level=_DEBUG_PRINT_LOG_LEVEL,
         )
 
-    if (self._thermodynamics.solver_mode ==
-        thermodynamics_pb2.Thermodynamics.ANELASTIC):
-      dp = tf.nest.map_structure(tf.math.multiply, dp, states['rho'])
-
     # Updates monitor after solving the Poisson equation.
     monitor_params.update({
         'b': b,
@@ -812,22 +800,35 @@ class Pressure(object):
 
   def _update_pressure_bc(
       self,
+      replica_id: tf.Tensor,
+      replicas: np.ndarray,
       states: FlowFieldMap,
       additional_states: FlowFieldMap,
   ):
-    """Updates the boundary condition of pressure based on the flow field."""
+    """Updates the boundary condition of pressure based on the flow field.
+
+    Note that the boundary condition for pressure is derived from the flow field
+    information if the `update_p_bc_by_flow` flag is set to `true`.
+
+    Also treatment for inhomogeneous shear stress on the wall is currently
+    unsupported.
+
+    Args:
+      replica_id: The index of the current TPU replica.
+      replicas: A numpy array that maps grid coordinates to replica id numbers.
+      states: A dictionary that holds flow field variables from the latest
+        prediction.
+      additional_states: A dictionary that holds helper variables.
+
+    Returns:
+      A dictionary that specifies the boundary condition of pressure.
+    """
+    del replica_id, replicas
+
     bc_p = [[None, None], [None, None], [None, None]]
 
-    velocity_keys = ['u', 'v', 'w']
-
-    def ddh_per_dim(f, dim):
-      """Computes the second order derivative of `f` along `dim`."""
-      df_dh_face = self._deriv_lib.deriv_node_to_face(f, dim, additional_states)
-      d2f_dh2 = self._deriv_lib.deriv_face_to_node(
-          df_dh_face, dim, additional_states
-      )
-      return d2f_dh2
-
+    # Note that the diffusion term does not contribute to the pressure boundary
+    # condition at a wall based on the following analysis.
     # The diffusion term for the 3 velocity component can be expressed in vector
     # form as:
     # 𝛁·𝛕 = 𝜇 𝛁²u + 1/3𝜇 𝛁(𝛁·u).
@@ -840,39 +841,19 @@ class Pressure(object):
     # parallel/tangent to the wall.
     # In additional, we assume that there's no turbulence at the wall, therefore
     # 𝜇 is the molecular viscosity.
-    def diff_fn(
-        mu_i: tf.Tensor,
-        ddu_n_i: tf.Tensor,
-        ddu_t_i: tf.Tensor,
-    ) -> tf.Tensor:
-      """Computes the diffusion term at walls."""
-      return mu_i * (4.0 / 3.0 * ddu_n_i + 1.0 / 3.0 * ddu_t_i)
-
-    mu = tf.nest.map_structure(lambda rho_i: self._params.nu * rho_i,
-                               states['rho'])
-    ddu_n = [ddh_per_dim(states[velocity_keys[i]], i) for i in range(3)]
-    du_dx = [
-        self._deriv_lib.deriv_centered(
-            states[velocity_keys[dim]], dim, additional_states
-        )
-        for dim in (0, 1, 2)
-    ]
-    du_t = (
-        # The x component.
-        tf.nest.map_structure(tf.math.add, du_dx[1], du_dx[2]),
-        # The y component.
-        tf.nest.map_structure(tf.math.add, du_dx[0], du_dx[2]),
-        # The z component.
-        tf.nest.map_structure(tf.math.add, du_dx[0], du_dx[1]),
-    )
-    ddu_t = [
-        self._deriv_lib.deriv_centered(du_t[dim], dim, additional_states)
-        for dim in (0, 1, 2)
-    ]
-
-    diff = [
-        tf.nest.map_structure(diff_fn, mu, ddu_n[i], ddu_t[i]) for i in range(3)
-    ]
+    # Applying this formulation on the wall surface, which is defined at the
+    # mid-point between the first halo layer and the first fluid layer, we see
+    # that the second term 1/3𝜇 𝜕/𝜕n (𝜕uₜ/𝜕t) = 0 for both non-slip and
+    # free-slip walls. Specifically, for non-slip wall, 𝜕uₜ/𝜕t = 0 because
+    # uₜ = 0; for free slip wall, 𝜕uₜ/𝜕n = 0 following its definition. Note
+    # that for a shear wall, this term is also 0 if the shear stress is
+    # homogeneously distributed on the wall. However, for inhomogeneously
+    # distributed shear stress, e.g. with wall models like the Monin-Obukhov
+    # similarity theory, the contribution due to this term needs to be
+    # considered.
+    # Additionally, because an linear extrapolation is performed for the wall
+    # normal velocity component across the wall, the second order derivative
+    # of it is 0, so that the first term in the shear stress formulation is 0.
 
     # Updates the pressure boundary condition based on the simulation setup.
     for i in (0, 1, 2):
@@ -908,26 +889,26 @@ class Pressure(object):
               self._params, i
           )
 
-          bc_value = common_ops.get_face(
-              diff[i],
-              i,
-              j,
-              self._params.halo_width - 1,
-              first_last_grid_spacing[j],
-          )[0]
           if i == self.g_dim:
             # Ensures the pressure balances with the buoyancy at the first fluid
             # layer by assigning values to the pressure in halos adjacent to the
-            # fluid domain.
+            # fluid domain. Note that 'zz' in the `additionall_states` here
+            # refers to the vertical coordinates instead of the z coordinates.
             rho_0 = self._thermodynamics.rho_ref(
                 additional_states.get('zz', None), additional_states
             )
-            b = eq_utils.buoyancy_source(self._kernel_op, states['rho_thermal'],
-                                         rho_0, self._params, i)
-
+            b = eq_utils.buoyancy_source(
+                states['rho_thermal'], rho_0, self._params, i, additional_states
+            )
             bc_value = tf.nest.map_structure(
-                tf.math.add,
-                bc_value,
+                common_ops.average,
+                common_ops.get_face(
+                    b,
+                    i,
+                    j,
+                    self._params.halo_width,
+                    first_last_grid_spacing[j],
+                )[0],
                 common_ops.get_face(
                     b,
                     i,
@@ -936,6 +917,14 @@ class Pressure(object):
                     first_last_grid_spacing[j],
                 )[0],
             )
+          else:
+            bc_value = common_ops.get_face(
+                tf.nest.map_structure(tf.zeros_like, states['p']),
+                i,
+                j,
+                self._params.halo_width - 1,
+                first_last_grid_spacing[j],
+            )[0]
 
           # The boundary condition for pressure is applied at the interface
           # between the boundary and fluid only. Assuming everything is
@@ -946,7 +935,7 @@ class Pressure(object):
 
           bc_planes = zeros + [bc_value] if j == 0 else [bc_value] + zeros
 
-          bc_p[i][j] = (halo_exchange.BCType.NEUMANN_2, bc_planes)
+          bc_p[i][j] = (halo_exchange.BCType.NEUMANN, bc_planes)
         else:
           raise ValueError('{} is not defined for pressure boundary.'.format(
               self._params.bc_type[i][j]))
@@ -980,7 +969,7 @@ class Pressure(object):
         self._exchange_halos, replica_id=replica_id, replicas=replicas)
 
     if self._pressure_params.update_p_bc_by_flow:
-      self._update_pressure_bc(states, additional_states)
+      self._update_pressure_bc(replica_id, replicas, states, additional_states)
 
     return {'p': exchange_halos(states['p'], self._bc['p'])}
 
@@ -1076,7 +1065,9 @@ class Pressure(object):
       ):
         """The body function for drho filtering."""
         return i + 1, exchange_halos(
-            filters.filter_op(self._kernel_op, drho_i, order=2)
+            filters.filter_op(
+                self._params, drho_i, additional_states, order=2
+            )
         )
 
       i0 = tf.constant(0)

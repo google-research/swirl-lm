@@ -179,8 +179,7 @@ def _germano_averaging(
 ) -> FlowFieldVal:
   """Computes the Germano averaging across all periodic directions."""
   cx, cy, cz = replicas.shape
-  nz = len(value)
-  nx, ny = value[0].get_shape().as_list()
+  nx, ny, nz = common_ops.get_shape(value)
 
   count = 1.0
 
@@ -195,44 +194,68 @@ def _germano_averaging(
     """Repeats `val` along `axis` `reps` time."""
     return tf.repeat(tf.expand_dims(val, axis), reps, axis)
 
-  if periodic_dims[2]:
-    group_assignment_z = np.array(
-        [replicas[i, j, :] for i, j in itertools.product(range(cx), range(cy))]
-    )
-    local_sum = tf.zeros_like(value[0], dtype=value[0].dtype)
-    for value_i in value:
-      local_sum += value_i
-    value_z_sum = sum_in_dim(local_sum, group_assignment_z)
-    value = [
-        value_z_sum,
-    ] * nz
-    count *= float(nz * cz)
+  if isinstance(value, tf.Tensor):
+    # Dimensions that correspond to the physical axes of a 3D tensor in
+    # Swirl-LM, i.e. physical dimension 0 corresponds to the dimension index 1
+    # in a 3D tensor.
+    axes = [1, 2, 0]
+    for dim in range(3):
+      if not periodic_dims[dim]:
+        replicas = np.transpose(replicas, (1, 2, 0))
+        continue
+      n = (nx, ny, nz)[dim]
 
-  if periodic_dims[1]:
-    group_assignment_y = np.array(
-        [replicas[i, :, k] for i, k in itertools.product(range(cx), range(cz))]
-    )
-    local_sum = tf.nest.map_structure(
-        lambda value_i: tf.math.reduce_sum(value_i, axis=1), value
-    )
-    value = tf.nest.map_structure(
-        lambda sum_i: repeat(sum_in_dim(sum_i, group_assignment_y), 1, ny),
-        local_sum,
-    )
-    count *= float(ny * cy)
+      # Here we always shift the dimension for communication to the first one.
+      c0, c1, c2 = replicas.shape
+      group_assignment = np.array([
+          replicas[:, i, j] for i, j in itertools.product(range(c1), range(c2))
+      ])
+      replicas = np.transpose(replicas, (1, 2, 0))
 
-  if periodic_dims[0]:
-    group_assignment_x = np.array(
-        [replicas[:, j, k] for j, k in itertools.product(range(cy), range(cz))]
-    )
-    local_sum = tf.nest.map_structure(
-        lambda value_i: tf.math.reduce_sum(value_i, axis=0), value
-    )
-    value = tf.nest.map_structure(
-        lambda sum_i: repeat(sum_in_dim(sum_i, group_assignment_x), 0, nx),
-        local_sum,
-    )
-    count *= float(nx * cx)
+      local_sum = tf.math.reduce_sum(value, axis=axes[dim])
+      value = repeat(sum_in_dim(local_sum, group_assignment), axes[dim], n)
+      count *= float(n * c0)
+
+  else:
+    if periodic_dims[2]:
+      group_assignment_z = np.array([
+          replicas[i, j, :] for i, j in itertools.product(range(cx), range(cy))
+      ])
+      local_sum = tf.zeros_like(value[0], dtype=value[0].dtype)
+      for value_i in value:
+        local_sum += value_i
+      value_z_sum = sum_in_dim(local_sum, group_assignment_z)
+      value = [
+          value_z_sum,
+      ] * nz
+
+      count *= float(nz * cz)
+
+    if periodic_dims[1]:
+      group_assignment_y = np.array([
+          replicas[i, :, k] for i, k in itertools.product(range(cx), range(cz))
+      ])
+      local_sum = tf.nest.map_structure(
+          lambda value_i: tf.math.reduce_sum(value_i, axis=1), value
+      )
+      value = tf.nest.map_structure(
+          lambda sum_i: repeat(sum_in_dim(sum_i, group_assignment_y), 1, ny),
+          local_sum,
+      )
+      count *= float(ny * cy)
+
+    if periodic_dims[0]:
+      group_assignment_x = np.array([
+          replicas[:, j, k] for j, k in itertools.product(range(cy), range(cz))
+      ])
+      local_sum = tf.nest.map_structure(
+          lambda value_i: tf.math.reduce_sum(value_i, axis=0), value
+      )
+      value = tf.nest.map_structure(
+          lambda sum_i: repeat(sum_in_dim(sum_i, group_assignment_x), 0, nx),
+          local_sum,
+      )
+      count *= float(nx * cx)
 
   return tf.nest.map_structure(lambda value_i: value_i / count, value)
 
@@ -625,7 +648,7 @@ class SgsModel(object):
 
       return _einsum_ij(l_ij, m_ij), _einsum_ij(m_ij, m_ij)
 
-    lm, mm = lm_mm_momentum() if not scalar else lm_mm_scalar()
+    lm, mm = lm_mm_momentum() if scalar is None else lm_mm_scalar()
 
     # The 2 halos are invalid values and should not be included in the
     # average.
@@ -638,22 +661,29 @@ class SgsModel(object):
       halo_width = 2
       m_inner = common_ops.strip_halos(m, (halo_width, halo_width, halo_width))  # pytype: disable=wrong-arg-types  # always-use-return-annotations
       m_avg_inner = _germano_averaging(m_inner, periodic_dims, replicas)
-      z_pad = [
-          # These are in the halos and can be set to any values. Although they
-          # might enter (temporarily) into the point-wise time advancement step
-          # , the contribution will not accumulate as the values in the halos
-          # will be reset/replaced every step. Here we choose 0 for simplicity.
-          tf.zeros_like(m_avg_inner[0]),
-      ] * halo_width
-      m_avg_inner = z_pad + m_avg_inner + z_pad
-      return tf.nest.map_structure(
-          lambda inner: tf.pad(  # pylint: disable=g-long-lambda
-              inner,
-              [[halo_width, halo_width], [halo_width, halo_width]],
-              constant_values=1.0,
-          ),
-          m_avg_inner,
-      )
+      if self._swirllm_params.use_3d_tf_tensor:
+        m_avg_full = tf.pad(
+            m_avg_inner, [[halo_width] * 2] * 3, constant_values=1.0
+        )
+      else:
+        z_pad = [
+            # These are in the halos and can be set to any values. Although they
+            # might enter (temporarily) into the point-wise time advancement
+            # step, the contribution will not accumulate as the values in the
+            # halos will be reset/replaced every step. Here we choose 0 for
+            # simplicity.
+            tf.zeros_like(m_avg_inner[0]),
+        ] * halo_width
+        m_avg_inner = z_pad + m_avg_inner + z_pad
+        m_avg_full = tf.nest.map_structure(
+            lambda inner: tf.pad(  # pylint: disable=g-long-lambda
+                inner,
+                [[halo_width, halo_width], [halo_width, halo_width]],
+                constant_values=1.0,
+            ),
+            m_avg_inner,
+        )
+      return m_avg_full
 
     lm_avg = germano_avg_exclude_halos(lm)
     mm_avg = germano_avg_exclude_halos(mm)

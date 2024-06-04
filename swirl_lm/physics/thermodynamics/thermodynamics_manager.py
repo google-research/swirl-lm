@@ -104,6 +104,8 @@ class ThermodynamicsManager(object):
         'LOW_MACH', 'ANELASTIC'.
       ValueError: If 'rho' is not found in `states` or `state_0` (if it's used).
     """
+    del kernel_op
+
     if 'rho' not in states:
       raise ValueError('"rho" is not found in `states`.')
 
@@ -125,16 +127,19 @@ class ThermodynamicsManager(object):
         # are the same as the first fluid layer.
         drho = halo_exchange.inplace_halo_exchange(
             filters.filter_op(
-                kernel_op,
+                self._params,
                 tf.nest.map_structure(tf.math.subtract, rho, states_0['rho']),
-                order=2),
+                additional_states,
+                order=2,
+            ),
             self._halo_dims,
             replica_id,
             replicas,
             self._replica_dims,
             self._params.periodic_dims,
-            [[(halo_exchange.BCType.NEUMANN, 0.0),] * 2] * 3,
-            width=self._params.halo_width)
+            [[(halo_exchange.BCType.NEUMANN, 0.0)] * 2] * 3,
+            width=self._params.halo_width,
+        )
 
         rho = tf.nest.map_structure(tf.math.add, states_0['rho'], drho)
       else:

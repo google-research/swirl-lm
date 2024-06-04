@@ -762,7 +762,8 @@ class Fire:
           width=self.config.halo_width,
       )
       rho_f = filters.filter_op(
-          kernel_op, halo_update_fn(additional_states['rho_f'])
+          self.config,
+          halo_update_fn(additional_states['rho_f']), additional_states,
       )
       output.update({'rho_f': halo_update_fn(rho_f)})
 

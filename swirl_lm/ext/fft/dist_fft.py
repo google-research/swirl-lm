@@ -37,12 +37,16 @@ please enable x64 support.
 """
 import collections
 import functools
-from typing import Text, Tuple
+from typing import Callable, Text, Tuple
 
 import einops
 import jax
 from jax import lax
+from jax.experimental import mesh_utils
+from jax.experimental.shard_map import shard_map
 import jax.numpy as jnp
+from jax.sharding import Mesh
+from jax.sharding import PartitionSpec as P
 import numpy as np
 
 SUPPORTED_BACKENDS = ['tpu', 'gpu', 'cpu']
@@ -122,6 +126,16 @@ class DistFFT():
     self._source_target_pairs = [
         [(i, (i + 1) % l) for i in range(l)] for l in self._partition
     ]
+    # These will be set if fft_2d_perf is called.
+    self._devices = None
+    self._mesh = None
+
+  def _create_mesh(self):
+    self._devices = mesh_utils.create_device_mesh(
+        (self._partition[0], self._partition[1], self._partition[2]),
+        allow_split_physical_axes=True)
+    self._mesh = Mesh(self._devices, axis_names=(
+        self._axis_names[0], self._axis_names[1], self._axis_names[2]))
 
   def _exp_itheta(self, theta: jnp.ndarray) -> jnp.ndarray:
     """Calculates exp(i theta).
@@ -403,6 +417,82 @@ class DistFFT():
       output = split_output
 
     return output
+
+  def fft_2d_perf(self,
+                  global_shape: Tuple[int, int, int],
+                  input_fn: Callable[[Tuple[int, int, int],
+                                      Tuple[int, int, int]], jnp.ndarray],
+                  kernel_fn: Callable[[Tuple[int, int, int],
+                                       Tuple[int, int, int]], jnp.ndarray],
+                  num: int = 1) -> jnp.ndarray:
+    """Performs `num` sets of (1 FFT + 1 pointwise Mul + 1 iFFT) operations.
+
+    This operates on input generated with `input_fn` and `kernel_fn`, both are
+    fucntions that takes local 2D shape (nx, ny, 1) and the local core
+    coordinate (cx, cy, 0) as input and returns a complex 2D array with shape
+    (nx, ny, 1).
+
+    Using the `input` and `kernel` as the initial values, this will perform
+    `num` sets of FFT + pointwise Mul + iFFT operations repetedly.
+
+    Args:
+      global_shape: A 1D array specifing the unpartitioned 2D shape (Nx, Ny, 1):
+        `Nx` must be divisible by the partition in the first dimension, `Ny`
+        must be divisible by the partition in the 2nd dimension. The partiaion
+        in the 3rd dimension and the 3rd dimension of the global_shape both has
+        to be 1.
+      input_fn: A function that takes the local shape (nx, ny, 1) and local core
+        coordinate (cx, cy, 0) as the input and returns a 2D array with shape
+        (nx, ny, 1). This is used as the initial input for the FFT.
+      kernel_fn:  A function that takes the local shape (nx, ny, 1) and local
+        core coordinate (cx, cy, 0) as the input and returns a 2D array with
+        shape (nx, ny, 1). This is used for the point-wise multiplication.
+      num: Number of cycles of the operation.
+
+    Returns:
+      A 2D array representing the transformed result.
+
+    """
+
+    partition_x = self._partition[0]
+    partition_y = self._partition[1]
+    partition_z = self._partition[2]
+    global_x = global_shape[0]
+    global_y = global_shape[1]
+    global_z = global_shape[2]
+    assert global_x % partition_x == 0
+    assert global_y % partition_y == 0
+    assert partition_z == 1
+    assert global_z == 1
+
+    nx = int(global_x / partition_x)
+    ny = int(global_y / partition_y)
+
+    self._create_mesh()
+
+    @functools.partial(
+        shard_map, mesh=self._mesh,
+        in_specs=(),
+        out_specs=P(None, None, None), check_rep=False)
+    def do_transform():
+      core_coord = (lax.axis_index(self._axis_names[0]),
+                    lax.axis_index(self._axis_names[1]), 0)
+      input_signal = input_fn((nx, ny, 1), core_coord)
+      kernel = kernel_fn((nx, ny, 1), core_coord)
+      out_signal = input_signal
+      for _ in range(num):
+        out_signal = self.partitioned_fft_1d(
+            self.partitioned_fft_1d(
+                self.partitioned_fft_1d(
+                    self.partitioned_fft_1d(
+                        out_signal, 0, False, 0),
+                    1, False, 0) * kernel, 0, True, 0),
+            1, True, 0)
+      return out_signal
+
+    split_output = do_transform()
+
+    return split_output
 
   def partitioned_fft_1d(
       self,

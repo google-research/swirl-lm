@@ -75,11 +75,13 @@ def partial_mesh_for_core(
     perm: A 3-tuple that defines the permutation ordering for the returned
       tensor. The default is (2, 0, 1). If `None`, permutation is not applied.
     pad_mode: Defines the padding applied the returned tensor. Must be
-      'CONSTANT', 'REFLECT', 'SYMMETRIC' or `None`. The default is 'CONSTANT'.
-      If `None`, padding is not applied.
+      'CONSTANT', 'REFLECT', 'SYMMETRIC', 'PHYSICAL', or `None`. The default is
+      'CONSTANT'. If `None`, padding is not applied. If 'PHYSICAL', the halos
+      are filled with physically correct values.
     mesh_choice: Use mesh from `params` if equals `MeshChoice.PARAMS`, and
       derive the mesh from `core_n`, `num_cores`, and `length` if equals
-      `MeshChoice.DERIVED`.
+      `MeshChoice.DERIVED`. Note that the `mesh_choice` is `MeshChoice.PARAMS`
+      if `pad_mode` is 'PHYSICAL'.
 
   Returns:
     A 3-D tensor representing the mesh of the local core. The values are valid
@@ -164,14 +166,20 @@ def partial_mesh_for_core(
         'Invalid subgrid coordinate specified with z core index. Must be '
         'smaller than total number of core partitioning in z direction.')
 
-  xs = get_slice_in_dim(core_nx, lx, cx, gx, params.global_xyz[0])
-  ys = get_slice_in_dim(core_ny, ly, cy, gy, params.global_xyz[1])
-  zs = get_slice_in_dim(core_nz, lz, cz, gz, params.global_xyz[2])
+  if pad_mode == 'PHYSICAL':
+    xs, ys, zs = [
+        params.grid_local_with_coord(coordinate, dim, True)
+        for dim in range(3)
+    ]
+  else:
+    xs = get_slice_in_dim(core_nx, lx, cx, gx, params.x)
+    ys = get_slice_in_dim(core_ny, ly, cy, gy, params.y)
+    zs = get_slice_in_dim(core_nz, lz, cz, gz, params.z)
 
   xx, yy, zz = tf.meshgrid(xs, ys, zs, indexing='ij')
   val = value_fn(xx, yy, zz, _NP_DTYPE(lx), _NP_DTYPE(ly), _NP_DTYPE(lz),  # pytype: disable=wrong-arg-types  # numpy-scalars
                  coordinate)
-  if pad_mode:
+  if pad_mode and pad_mode != 'PHYSICAL':
     val = tf.pad(
         val,
         paddings=[

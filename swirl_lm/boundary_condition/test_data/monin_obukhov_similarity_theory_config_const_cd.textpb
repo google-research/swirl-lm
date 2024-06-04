@@ -22,5 +22,9 @@ boundary_models {
       name: 'e_t'
       value: 4e-2
     }
+    exchange_coeff {
+      name: 'momentum'
+      value: 0.01
+    }
   }
 }

@@ -16,23 +16,29 @@
 
 import functools
 from typing import Callable, Optional
+from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
+from swirl_lm.utility import stretched_grid_util
 from swirl_lm.utility import types
 import tensorflow as tf
 
 FlowFieldVal = types.FlowFieldVal
+FlowFieldMap = types.FlowFieldMap
 
 
 def filter_op(
-    kernel_op: get_kernel_fn.ApplyKernelOp,
+    params: parameters_lib.SwirlLMParameters,
     f: FlowFieldVal,
+    additional_states: FlowFieldMap,
     order: Optional[int] = 2,
 ) -> FlowFieldVal:
   """Performs filtering to a variable.
 
   Args:
-    kernel_op: An ApplyKernelOp instance to use in computing the step update.
+    params: The solver configuration.
     f: The 3D variable to be filtered. Values in halos must be valid.
+    additional_states: Mapping that contains the optional scale factors.
     order: The harmonic order of the filter.
 
   Returns:
@@ -43,19 +49,21 @@ def filter_op(
     NotImplementedError: If order is not 2.
   """
   if order == 2:
-    return filter_2(kernel_op, f)
+    return filter_2(params, f, additional_states)
   else:
     raise NotImplementedError(
         'Order {} filter is not supported. Available orders: 2.'.format(order))
 
 
 def filter_2(
-    kernel_op: get_kernel_fn.ApplyKernelOp,
+    params: parameters_lib.SwirlLMParameters,
     f: FlowFieldVal,
+    additional_states: FlowFieldMap,
     stencil: Optional[int] = 27,
 ) -> FlowFieldVal:
   r"""Performs filtering by adding second-order derivatives to a variable.
 
+  Note that the `stencil` option applies only to the uniform mesh.
   For stencil = 7:
   \bar{f}_ijk = (1 - s)f_ijk + s/6(f_{i-1,j,k} + f_{i+1,j,k} +
       f_{i,j-1,k} + f_{i,j+1,k} + f_{i,j,k-1} + f_{i,j,k+1})
@@ -72,8 +80,9 @@ def filter_2(
   dynamic meteorology. No. 551.5 HAL. 1980, p. 392-397.
 
   Args:
-    kernel_op: An ApplyKernelOp instance to use in computing the step update.
+    params: The solver configuration.
     f: The 3D variable to be filtered. Values in halos must be valid.
+    additional_states: Mapping that contains the optional scale factors.
     stencil: The width of the stencil to be considered for filtering. Only 7 and
       27 are allowed.
 
@@ -84,25 +93,93 @@ def filter_2(
   Raises:
     ValueError: If stencil is not 7 or 27.
   """
+  kernel_op = params.kernel_op
+  kernel_op.add_kernel(
+      {'shift_up': ([1.0, 0.0, 0.0], 1), 'shift_dn': ([0.0, 0.0, 1.0], 1)}
+  )
+  shift_up_ops = (
+      functools.partial(kernel_op.apply_kernel_op_x, name='shift_upx'),
+      functools.partial(kernel_op.apply_kernel_op_y, name='shift_upy'),
+      functools.partial(
+          kernel_op.apply_kernel_op_z, name='shift_upz', shift='shift_upzsh'
+      ),
+  )
+  shift_dn_ops = (
+      functools.partial(kernel_op.apply_kernel_op_x, name='shift_dnx'),
+      functools.partial(kernel_op.apply_kernel_op_y, name='shift_dny'),
+      functools.partial(
+          kernel_op.apply_kernel_op_z, name='shift_dnz', shift='shift_dnzsh'
+      ),
+  )
   filter_ops = (
       functools.partial(kernel_op.apply_kernel_op_x, name='kddx'),
       functools.partial(kernel_op.apply_kernel_op_y, name='kddy'),
       functools.partial(
-          kernel_op.apply_kernel_op_z, name='kddz', shift='kddzsh'),
+          kernel_op.apply_kernel_op_z, name='kddz', shift='kddzsh'
+      ),
   )
 
   g = tf.nest.map_structure(tf.identity, f)
-  if stencil == 7:
-    for op in filter_ops:
+  for dim in range(3):
+    if params.use_stretched_grid[dim]:
+      # Approximate coefficients of the tophat filter with the Simpson's rule.
+      # The tophat filter of a variable `f` is represented as [1]:
+      # \bar{f} = 1 / (x_{i + 1} - x_{i - 1}) \int_{x_{i - 1}}^{x_{i + 1}} f dx.
+      # Integrating it with the Simpson's rule results in [2]:
+      # \bar{f} = 1 / 6[(2 - h_{i + 1/2} / h_{i - 1/2}) f_{i - 1} +
+      #     (h_{i + 1/2} + h_{i - 1/2})^2 / (h_{i + 1/2} h_{i - 1/2}) +
+      #     (2 - h_{i - 1/2} / h_{i + 1/2}) f_{i + 1}].
+      # Reference:
+      # 1. Lund, T. S. (1997). On the use of discrete filters for large eddy
+      # simulation. Annual Research Briefs.
+      # 2. Shklov, N. (1960). Simpson’s Rule for Unequally Spaced Ordinates.
+      # The American Mathematical Monthly: The Official Journal of the
+      # Mathematical Association of America, 67(10), 1022–1023.
+      h_0 = additional_states[stretched_grid_util.h_key(dim)]
+      h_1 = shift_dn_ops[dim](h_0)
+      w_0 = tf.nest.map_structure(
+          lambda h_0, h_1: (
+              0.5 * (h_0 - h_1) - (h_0 - h_1) ** 2 / (6.0 * h_0) + h_1 / 3.0
+          )
+          / (h_0 + h_1),
+          h_0,
+          h_1,
+      )
+      w_1 = tf.nest.map_structure(
+          lambda h_0, h_1: 2.0 / 3.0 + (h_0 - h_1) ** 2 / (6.0 * h_0 * h_1),
+          h_0,
+          h_1,
+      )
+      w_2 = tf.nest.map_structure(
+          lambda h_0, h_1: (
+              -0.5 * (h_0 - h_1) - (h_0 - h_1) ** 2 / (6.0 * h_1) + h_0 / 3.0
+          )
+          / (h_0 + h_1),
+          h_0,
+          h_1,
+      )
+      g = common_ops.map_structure_3d(
+          lambda a, b, c, x, y, z: a * x + b * y + c * z,
+          w_0,
+          w_1,
+          w_2,
+          shift_up_ops[dim](g),
+          g,
+          shift_dn_ops[dim](g),
+      )
+    elif stencil == 7:
       g = tf.nest.map_structure(
-          lambda g_i, d2_f_i: g_i + 1.0 / 12.0 * d2_f_i, g, op(f))
-  elif stencil == 27:
-    for op in filter_ops:
+          lambda g_i, d2_f_i: g_i + 1.0 / 12.0 * d2_f_i, g, filter_ops[dim](f)
+      )
+    elif stencil == 27:
       g = tf.nest.map_structure(
-          lambda g_i, d2_g_i: g_i + 0.25 * d2_g_i, g, op(g))
-  else:
-    raise ValueError('Stencil width {} is not supported. Allowed stencil '
-                     'widths are 7 and 27.'.format(stencil))
+          lambda g_i, d2_g_i: g_i + 0.25 * d2_g_i, g, filter_ops[dim](g)
+      )
+    else:
+      raise ValueError(
+          'Stencil width {} is not supported. Allowed stencil '
+          'widths are 7 and 27.'.format(stencil)
+      )
 
   # Handle the 3D tensor case.
   if isinstance(f, tf.Tensor):

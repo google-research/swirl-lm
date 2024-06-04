@@ -844,22 +844,34 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
         thermo_states['q_c'],
     )
 
-    def _add_and_clip(q_p, aut_and_acc, evap_subl):
-      # Clip the humidity source to be not less than -(1 - k) * q / dt so that
-      # q stays >= 0.
+    def _add_and_clip(q_p, q_t, aut_and_acc, evap_subl):
+      # Clip the humidity source such that
       #
-      # In case q ends up being negative for some other reason, we also clip the
-      # input q to be >= 0. Otherwise, the clipping on the humidity source will
-      # introduce an artificial positive source for negative q values
-      # potentially masking other problems.
+      #   q_p + dt * src >= k * q_p and
+      #   q_t - dt * src >= k * q_t
+      #
+      # Solving these inequalities for src, we get:
+      #
+      #   -(1 - k) * q_p / dt <= src <= (1 - k) * q_t / dt
+      #
+      # In case q_p or q_t ends up being negative for some other reason, we also
+      # clip the input q_p/q_t to be >= 0. Otherwise, the clipping on the
+      # humidity source will introduce an artificial positive source for
+      # negative values potentially masking other problems.
       if include_autoconversion_and_accretion:
         source = aut_and_acc - evap_subl
       else:
         source = -evap_subl
       k = self._one_moment_params.humidity_source_term_limiter_k
-      return tf.maximum(source, (-(1 - k) * tf.maximum(q_p, 0.0) / self._dt))
+      return tf.clip_by_value(
+          source,
+          (-(1 - k) * tf.maximum(q_p, 0.0) / self._dt),
+          ((1 - k) * tf.maximum(q_t, 0.0) / self._dt),
+      )
 
-    return tf.nest.map_structure(_add_and_clip, q_p, aut_and_acc, evap_subl)
+    return tf.nest.map_structure(_add_and_clip, q_p,
+                                 thermo_states.get('q_t', states['q_t']),
+                                 aut_and_acc, evap_subl)
 
   def humidity_source_fn(
       self,

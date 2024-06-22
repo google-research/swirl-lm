@@ -151,19 +151,25 @@ class Igniter(object):
       return tf.compat.v1.where(
           tf.math.logical_and(
               tf.greater_equal(schedule, t - self._igniter_radius_in_time),
-              tf.less_equal(schedule, t + self._igniter_radius_in_time)),
-          tf.ones_like(schedule), tf.zeros_like(schedule))
+              tf.less_equal(schedule, t + self._igniter_radius_in_time),
+          ),
+          tf.ones_like(schedule),
+          tf.zeros_like(schedule),
+      )
 
-    ignition_kernel = [
-        local_ignition_kernel_fn(schedule) for schedule in ignition_schedule
-    ]
+    ignition_kernel = tf.nest.map_structure(
+        local_ignition_kernel_fn, ignition_schedule
+    )
 
     def trim_time_interval(kernel: tf.Tensor) -> tf.Tensor:
       """Limits ignition only in the time interval specified."""
       return tf.cond(
           tf.math.logical_and(
               tf.greater_equal(t, self._start_time),
-              tf.less_equal(t, self._end_time)), lambda: kernel,
-          lambda: tf.zeros_like(kernel))
+              tf.less_equal(t, self._end_time),
+          ),
+          lambda: kernel,
+          lambda: tf.zeros_like(kernel),
+      )
 
-    return [trim_time_interval(kernel) for kernel in ignition_kernel]
+    return tf.nest.map_structure(trim_time_interval, ignition_kernel)

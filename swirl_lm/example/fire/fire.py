@@ -347,9 +347,13 @@ FirebenchStatesUpdateFn = Callable[
     types.FlowFieldMap]
 
 
-def get_init_rho_f(ground_elevation: tf.Tensor, fuel_bed_height: float,
-                   fuel_density: float, fuel_start_x: float,
-                   dz: float) -> wildfire_utils.InitFn:
+def get_init_rho_f(
+    ground_elevation: tf.Tensor,
+    fuel_bed_height: float,
+    fuel_density: float,
+    fuel_start_x: float,
+    dz: float | tf.Tensor,
+) -> wildfire_utils.InitFn:
   """Returns the initializer function for rho_f."""
 
   # We assume grid coordinates in zz are integer multiples of dz and use +/-0.1
@@ -371,7 +375,9 @@ def get_init_rho_f(ground_elevation: tf.Tensor, fuel_bed_height: float,
   # fuel cell will be in the halo.
 
   quantized_ground_elevation = tf.math.ceil(ground_elevation / dz) * dz - 2 * dz
-  num_full_cells = int(np.floor(fuel_bed_height / dz))
+  num_full_cells = tf.cast(
+      tf.floor(fuel_bed_height / dz), quantized_ground_elevation.dtype
+  )
   # Note that the number of full cells is one more than given by
   # fuel_bed_height because we also put fuel into the boundary cell (i.e.,
   # the cell that intersects with the terrain).
@@ -1172,10 +1178,12 @@ class Fire:
     def init_rho_m(xx, yy, zz, lx, ly, lz, coord):
       """Generates initial moisture `rho_m` field."""
       del xx, yy, lx, ly, lz, coord
+      # In case of stretched grid, we use the first grid spacing as reference
+      # here.
       return tf.compat.v1.where(
           tf.math.logical_and(
               zz <= ground_elevation + self.fire_utils.fuel_bed_height,
-              zz >= ground_elevation - self.config.dz,
+              zz >= ground_elevation - self.config.z[1],
           ),
           self.fire_utils.moisture_density * tf.ones_like(zz),
           tf.zeros_like(zz),
@@ -1347,9 +1355,34 @@ class Fire:
       assert (
           'rho_f' in self.config.additional_state_keys
       ), 'Fuel height is none zero but rho_f is not included in the config.'
-      init_rho_f = get_init_rho_f(
-          ground_elevation, self.fire_utils.fuel_bed_height,
-          self.fire_utils.fuel_density, self.fuel_start_x, self.config.dz)
+
+      # In case of stretched grid, we assign the same fuel density at all node
+      # points below the fuel height.
+      if self.config.use_stretched_grid[2]:
+
+        def init_rho_f(xx, yy, zz, lx, ly, lz, coord):
+          """Generates initial fuel density `rho_f` field."""
+          del yy, lx, ly, lz, coord
+          rho_f = tf.where(
+              tf.math.logical_and(
+                  zz <= ground_elevation + self.fire_utils.fuel_bed_height,
+                  zz >= ground_elevation - self.config.z[1],
+              ),
+              self.fire_utils.fuel_density * tf.ones_like(zz),
+              tf.zeros_like(zz),
+          )
+          return tf.where(
+              tf.greater_equal(xx, self.fuel_start_x), rho_f, tf.zeros_like(xx)
+          )
+
+      else:
+        init_rho_f = get_init_rho_f(
+            ground_elevation,
+            self.fire_utils.fuel_bed_height,
+            self.fire_utils.fuel_density,
+            self.fuel_start_x,
+            self.config.dz,
+        )
       output.update({
           'rho_f':
               self.fire_utils.states_init(coordinates, init_rho_f, 'CONSTANT'),

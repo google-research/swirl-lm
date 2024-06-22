@@ -313,6 +313,14 @@ def _update_additional_states(
   updated_additional_states = additional_states
   params = common_kwargs['params']
 
+  # Clear source terms computed in the previous step.
+  for varname in updated_additional_states:
+    if not varname.startswith('src_'):
+      continue
+    zeros = tf.nest.map_structure(tf.zeros_like,
+                                  updated_additional_states[varname])
+    updated_additional_states[varname] = zeros
+
   # Update BC additional states. Note currently this is only done
   # for the nonreflecting BC and will be  a no-op if there is no nonreflecting
   # BC present.

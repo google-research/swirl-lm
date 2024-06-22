@@ -15,7 +15,7 @@
 """Library for common operations."""
 import enum
 import functools
-from typing import Any, Callable, Dict, Iterable, Literal, Mapping, Sequence, Text, Tuple
+from typing import Any, Callable, Dict, Iterable, Literal, Mapping, Optional, Sequence, Text, Tuple
 
 import numpy as np
 from swirl_lm.utility import types
@@ -1654,6 +1654,106 @@ def cross_replica_gather(x: tf.Tensor, num_replicas: int) -> list[tf.Tensor]:
   return [gathered[i, ...] for i in range(num_replicas)]
 
 
+def gather(x: tf.Tensor, indices: tf.Tensor) -> tf.Tensor:
+  """Retrieves values in `x` located at `indices`.
+
+  Args:
+    x: A 3D `tf.Tensor` from which values are gathered.
+    indices: A 2D `tf.Tensor` with shape (n_pts, 3), with the columns being the
+      indices associated with the first to last dimension of `x`. Note that
+      repeated indices entries are allowed.
+
+  Returns:
+    Values in `x` at locations specified by indices as a vector of length
+    matching the first dimension of `indices`.  If `indices` is empty, return
+    a vector with length 0.
+  """
+  if  tf.shape(indices)[0] == 0:
+    return tf.constant([])
+
+  i, j, k = [
+      tf.cast(tf.one_hot(indices[:, l], depth=tf.shape(x)[l]), dtype=x.dtype)
+      for l in range(3)
+  ]
+
+  return tf.einsum('qi,qj,qk,ijk->q', i, j, k, x)
+
+
+def gather_from_mask(x: tf.Tensor, mask: tf.Tensor) -> tf.Tensor:
+  """Retrieves values in `x` corresponding to locations of 1s in `mask`.
+
+  Args:
+    x: A 3D `tf.Tensor` from which values are gathered.
+    mask: A 3D `tf.Tensor` of ones and zeros, with ones indicating the location
+      where the values are gathered. Note that the shape of `x` and `mask` must
+      be the same.
+
+  Returns:
+    A 1D vector storing values corresponding to locations of ones in `mask`. Its
+    length equals the number of ones in `mask`. Note that the indices of ones
+    in `mask` follows the order of the dimensions from first to last. If no ones
+    are found in `mask`, return a vector with length 0.
+
+  Raises:
+    ValueError If the shapes of `x` and `mask` are different.
+  """
+  return gather(x, tf.where(tf.less(tf.abs(mask - 1.0), 1e-6)))
+
+
+def scatter(
+    x: tf.Tensor, indices: tf.Tensor, shape: tf.Tensor, dtype: tf.DType
+) -> tf.Tensor:
+  """Generates a 3D tensor with values in `x` specified at `indices`.
+
+  Args:
+    x: A 1D `tf.Tensor` to be scattered into a 3D tensor.
+    indices: A 2D `tf.Tensor` with shape (n_pts, 3), with the columns being the
+      indices associated with the dimensions of the output 3D tensor. The first
+      dimension of `x` and `indices` must be the same. Note that repeated
+      entries of indices is allowed, in which case the sum of these values will
+      be scattered.
+    shape: A 1D array of length 3 specifying the shape of the 3D tensor in the
+      output.
+    dtype: The data type of the returned 3D tensor.
+
+  Returns:
+    A 3D tensor with values in `x` scattered to locations specifed by `indices`,
+    with everywhere else being 0. If `indices` is empty, a 3D tensor with all
+    zeros will be returned.
+  """
+  if tf.shape(indices)[0] == 0:
+    return tf.zeros(shape, dtype=dtype)
+
+  i, j, k = [
+      tf.cast(tf.one_hot(indices[:, l], depth=shape[l]), dtype=x.dtype)
+      for l in range(3)
+  ]
+
+  return tf.cast(tf.einsum('q,qi,qj,qk->ijk', x, i, j, k), dtype)
+
+
+def scatter_to_mask(
+    x: tf.Tensor, mask: tf.Tensor, dtype: tf.DType
+) -> tf.Tensor:
+  """Generates a 3D tensor with `x` scattered to locations of 1 in `mask`.
+
+  Args:
+    x: A 1D `tf.Tensor` to be scattered into a 3D tensor. The order of these
+      points must follow the row-major order of the indices of ones in `mask`.
+    mask: A 3D `tf.Tensor` of ones and zeros, with ones indicating the location
+      where the values are scattered.
+    dtype: The data type of the returned 3D tensor.
+
+  Returns:
+    A 3D tensor with values in `x` scattered to locations specifed by ones in
+    `mask`, with everywhere else being 0. If `mask` has all zeros, a 3D tensor
+    with all zeros will be returned.
+  """
+  return scatter(
+      x, tf.where(tf.less(tf.abs(mask - 1.0), 1e-6)), tf.shape(mask), dtype
+  )
+
+
 def pad(
     f: FlowFieldVal,
     paddings: Sequence[Sequence[int]],
@@ -1687,11 +1787,68 @@ def pad(
   return lower_pad + list(padded) + upper_pad
 
 
-def get_face(value: FlowFieldVal,
-             dim: int,
-             face: int,
-             index: int,
-             scaling_factor: float = 1.) -> FlowFieldVal:
+def slice_field(
+    f: FlowFieldVal,
+    dim: int,
+    start_idx: int,
+    size: Optional[int] = None,
+) -> FlowFieldVal:
+  """Slices the input field along the given dimension.
+
+  Args:
+    f: A list of 2D `tf.Tensor` or a single 3D `tf.Tensor` representing a 3D
+      field. If a list of 2D `tf.Tensor`, the length of the list is `nz` and
+      each 2D `tf.Tensor` has the shape [nx, ny]. If a single 3D `tf.Tensor`,
+      its shape is [nz, nx, ny].
+    dim: The dimension of the plane to slice, should be one of 0, 1, and 2.
+    start_idx: The index of the first point in the slice. If negative, it will
+      be counted from the end of the field along `dim`.
+    size: The optional length of the slice along `dim`. If not provided, the
+      slice will run from `start_idx` to the end of the array.
+
+  Returns:
+    A slice having the same format as the input field but a dimension of `size`
+    along `dim`.
+  """
+  shape = list(get_shape(f))
+  start = [0, 0, 0]
+
+  n = int(shape[dim])
+  if start_idx < 0:
+    start_idx = n + start_idx
+
+  if size is None:
+    size = n - start_idx
+
+  start[dim] = start_idx
+  shape[dim] = size
+
+  if isinstance(f, tf.Tensor):
+    # Handles the case of single 3D tensor.
+    shape = tf.roll(shape, shift=1, axis=0)
+    start = tf.roll(start, shift=1, axis=0)
+    return tf.slice(f, start, shape)
+
+  # Handles the case of list of 2D tensors.
+  if dim in (0, 1):
+    return tf.nest.map_structure(
+        lambda x: tf.slice(x, start[:-1], shape[:-1]), f
+    )
+  elif dim == 2:  # Z
+    return f[start_idx : start_idx + size]
+  else:
+    raise ValueError(
+        f'`dim` has to be one of 0, 1, or 2. But {dim} is provided.'
+    )
+
+
+def get_face(
+    value: FlowFieldVal,
+    dim: int,
+    face: int,
+    index: int,
+    scaling_factor: float = 1.0,
+) -> FlowFieldVal:
   """Gets the face in `value` that is `index` number of points from boundary.
 
   This function extracts the requested plane from a 3D tensor.
@@ -1725,58 +1882,18 @@ def get_face(value: FlowFieldVal,
     the length - index'th plane is returned. The returned slice will be
     multiplied by `scaling_factor`.
   """
-  if isinstance(value, tf.Tensor):
-    # Handles the case of single 3D tensor.
-    shifted_dim = (dim + 1) % 3
-    shape = value.get_shape().as_list()
-    n = shape[shifted_dim]
-    start_idx = [0, 0, 0]
-
-    if face == 0:  # low
-      start_idx[shifted_dim] = index
-    elif face == 1:  # high
-      start_idx[shifted_dim] = n - index - 1
-
-    shape[shifted_dim] = 1
-    return [scaling_factor * tf.slice(value, start_idx, shape)]
-
-  # Handles the case of list of 2D tensors.
-  nz = len(value)
-  if dim in (0, 1):
-    shape = value[0].get_shape().as_list()
-    n = shape[dim]
-    start_idx = [0, 0]
-    if face == 0:
-      start_idx[dim] = index
-    elif face == 1:
-      start_idx[dim] = n - index - 1
-    else:
-      raise ValueError(
-          f'`face` has to be either 0 or 1. But {face} is provided.'
-      )
-    shape[dim] = 1
-    bc_value = [
-        tf.nest.map_structure(
-            lambda x: scaling_factor * tf.slice(x, start_idx, shape), value
-        )
-    ]
-  elif dim == 2:  # Z
-    if face == 0:  # low
-      bc_value = [
-          scaling_factor * value[index],
-      ]
-    elif face == 1:  # high
-      bc_value = [
-          scaling_factor * value[nz - index - 1],
-      ]
-    else:
-      raise ValueError(
-          f'`face` has to be either 0 or 1. But {face} is provided.'
-      )
-  else:
+  if face not in (0, 1):
     raise ValueError(
-        f'`dim` has to be one of 0, 1, or 2. But {dim} is provided.'
+        f'`face` has to be one of 0 or 1. But {face} is provided.'
     )
+  index = index if face == 0 else -index - 1
+  bc_value = [
+      tf.nest.map_structure(
+          lambda x: scaling_factor * x, slice_field(value, dim, index, size=1)
+      )
+  ]
+  if isinstance(value, Sequence) and dim == 2:
+    bc_value = bc_value[0]
 
   return bc_value  # pytype: disable=bad-return-type
 

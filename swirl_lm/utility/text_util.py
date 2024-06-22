@@ -50,7 +50,8 @@ def seconds_to_string(total_seconds: float, separator: str = ' ',
   """
   # Handle negative durations.
   if total_seconds < 0:
-    return '-' + seconds_to_string(-total_seconds, separator)
+    positive_str = seconds_to_string(-total_seconds, separator, precision, zero)
+    return '-' + positive_str if positive_str != zero else zero
 
   # Convert durations to integer nanoseconds to avoid floating errors.
   # (2^63 nanoseconds is approximately 300 years).

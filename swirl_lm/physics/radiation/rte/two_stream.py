@@ -36,6 +36,7 @@ from swirl_lm.physics.radiation.optics import atmospheric_state
 from swirl_lm.physics.radiation.optics import optics
 from swirl_lm.physics.radiation.rte import monochromatic_two_stream
 import swirl_lm.physics.radiation.rte.rte_utils as utils
+from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import types
@@ -171,7 +172,7 @@ class TwoStreamSolver:
       # Create a plane for the surface temperature representation.
       sfc_temperature = tf.nest.map_structure(
           lambda x: sfc_temperature * tf.ones_like(x),
-          self._rte_utils.slice(pressure, self._g_dim, 0, 0)
+          common_ops.slice_field(pressure, self._g_dim, 0, size=1)
       )
 
     def step_fn(igpt, cumulative_flux):
@@ -208,11 +209,11 @@ class TwoStreamSolver:
           )
       )
       # Boundary conditions.
-      sfc_src = planck_srcs.get('planck_src_sfc', self._rte_utils.slice(
+      sfc_src = planck_srcs.get('planck_src_sfc', common_ops.slice_field(
           planck_srcs['planck_src_bottom'],
           self._g_dim,
-          face=0,
-          idx=self._halos,
+          self._halos,
+          size=1
       ))
       top_flux_down = tf.nest.map_structure(
           lambda x: self._top_flux_down_lw * tf.ones_like(x), sfc_src
@@ -329,8 +330,8 @@ class TwoStreamSolver:
       )
       sfc_albedo = tf.nest.map_structure(
           lambda x: self._sfc_albedo * tf.ones_like(x),
-          self._rte_utils.slice(
-              sw_optical_props['optical_depth'], self._g_dim, 0, 0
+          common_ops.slice_field(
+              sw_optical_props['optical_depth'], self._g_dim, 0, size=1
           ),
       )
       # Monochromatic top of atmosphere flux.

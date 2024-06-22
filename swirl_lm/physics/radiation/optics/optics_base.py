@@ -175,31 +175,6 @@ class OpticsScheme(metaclass=abc.ABCMeta):
   def solar_fraction_by_gpt(self) -> Sequence[float]:
     """Mapping from g-point to the fraction of total solar radiation."""
 
-  def _slice_field(
-      self,
-      f: FlowFieldVal,
-      dim: int,
-      face: int,
-      idx: int,
-  ) -> FlowFieldVal:
-    """Slices a plane from `f` normal to `dim`."""
-    face_slice = common_ops.get_face(f, dim, face, idx)
-    if isinstance(f, tf.Tensor) or dim != 2:
-      # Remove the outer list.
-      return face_slice[0]
-    return face_slice
-
-  def _field_shape(
-      self,
-      f: FlowFieldVal,
-  ) -> FlowFieldVal:
-    """Returns the x, y, and z dimensions of the field `f`."""
-    if isinstance(f, tf.Tensor):
-      input_shape = f.get_shape().as_list()
-      return input_shape[1:] + input_shape[:1]
-    else:
-      return f[0].get_shape().as_list() + [len(f)]
-
   def _exchange_halos(
       self,
       replica_id: tf.Tensor,
@@ -207,10 +182,17 @@ class OpticsScheme(metaclass=abc.ABCMeta):
       f: FlowFieldVal,
   ) -> FlowFieldVal:
     """Exchanges halos, preserving the boundary values along the vertical."""
-    boundary_vals = [
-        [self._slice_field(f, self._g_dim, face, i) for i in range(self._halos)]
-        for face in range(2)
-    ]
+    boundary_vals = []
+    # Lower boundary values.
+    boundary_vals.append([
+        common_ops.slice_field(f, self._g_dim, i, size=1)
+        for i in range(self._halos)
+    ])
+    # Top boundary values.
+    boundary_vals.append([
+        common_ops.slice_field(f, self._g_dim, -i - 1, size=1)
+        for i in range(self._halos)
+    ])
     # Reverse the order of the top boundary values to restore ascending order.
     boundary_vals[1].reverse()
 
@@ -268,10 +250,10 @@ class OpticsScheme(metaclass=abc.ABCMeta):
     # Shift down to obtain the top cell face values and pad the top outermost
     # halo layer with a copy of the adjacent inner layer.
     f_top = self._shift_down_fn(f_bottom)
-    outermost_valid_top_layer = self._slice_field(
-        f_top, self._g_dim, face=1, idx=1
+    outermost_valid_top_layer = common_ops.slice_field(
+        f_top, self._g_dim, -2, size=1
     )
-    shape = self._field_shape(f_top)
+    shape = common_ops.get_shape(f_top)
     # Update the last halo layer along the vertical.
     f_top = common_ops.tensor_scatter_1d_update(
         f_top,

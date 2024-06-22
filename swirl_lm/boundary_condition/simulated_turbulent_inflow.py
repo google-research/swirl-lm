@@ -104,8 +104,7 @@ class SimulatedTurbulentInflow():
 
     if self._model_params.WhichOneof('operation') == 'generation':
       # Get the index of the plane to extract the inflow data.
-      mesh_size = (self._params.dx, self._params.dy,
-                   self._params.dz)[self._inflow_dim]
+      mesh_size = self._params.grid_spacings[self._inflow_dim]
       mesh_count = (self._params.nx, self._params.ny,
                     self._params.nz)[self._inflow_dim]
       idx = int(self._model_params.generation.location // mesh_size)

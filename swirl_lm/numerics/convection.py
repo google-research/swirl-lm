@@ -267,9 +267,7 @@ def face_interpolation(
   # wall, and the flux to be computed is a wall normal velocity component.
   if varname is not None and varname in (common.KEYS_VELOCITY[dim],
                                          common.KEYS_MOMENTUM[dim]):
-    nz = len(state)
-    nx, ny = state[0].get_shape().as_list()
-    n_grid = (nx, ny, nz)[dim]
+    n_grid = common_ops.get_shape(state)[dim]
     n_core = replicas.shape[dim]
 
     for face in range(2):

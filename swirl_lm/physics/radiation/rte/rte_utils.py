@@ -63,20 +63,6 @@ class RTEUtils:
     self.grid_size = (params.nx, params.ny, params.nz)
     self.halos = params.halo_width
 
-  def slice(
-      self,
-      f: types.FlowFieldVal,
-      dim: int,
-      idx: int,
-      face: int,
-  ) -> FlowFieldVal:
-    """Slices a plane from `f` normal to `dim`."""
-    face_slice = common_ops.get_face(f, dim, face, idx)
-    if isinstance(f, tf.Tensor) or dim != 2:
-      # Remove the outer list.
-      return face_slice[0]
-    return face_slice
-
   def _append(
       self,
       a: FlowFieldVal,
@@ -204,17 +190,19 @@ class RTEUtils:
     """
     x = variables['x0']
 
-    face = 0 if forward else 1
-
     for i in range(n):
       prev_idx = i - 1
+      slice_idx = i if forward else -i - 1
       plane_args = {
-          k: self.slice(v, dim, i, face)
+          k: common_ops.slice_field(v, dim, slice_idx, size=1)
           for k, v in variables.items()
           if k != 'x0'
       }
+      prev_slice_idx = prev_idx if forward else -prev_idx - 1
       plane_args['x0'] = (
-          x if i == 0 else self.slice(x, dim, prev_idx, face)
+          x
+          if i == 0
+          else common_ops.slice_field(x, dim, prev_slice_idx, size=1)
       )
       arg_lst = [
           plane_args[k] for k in inspect.getfullargspec(recurrent_fn).args
@@ -222,7 +210,8 @@ class RTEUtils:
       next_layer = tf.nest.map_structure(recurrent_fn, *arg_lst)
       x = next_layer if i == 0 else self._append(x, next_layer, dim, forward)
 
-    last_local_layer = self.slice(x, dim, n - 1, face)
+    last_layer = -1 if forward else 0
+    last_local_layer = common_ops.slice_field(x, dim, last_layer, size=1)
 
     return x, last_local_layer
 

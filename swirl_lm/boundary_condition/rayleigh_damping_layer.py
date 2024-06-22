@@ -84,29 +84,6 @@ def get_sponge_target_name(varname: Text) -> Text:
   return 'sponge_target_{}'.format(varname)
 
 
-def target_value_lib_from_proto(
-    sponges: _RayleighDampingLayerSeq) -> TargetValueLib:
-  """Generates a target value library from the proto.
-
-  Args:
-    sponges: A sequence of materialized sponge layer protos.
-
-  Returns:
-    A dictionary with keys being the variable names, and values being the target
-    value in the sponge layer.
-  """
-  lib = {}
-  for sponge in sponges:
-    for info in sponge.variable_info:
-      if info.HasField('target_value'):
-        lib.update({info.name: info.target_value})
-      elif info.HasField('target_state_name'):
-        lib.update({info.name: info.target_state_name})
-      else:
-        lib.update({info.name: None})
-  return lib
-
-
 def variable_type_lib_from_proto(sponges: _RayleighDampingLayerSeq) -> BoolMap:
   """Generates a library for the type of the variable from the proto.
 
@@ -122,25 +99,6 @@ def variable_type_lib_from_proto(sponges: _RayleighDampingLayerSeq) -> BoolMap:
   for sponge in sponges:
     for info in sponge.variable_info:
       out[info.name] = info.primitive
-  return out
-
-
-def target_status_lib_from_proto(sponges: _RayleighDampingLayerSeq) -> BoolMap:
-  """Generates a sponge forcing status library from the proto.
-
-  Args:
-    sponges: A sequence of materialized sponge layer protos.
-
-  Returns:
-    A dictionary with keys being the name of the forcing term, and values being
-    the target behavior of the forcing term. `False` if there are other forcing
-    terms need to be combined with the sponge force, and `True` if the sponge
-    force is the only forcing term for that variable.
-  """
-  out = {}
-  for sponge in sponges:
-    for info in sponge.variable_info:
-      out[get_sponge_force_name(info.name)] = info.override
   return out
 
 
@@ -304,8 +262,6 @@ class RayleighDampingLayer(object):
       periodic_dims: An optional list of booleans indicating the periodic
         dimensions.
     """
-    self._target_values = target_value_lib_from_proto(sponge_infos)
-    self._target_status = target_status_lib_from_proto(sponge_infos)
     self._is_primitive = variable_type_lib_from_proto(sponge_infos)
     self._beta_name_by_var = beta_name_by_var(sponge_infos)
     self._sponge_info_map = sponge_info_map(sponge_infos)
@@ -318,7 +274,7 @@ class RayleighDampingLayer(object):
 
     logging.info(
         'Sponge layer will be applied for the following variables with '
-        'following values: %r', self._target_values)
+        'following values: %s', self._sponge_info_map)
 
   def _get_sponge_force(
       self,
@@ -414,14 +370,10 @@ class RayleighDampingLayer(object):
   ) -> FlowFieldMap:
     """Updates the forcing term due to the sponge layer.
 
-    The forcing term will replace or add to the existing forcing term in
+    The forcing term will be added to the existing forcing term in
     `additional_states` for variables that are in the scope of
-    `self._target_values`, following the indicator stated in
-    `self._target_status`: if `False`, the sponge force will be added to the
-    input force with the same name; if `True`, the sponge force will override
-    the existing one. If other forcing terms needs to be applied to a same
-    variable, the values of all these forcing terms needs to be updated ahead of
-    the sponge forces.
+    `self._sponge_info_map` following the specification of target values stored
+    in the values of this dictionary.
 
     Args:
       kernel_op: An object holding a library of kernel operations.
@@ -482,10 +434,7 @@ class RayleighDampingLayer(object):
         sponge_force = tf.nest.map_structure(
             tf.math.multiply, states['rho'], sponge_force
         )
-      if self._target_status[sponge_name]:
-        additional_states_updated.update({sponge_name: sponge_force})
-      else:
-        additional_states_updated.update(
-            {sponge_name: add_to_additional_states(sponge_name, sponge_force)})
+      additional_states_updated.update(
+          {sponge_name: add_to_additional_states(sponge_name, sponge_force)})
 
     return additional_states_updated

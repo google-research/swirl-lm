@@ -63,11 +63,6 @@ message RayleighDampingLayer {
       // The name of the state to be used as a sponge target.
       string target_state_name = 5;
     }
-    // An indicator of whether this is the only forcing term of this variable:
-    // 'true' if it's the only force and need to replace previous values;
-    // 'false' if it's not the only force and need to be added after other
-    // forces are updated
-    optional bool override = 3;
     // An indicator of whether the sponge force is applied to a primitive
     // variable or a conservative one. If 'true', the force term is generated
     // for the primitive variable; otherwise the force term is for a

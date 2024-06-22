@@ -547,8 +547,8 @@ class MonochromaticTwoStreamSolver:
     )
 
     # Direct-beam flux incident on the surface.
-    flux_down_sfc = self.rte_utils.slice(
-        flux_down_direct, self.g_dim, self.halos, 0
+    flux_down_sfc = common_ops.slice_field(
+        flux_down_direct, self.g_dim, self.halos, size=1
     )
     core_idx = common_ops.get_core_coordinate(replicas, replica_id)[self.g_dim]
 

@@ -23,6 +23,7 @@ from swirl_lm.base import initializer
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.boundary_condition import immersed_boundary_method_pb2
 from swirl_lm.communication import halo_exchange
+from swirl_lm.numerics import root_finder
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import types
@@ -34,6 +35,10 @@ InterpFnType = Callable[[FlowFieldVal], FlowFieldVal]
 InitFn = initializer.ValueFunction
 ThreeIntTuple = initializer.ThreeIntTuple
 
+_PI = np.pi
+# Set number of ghost point layers beneath the IB
+# Value must be >= 1
+_NUM_GP_LAYERS = 1
 
 def _apply_3d_kernel(
     f: FlowFieldVal,
@@ -94,11 +99,14 @@ def ib_info_map(
     return flatten_ib_info(ib_info.direct_forcing_1d_interp.variables)
   elif ib_type == 'feedback_force_1d_interp':
     return flatten_ib_info(ib_info.feedback_force_1d_interp.variables)
+  elif ib_type == 'ghost_point_method':
+    return flatten_ib_info(ib_info.ghost_point_method.variables)
   else:
     raise NotImplementedError(
         f'{ib_type} is not a valid IB type. Available options are:'
         ' "cartesian_grid", "mac", "sponge", "direct_forcing", '
-        '"direct_forcing_1d_interp", "feedback_force_1d_interp".'
+        '"direct_forcing_1d_interp", "feedback_force_1d_interp", '
+        '"ghost_point_method".'
     )
 
 
@@ -316,6 +324,622 @@ def interp_1d_coeff_init_fn(
 
   return init_fn
 
+def norm_surf_dist_fn(
+    surface: tf.Tensor,
+    dim: int,
+    n_cores: initializer.ThreeIntTuple,
+) -> InitFn:
+  """Generates an `init_fn` for a tensor that computes the normalized
+     distance of a `surface` to surrounding grid nodes along `dim`. The
+     distance is normalized to the grid spacing along `dim`.
+
+  Args:
+    surface: A 2D tensor that defines a surface that cuts through `dim` as a
+      function of the 2 coordinates perpendicular to `dim`. The size of it must
+      equal to the size of the coordinates perpendicular to `dim` with halos
+      excluded.
+    dim: The dimension along which `surface` is interpolated onto.
+    n_cores: The number of cores along the 3 dimensions.
+
+  Returns:
+    An `init_fn` that initializes normalized distances.
+  """
+  n_total = tf.shape(surface)
+  kept_dims = [0, 1, 2]
+  del kept_dims[dim]
+  n_non_dim_cores = tf.gather(n_cores, kept_dims)
+
+  # This implicitly checks that the length of `n_total` and `n_non_dim_cores`
+  # are both 2, and expclicitly checks the divisibility. Note this assertion
+  # works since this part is executed outside the TPU/not in the replica
+  # context.
+  tf.debugging.Assert(
+      tf.math.reduce_all(tf.math.equal(
+          tf.math.floormod(n_total, n_non_dim_cores), [0, 0])),
+      [n_total, n_non_dim_cores], summarize=2)
+
+  core_n = tf.math.floordiv(n_total, n_non_dim_cores)
+
+  def init_fn(
+      xx: tf.Tensor,
+      yy: tf.Tensor,
+      zz: tf.Tensor,
+      lx: float,
+      ly: float,
+      lz: float,
+      coord: initializer.ThreeIntTuple,
+  ) -> tf.Tensor:
+    """Computes the interpolation coefficients for surface."""
+    del lx, ly, lz
+
+    mesh_size_non_dim = tf.gather(tf.shape(xx), kept_dims)
+
+    # Check if dimension of `surface` matches the mesh. Since assertion ops are
+    # ignored on TPUs, we explicitly place the assertion ops on CPU using
+    # outside_compilation() (by default this section will be on TPU since this
+    # is executed under the replica context.
+    def _check_mesh_size(a, b):
+      op = tf.debugging.Assert(
+          tf.math.reduce_all(tf.math.equal(a, b)),
+          [a, b],
+          summarize=2)
+      with tf.control_dependencies([op]):
+        return a, b
+
+    local_core_n, mesh_size_non_dim = tf.compat.v1.tpu.outside_compilation(
+        _check_mesh_size, *(core_n, mesh_size_non_dim)
+    )
+    # Get part of the surface that is local to the current core.
+    coord = tf.gather(coord, kept_dims)
+    surface_local = tf.expand_dims(
+        tf.slice(surface, local_core_n * coord, local_core_n), dim)
+
+    # Compute the grid spacing `delta` along `dim`. We then compute the
+    # normalized distance of each grid node from `surface_local` by
+    # normalizing the absolute distance by the grid spacing.
+    # Note: This computes the normalized distance along one of the major
+    # coordinate axes (`dim`), which may NOT be NORMAL to
+    # `surface_local`.
+    grid = (xx, yy, zz)[dim]
+    delta = tf.experimental.numpy.diff(grid, axis=dim)
+    paddings_hi = [[0, 0], [0, 0], [0, 0]]
+    paddings_hi[dim] = [1, 0]
+
+    return tf.abs(
+        (surface_local - grid) / tf.pad(delta, paddings_hi, 'SYMMETRIC')
+    )
+
+  return init_fn
+
+def norm_surf_dist_fn(
+    surface: tf.Tensor,
+    dim: int,
+    n_cores: initializer.ThreeIntTuple,
+) -> InitFn:
+  """Generates an `init_fn` for a tensor that computes the normalized
+     distance of a `surface` to surrounding grid nodes along `dim`.
+
+  Args:
+    surface: A 2D tensor that defines a surface that cuts through `dim` as a
+      function of the 2 coordinates perpendicular to `dim`. The size of it must
+      equal to the size of the coordinates perpendicular to `dim` with halos
+      excluded.
+    dim: The dimension along which `surface` is interpolated onto.
+    n_cores: The number of cores along the 3 dimensions.
+
+  Returns:
+    An `init_fn` that initializes normalized distances.
+  """
+  n_total = tf.shape(surface)
+  kept_dims = [0, 1, 2]
+  del kept_dims[dim]
+  n_non_dim_cores = tf.gather(n_cores, kept_dims)
+
+  # This implicitly checks that the length of `n_total` and `n_non_dim_cores`
+  # are both 2, and expclicitly checks the divisibility. Note this assertion
+  # works since this part is executed outside the TPU/not in the replica
+  # context.
+  tf.debugging.Assert(
+      tf.math.reduce_all(tf.math.equal(
+          tf.math.floormod(n_total, n_non_dim_cores), [0, 0])),
+      [n_total, n_non_dim_cores], summarize=2)
+
+  core_n = tf.math.floordiv(n_total, n_non_dim_cores)
+
+  def init_fn(
+      xx: tf.Tensor,
+      yy: tf.Tensor,
+      zz: tf.Tensor,
+      lx: float,
+      ly: float,
+      lz: float,
+      coord: initializer.ThreeIntTuple,
+  ) -> tf.Tensor:
+    """Computes the interpolation coefficients for surface."""
+    del lx, ly, lz
+
+    mesh_size_non_dim = tf.gather(tf.shape(xx), kept_dims)
+
+    # Check if dimension of `surface` matches the mesh. Since assertion ops are
+    # ignored on TPUs, we explicitly place the assertion ops on CPU using
+    # outside_compilation() (by default this section will be on TPU since this
+    # is executed under the replica context.
+    def _check_mesh_size(a, b):
+      op = tf.debugging.Assert(
+          tf.math.reduce_all(tf.math.equal(a, b)),
+          [a, b],
+          summarize=2)
+      with tf.control_dependencies([op]):
+        return a, b
+
+    local_core_n, mesh_size_non_dim = tf.compat.v1.tpu.outside_compilation(
+        _check_mesh_size, *(core_n, mesh_size_non_dim)
+    )
+    # Get part of the surface that is local to the current core.
+    coord = tf.gather(coord, kept_dims)
+    surface_local = tf.expand_dims(
+        tf.slice(surface, local_core_n * coord, local_core_n), dim)
+
+    # Compute the interpolation weights. Because the point where the surface
+    # cuts through the axis along `dim` has to fall between a mesh grid,
+    # denoted by an interval [lo, hi] with a distance delta between lo and hi
+    # being the grid spacing, the interpolation coefficient at each grid point
+    # needs to be computed twice based on its 2 neighboring intervals. We
+    # combine the 2 tensors after eliminating values on nodes that are not
+    # adjacent to the surface to form the valid interpolation tensor.
+    # In the case where the immersed boundary falls on a node, both tensors will
+    # have a value 1 at that node. Here we consider the one computed with the
+    # lower limit of the interval only.
+    grid = (xx, yy, zz)[dim]
+    delta = tf.experimental.numpy.diff(grid, axis=dim)
+    paddings_lo = [[0, 0], [0, 0], [0, 0]]
+    paddings_lo[dim] = [0, 1]
+    surface_to_lo_coeff = tf.abs(
+        (surface_local - grid) / tf.pad(delta, paddings_lo, 'SYMMETRIC')
+    )
+    paddings_hi = [[0, 0], [0, 0], [0, 0]]
+    paddings_hi[dim] = [1, 0]
+    surface_to_hi_coeff = tf.abs(
+        (surface_local - grid) / tf.pad(delta, paddings_hi, 'SYMMETRIC')
+    )
+
+    return surface_to_hi_coeff
+
+  return init_fn
+
+def get_ib_profile(xx, yy, profile):
+  """Generate a fluid/solid interface function"""
+  if profile=='sine':
+    res = 0.2 + 0.1 * tf.math.sin(2. * np.pi * xx)
+  elif profile=='ramp':
+    res = 0.2 + xx * tf.math.tan(3. * np.pi / 180.)
+  elif profile == 'witch_of_agnesi':
+    h_p = 100.0 # peak height in meters
+    a = 100.0 # half-width in meters
+    offset = 297.5
+    res = h_p / (1.0 + ((xx - offset) / a) ** 2.0)
+  elif profile=='witch_of_agnesi_2d':
+    h_p = 350.0
+    a = 800.0
+    b = 800.0
+    offset = 3000.0
+    z0_offset = 0.
+    res = h_p / (1.0 + ((xx - offset) / a) ** 2.0 + 
+        ((yy - offset) / b) ** 2.0) + z0_offset
+
+  return res
+
+
+def compute_normal_projection(
+    pointx: tf.Tensor,
+    pointy: tf.Tensor,
+    pointz: tf.Tensor,
+    surface_type: Text):
+  """Computes the normal projection of a given point onto the immersed boundary
+     surface by solving a minimization problem using the Newton method.
+     Having a point and its projection is useful to compute the surface normal
+     that intersects with the point. Note that we currently support analytical
+     surfaces only!
+
+  Args:
+    pointx: A tensor containing the x-coordinates of the points for which we
+      seek the normal projection onto the immersed boundary surface. 
+    pointy: A tensor containing the y-coordinates of the points for which we
+      seek the normal projection onto the immersed boundary surface. 
+    pointz: A tensor containing the z-coordinates of the points for which we
+      seek the normal projection onto the immersed boundary surface.
+    surface_type: A string defining the type of the immersed boundary surface. 
+
+  Return:
+    The normal projection of each point onto the immersed boundary surface.
+  """
+
+  def objective_fn(coords):
+    """Defines a function for which we seek zero-function values with the Newton
+       method. Since we search the minimum distance between a point and the
+       immersed boundary surface, the minimum distance may NOT be zero.
+       However, the Newton method can only be used to find f(x) = 0.
+       Thus, to use the Newton method for a MINIMIZATION problem, we
+       need to find the zero-point of the GRADIENT of the squared distance,
+       which corresponds to the point with the MINIMUM distance to the immersed
+       boundary surface.
+       The resulting distance vector will be orthogonal to the immersed boundary
+       surface, which we use to compute the surface normals later.
+
+    Args:
+      coords: A 2D tensor containing the coordinates of each point for which we
+      seek the minimum distance to the immersed boundary surface. Note that the
+      column order is x-y-z.
+
+    Returns:
+      A gradient function in 3D space corresponding to the gradient of the
+      minimum squared distance between a point and the immersed boundary
+      surface. 
+    """
+
+    x, y, z = coords[:,0], coords[:,1], coords[:,2]
+
+    if surface_type=='sine':
+      d_dx = -2 * x0 + tf.math.cos(2 * _PI * x) * (
+          -2 * _PI * 0.2 * z0 + 2 * _PI * 0.1 * 0.2 * tf.math.sin(2 * _PI * x) +
+          2 * (2 * _PI * 0.1 * 0.2)) + 2 * x
+      d_dy = tf.zeros_like(y)
+      d_dz = tf.zeros_like(z)
+    elif surface_type=='ramp':
+      d_dx = 2 * (
+          -x0 + tf.math.tan(3. * np.pi / 180.) * (z0 + 0.2 + 
+          x * tf.math.tan(3. * np.pi / 180.)) + x)
+      d_dy = tf.zeros_like(y)
+      d_dz = tf.zeros_like(z)
+    elif surface_type=='witch_of_agnesi':
+      h_p = 100.0
+      a = 100.0
+      offset = 297.5
+      d_dx = (-4 * offset * z0 * h_p / (
+          a**2 * (((x - offset)**2) / a**2 + 1)**2) +
+          4 * z0 * h_p * x / (a**2 * (((x - offset)**2) / a**2 + 1)**2) +
+          4 * offset * (h_p**2) / (a**2 * (((x - offset)**2) / a**2 + 1)**3) -
+          4 * (h_p**2) * x / (a**2 * (((x - offset)**2) / a**2 + 1)**3) -
+          2 * x0 + 2 * x 
+      )
+      d_dy = tf.zeros_like(y)
+      d_dz = tf.zeros_like(z)
+    elif surface_type=='witch_of_agnesi_2d':
+      h_p = 350.0
+      a = 800.0
+      b = 800.0
+      # Offset peak such that it is located in x>0, y>0.
+      # Note that the physical domain origin is at (0,0,0), thus without
+      # any offset, the peak would be at (0,0,0) as well.
+      offset = 3000.0
+      # Offset in vertical dimension to ensure that the IB never coincides with
+      # the physical domain boundary at z = 0 m.
+      z1 = 0.0
+      d_dx = ((4 * a**2 * b**4 * h_p * (offset - x) * (
+          a**2 * (b**2 * (z1 - z0 + h_p) + (z1 - z0) * 
+          (-2 * offset * y + offset**2 + y**2)) +
+          b**2 * (z1 - z0) * (-2 * offset * x + offset**2 + x**2)))) / (
+          a**2 * (b**2 - 2 * offset * y + offset**2 + y**2) +
+          b**2 * (-2 * offset * x + offset**2 + x**2)
+          )**3 - 2 * x0 + 2 * x 
+      d_dy = 2 * (y - y0) - (4 * h_p * (y - offset) * (
+          h_p / (1 + ((x - offset) / a)**2 + ((y - offset) / b)**2) + z1 - z0)
+          ) / (b**2 * (1 + ((x - offset) / a)**2 + ((y - offset) / b)**2)**2) 
+      d_dz = tf.zeros_like(z)
+
+    return tf.stack([d_dx, d_dy, d_dz], axis=-1)
+
+  # We use the coordinates of each point as an initial guess to find its
+  # projection onto the immersed boundary surface.
+  x0 = tf.identity(pointx)
+  y0 = tf.identity(pointy)
+  z0 = tf.identity(pointz)
+  initial_guess = tf.stack([x0, y0, z0], axis=-1)
+
+  return root_finder.newton_method(
+    objective_fn,
+    initial_guess,
+    100,
+    value_tolerance=1e-6,
+    position_tolerance=1e-6,
+  )
+
+
+def init_ib_helper_states( # init_interp_weights(
+  params: parameters_lib.SwirlLMParameters,
+  replica_id: tf.Tensor,
+  ib_norm_dist: FlowFieldVal,
+  ib_interior_mask: FlowFieldVal,
+  ib_profile: Text) -> FlowFieldMap:
+
+  # Compute a mask that flags all ghost nodes with 1, and all other nodes as 0.
+  # Ghost nodes are nodes beneath the immersed boundary surface, and one may
+  # choose to have multiple ``layers'' of ghost nodes at which forcing will be
+  # applied. Although a single ghost point layer is more common in the
+  # literature, 2 layers have been employed in Auguste et al., Geosci. Model
+  # Dev. 12(6), 2019, https://gmd.copernicus.org/articles/12/2607/2019/
+  logging.info(f'Using {_NUM_GP_LAYERS} ghost point layer(s)')
+  gp_mask = tf.where(
+      ib_norm_dist <= _NUM_GP_LAYERS, 
+      1.0 - ib_interior_mask, 
+      tf.zeros_like(ib_interior_mask))
+  #gp_mask = tf.nest.map_structure(
+  #              lambda w, m: tf.math.ceil(w) * (1.0 - m),
+  #              ib_boundary,
+  #              ib_interior_mask,
+  #)
+
+  # Since we cannot use clear_halos with dynamic types, we "replace" that 
+  # operation by stripping the halos first, and zero-padding the stripped 
+  # tensor after. We do this operation to clear the ghost-points in the halo
+  # layers; if we had ghost points in the halo layers, their corresponding image
+  # points could be located OUTSIDE the halo layers (for an arbitrary immersed
+  # boundary), and thus the image point values would be undefined.
+  gp_mask = common_ops.strip_halos(
+      gp_mask,
+      [params.halo_width, ] * 3)
+  gp_mask = tf.pad(gp_mask, [[2, 2]] * 3, mode='CONSTANT')
+
+  # Compute the (i, j, k)-indices of each ghost point. Cast to int32 since
+  # tf.where returns an int64 by default.
+  # Note: Since gp_mask is in z-x-y order, ijk_gp will also be in z-x-y
+  # column order! 
+  ijk_gp = tf.cast(tf.where(gp_mask==1.), dtype=tf.int32)
+
+  # Get local coordinates of a core WITH halo cells, since image points may be
+  # located outside of the physical domain, but still inside the halo layers.
+  x, y, z = [
+      params.grid_local_with_coord(replica_id, dim, True)
+      for dim in range(3)
+  ]
+
+  # Get the x, y, z-coordinates of each ghost point. Note the column order of
+  # ijk_gp in z-x-y!
+  x_gp = tf.gather(x, ijk_gp[:,1])
+  y_gp = tf.gather(y, ijk_gp[:,2])
+  z_gp = tf.gather(z, ijk_gp[:,0])
+
+  # Step 1: Compute normal projection of ghost point onto the IB surface
+  pt_proj = tf.cast(
+      compute_normal_projection(x_gp, y_gp, z_gp, ib_profile), dtype=tf.float32)
+  x_proj = tf.cast(pt_proj[:,0], dtype=tf.float32)
+  y_proj = tf.cast(pt_proj[:,1], dtype=tf.float32)
+  z_proj = tf.cast(
+      get_ib_profile(x_proj, y_proj, profile=ib_profile),
+      dtype=tf.float32)
+
+  # Compute components of distance vector between ghost point
+  # and the point that is projected onto the surface.
+  x_dist = x_gp - x_proj
+  y_dist = y_gp - y_proj
+  z_dist = z_gp - z_proj
+
+  # Compute the euclidean distance between a ghost point and
+  # the point projected onto the surface.
+  dist = tf.math.sqrt(x_dist ** 2 + y_dist ** 2 + z_dist ** 2)
+  
+  # Compute the surface normal vector that intersects with a given
+  # ghost point. The surface normal vector is positive if pointing
+  # into the fluid domain.  
+  n_x = x_dist / dist
+  n_y = y_dist / dist
+  n_z = z_dist / dist
+  
+  
+  # Step 3: Get the coordinate of the image points
+  def get_image_pt(
+    x: tf.Tensor,
+    d: tf.Tensor,
+    n: tf.Tensor,
+    m: float = 2.0,
+    offset: float = 0.0) -> tf.Tensor:
+    """Computes the location of an image point for a given coordinate. The
+       image point is constructed from a given ghost point, the surface normal
+       that intersects with this ghost point, and a distance multiplier `m`. By
+       default, we set m=2, which means that the distance between the image
+       point and the surface is exactly the same as the distance between the
+       ghost point and the surface (since we define the distance `d` relative
+       to the ghost node). This ensures that the interpolation scheme is
+       well-behaved in the limit of a vanishing distance between the ghost point
+       and the surface (see discussion in Ghias et al., JCP 225(1), 2007,
+       https://linkinghub.elsevier.com/retrieve/pii/S0021999106006048
+       specifically p. 538).
+       For m>2, the image point will be located farther in the fluid
+       domain. One may choose this option to ensure that all enclosing nodes of
+       each image point lay in the fluid domain, avoiding degenerated cells
+       (see e.g., Auguste et al., Geosci. Model Dev. 12(6), 2019,
+       https://gmd.copernicus.org/articles/12/2607/2019/
+       specifically Fig. 2c).
+
+    Args:
+      x: A tensor containing one coordinate of a ghost point.
+      d: The distance between the ghost point and the immersed boundary surface
+      n: A component of the normal vector that corresponds to the same cardinal
+           axis as the input tensor `x`.
+      m: A distance multiplier defining how far we project an image point into
+           the fluid domain along the surface normal direction.
+      offset: An optional offset value to set all image points to a fixed
+           distance from the immersed boundary surface regardless of the
+           distance between the ghost point and the immersed boundary surface.
+
+    Returns:
+      The coordinate of the image point (in one dimension). 
+    """
+    return x - m * (d + offset) * n
+
+  # Compute the diagonal distance of the computational grid cell.
+  # Assumes uniform grid spacing!
+  # @TODO: For now, we will set the distance between each image point and the
+  #   IB to be the same as the distance between the ghost point and the IB,
+  #   i.e., h = 0.0. If we wish to have a constant offset from the IB for ALL
+  #   image points, we could set `h` to the cell diagonal AND SIMULTANEOUSLY
+  #   adjust the boundary conditions for ghost point values!
+  h = 0.0 # tf.math.sqrt(params.dx**2 + params.dy**2 + params.dz**2)
+  
+  x_ip = get_image_pt(x_gp, dist, n_x, m=2., offset=h)
+  y_ip = get_image_pt(y_gp, dist, n_y, m=2., offset=h)
+  z_ip = get_image_pt(z_gp, dist, n_z, m=2., offset=h)
+  
+  # Step 4: Get p,q,s indices of the lower left node of the cell
+  #         enclosing the image point
+  # + params.halo_width * params.dx
+  # + params.halo_width * params.dy
+  # + params.halo_width * params.dz
+  p = tf.cast(
+      (x_ip) // params.dx,
+      dtype=tf.int32)
+  q = tf.cast(
+      (y_ip) // params.dy,
+      dtype=tf.int32)
+  s = tf.cast(
+      (z_ip) // params.dz,
+      dtype=tf.int32)
+
+  p = tf.clip_by_value(
+      p,
+      clip_value_min=params.halo_width,
+      clip_value_max=params.nx - params.halo_width)
+  q = tf.clip_by_value(
+      q,
+      clip_value_min=params.halo_width,
+      clip_value_max=params.ny - params.halo_width)
+  s = tf.clip_by_value(
+      s,
+      clip_value_min=params.halo_width,
+      clip_value_max=params.nz - params.halo_width)
+
+
+  def get_interp_weights(
+    xyz_ip: tf.Tensor,
+    lower_left_index: tf.Tensor, 
+    x: tf.Tensor,
+    y: tf.Tensor,
+    z: tf.Tensor) -> tf.Tensor:
+    """Computes the interpolation weights of the enclosing grid nodes around
+       each image point. We only consider grid nodes as valid nodes for
+       interpolation, if they are in the fluid domain. These nodes will be
+       flagged as 1 with the `fluid_corner_point_mask`, all other nodes will be
+       flagged as 0, so they will be omitted when interpolating a given
+       quantity (defined at the grid nodes) onto the image point.
+
+    Args:
+      xyz_ip: x-y-z coordinates of each image point
+      lower_left_index: Index of the lower left node of the grid cell enclosing
+        a given image point
+      x: x-coordinate of each grid node local to the core
+      y: y-coordinate of each grid node local to the core
+      z: z-coordinate of each grid node local to the core
+
+    Returns:
+      The interpolation weight of each grid node of a given grid cell enclosing
+      a given image point. Additionally, a non-zero interpolation weight of the
+      body intercept is included for degenerated cells, which is otherwise zero
+      if all grid nodes of the enclosing cell lay in the fluid domain. 
+    """
+    node_dist = []
+    fluid_corner_point_mask = []
+
+    for i, j, k in itertools.product(range(2), range(2), range(2)):
+      p_x = tf.gather(x, lower_left_index[0] + i, name='gather_p_x')
+      p_y = tf.gather(y, lower_left_index[1] + j, name='gather_p_y')
+      p_z = tf.gather(z, lower_left_index[2] + k, name='gather_p_z')
+
+      node_dist.append(
+          tf.math.sqrt(
+              (xyz_ip[0] - p_x) ** 2 +
+              (xyz_ip[1] - p_y) ** 2 +
+              (xyz_ip[2] - p_z) ** 2))
+
+      # Flag corner points with 1 which are in the fluid domain, and
+      # set all corner points to zero in the solid domain
+      fluid_corner_point_mask.append(
+          common_ops.gather(ib_interior_mask,
+              tf.stack([lower_left_index[2] + k,
+                        lower_left_index[0] + i, 
+                        lower_left_index[1] + j], axis=1))
+      )
+
+
+    # ------------ 
+    # Approach 2: Weighting by maximum distance
+    # ------------
+    # Flag all image points that have less than 8 enclosing grid nodes
+    # in the FLUID domain. If all enclosing grid nodes for a given image point
+    # are inside the fluid domain, the sum of `fluid_corner_point_mask` will be
+    # exactly 8 (since there are 8 enclosing nodes in 3D space for an image
+    # point). However, if one or more grid nodes are inside the solid domain,
+    # the corresponding sum of `fluid_corner_point_mask` will be less than 8,
+    # which indicates that we have a degenerated cell. Note that
+    # `fluid_corner_point_mask` already flags every node with `1` if inside the
+    # fluid domain, and `0` if inside the solid domain.
+    # Source: Iaccarino and Verzicco, Applied Mechanics Reviews 56(3), 2003.
+    degenerated_cell_mask = tf.nest.map_structure(
+        lambda v: tf.where(v < 7.5, tf.ones_like(v), tf.zeros_like(v)),
+        tf.math.reduce_max(fluid_corner_point_mask, axis=0))
+
+    # Add the boundary interecpt (BI) as an additional point, if the enclosing
+    # cell of a given image point is degenerated (i.e. has less than 8
+    # enclosing nodes in the fluid domain).
+    # Essentially, we are adding the distance between the ghost point(!) and
+    # the IB to `node_dist` which will now have 9 rows (8 distances between the
+    # image point and its surrounding grid nodes, and 1 additional row for the
+    # distance between the image point and the IB). However, the 9th row will
+    # only have non-zero distances, if the enclosing grid cell is degenerated,
+    # otherwise, the distance will be zero. As we will always use all 9 rows of
+    # `node_dist` to compute the interpolated value on the image point, we want
+    # to make sure that the BI is excluded for an eclosing cell that has all 8
+    # grid nodes in the fluid domain, and included otherwise.
+    node_dist.append(
+        tf.math.multiply(dist, degenerated_cell_mask))
+
+    # Get the maximum distance between the image point and its enclosing 
+    # grid nodes. We only consider grid nodes in the fluid domain, and
+    # discard nodes in the solid domain.
+    node_dist_max = tf.math.reduce_max(node_dist, axis=0)
+
+    # Next, we compute the corresponding interpolation weight of each enclosing
+    # grid node as follows:
+    # w_i = ((node_dist_max_i - node_dist_i) / (node_dist_max_i * node_dist_i))**0.5
+    # where w_i is the interpolation weight of the i-th enclosing grid node
+    # for a given image point.
+    # Reference: R. Franke, Scattered data interpolation: tests of some
+    # methods, Mathematics of Computation 38(157), 1982,
+    # https://www.ams.org/mcom/1982-38-157/S0025-5718-1982-0637296-4/
+    # And:
+    # Cai et al., JCP 429, 2021, specifically Eq. 35, p. 9
+
+    return tf.nest.map_structure(
+        lambda w: tf.math.divide_no_nan(
+          node_dist_max - w, node_dist_max * w)**0.5,
+        node_dist,
+    )
+
+  w = tf.convert_to_tensor(
+      get_interp_weights([x_ip, y_ip, z_ip], [p, q, s], x, y, z),
+      dtype=tf.float32)
+
+  output = {}
+  output.update({
+      'ijk_gp': ijk_gp,
+      'gp_mask': gp_mask,
+      'dist': tf.convert_to_tensor(dist, dtype=tf.float32),
+      'x_gp': tf.convert_to_tensor(x_gp, dtype=tf.float32), 
+      'y_gp': tf.convert_to_tensor(y_gp, dtype=tf.float32),
+      'z_gp': tf.convert_to_tensor(z_gp, dtype=tf.float32),
+      'x_ip': tf.convert_to_tensor(x_ip, dtype=tf.float32),
+      'y_ip': tf.convert_to_tensor(y_ip, dtype=tf.float32),
+      'z_ip': tf.convert_to_tensor(z_ip, dtype=tf.float32),
+      'x_proj': tf.convert_to_tensor(x_proj, dtype=tf.float32),
+      'z_proj': tf.convert_to_tensor(z_proj, dtype=tf.float32),
+      'weights': w,
+      'summed_weights': tf.convert_to_tensor(
+          tf.math.reduce_sum(w, axis=0), dtype=tf.float32),
+      'p': p,
+      'q': q,
+      's': s,
+  })
+
+  return output
 
 def get_fluid_solid_interface_value_z(
     replicas: np.ndarray,
@@ -391,6 +1015,7 @@ class ImmersedBoundaryMethod(object):
         'direct_forcing',
         'feedback_force_1d_interp',
         'direct_forcing_1d_interp',
+        'ghost_point_method',
     ):
       return states
     else:
@@ -410,6 +1035,7 @@ class ImmersedBoundaryMethod(object):
         'mac',
         'direct_forcing',
         'direct_forcing_1d_interp',
+        'ghost_point_method',
     ):
       return additional_states
     elif self.type == 'sponge':
@@ -446,6 +1072,10 @@ class ImmersedBoundaryMethod(object):
     elif self.type == 'direct_forcing_1d_interp':
       return self._apply_direct_forcing_1d_interp(
           kernel_op, states, additional_states
+      )
+    elif self.type == 'ghost_point_method':
+      return self._apply_ghost_point_method(
+          states, additional_states
       )
     else:
       raise ValueError(f'{self.type} is not a valid IB type.')
@@ -1124,6 +1754,264 @@ class ImmersedBoundaryMethod(object):
       )
 
     return ib_force
+
+  def _ib_gp_force_fn(
+      self,
+      interp_weights: FlowFieldVal,
+      summed_weights: FlowFieldVal,
+      ib_interior_mask: FlowFieldVal,
+      ijk_gp: tf.Tensor,
+      idx_p: tf.Tensor,
+      idx_q: tf.Tensor,
+      idx_s: tf.Tensor,
+      dist: tf.Tensor,
+  ) -> Callable[[FlowFieldVal, float, float, float], FlowFieldVal]:
+    """Generates a function that computes the IB force at the ghost points. The
+       required force is computed from interpolated fluid quantities at the
+       corresponding image points. Since we reconstruct the flow in wall-normal
+       direction, we obtain a smooth representation of the IB surface, and the
+       resulting near-wall flow.
+
+       We assume that the distance between the ghost point and the IB surface
+       is equal to the distance between the image point and the IB surface!
+
+    Args:
+      interp_weights: For each image point, we have a total of 8 interpolation
+        weights corresponding to the grid nodes of the enclosing cell, and an
+        additional non-zero interpolation weight of the body intercept if the
+        enclosing cell is degenerated (i.e., has less than 8 grid nodes in the
+        fluid domain).
+      summed_weights: The denominator of the interpolation function.
+      ib_interior_mask: A 3D tensor that holds a binary mask where fluid is 1
+        and solid is 0.
+      ijk_gp: The indices of the ghost points. Note that the mode is z-x-y!
+      idx_p: The indices of the x-coordinate of the lower left grid nodes of 
+        each grid cell enclosing each image point.
+      idx_q: The indices of the y-coordinate of the lower left grid nodes of 
+        each grid cell enclosing each image point.
+      idx_s: The indices of the z-coordinate of the lower left grid nodes of 
+        each grid cell enclosing each image point.
+      dist: The wall-normal distance between the ghost point and the IB
+        surface (which is equal to the distance between the IB surface and the
+        image point).
+
+    Returns:
+      A function that takes a flow field variable, its target value on the IB,
+      a damping coefficient that scales the forcing term as input, and a sign
+      (-1 for Dirichlet boundary conditions, +1 for Neumann boundary 
+      conditions), and returns the force term due to the IB.
+    """
+    def get_ib_force(
+        u: FlowFieldVal,
+        bi_value: float,
+        beta: float,
+        sign: float,
+    ) -> FlowFieldVal:
+      """Computes the IB force for a generic flow variable `u`."""
+
+      def get_corner_points(val: FlowFieldVal, lower_left_index: tf.Tensor):
+        """A function that gathers the values of the flow variable `u` at the
+           8 grid nodes enclosing each image point.
+
+          Args:
+            val: A flow field variable.
+            lower_left_index: The indices of the lower left grid node of the
+              grid cell enclosing a given image point. We assume the index
+              mode to be in x-y-z ordering, i.e., `lower_left_index[0]` would
+              correspond to the indices of the x-coordinate of each lower left
+              grid node, `lower_left_index[1]` to the indices of the
+              y-coordinate, and `lower_left_index[2]` to the z-coordinate.
+
+          Returns:
+            The flow field values at the corner points enclosing the image
+              points.
+
+          Raises:
+            NotImplementedError if Neumann boundary condition is set which is
+              currently not yet supported.
+        """
+
+        res = []
+        for i, j, k in itertools.product(range(2), range(2), range(2)):
+          p = lower_left_index[0] + i
+          q = lower_left_index[1] + j
+          s = lower_left_index[2] + k
+
+          # Make sure val is a tf.Tensor as `common_ops.gather` is not
+          # compatible with lists.
+          if not isinstance(val, tf.Tensor):
+            val = tf.convert_to_tensor(val, dtype=tf.float32)
+
+          #@NOTE: val is in z-x-y -> s-p-q!
+          res.append(common_ops.gather(
+              val,
+              tf.stack([s, p, q], axis=1)))
+
+        return res
+
+      # Gather the flow field values of `u` at the grid nodes enclosing each
+      # image point.
+      val_pt = get_corner_points(u, [idx_p, idx_q, idx_s])
+
+      # Adding additional value of the target quantity at the body intercept.
+      if sign == -1:
+        # DIRICHLET BC
+        val_pt.append(tf.math.multiply(tf.ones_like(dist), bi_value))
+      else:
+        # NEUMANN BC
+        raise NotImplementedError('Only Dirichlet boundary conditions '
+            'supported.')
+
+      val_pt = tf.convert_to_tensor(val_pt, dtype=tf.float32)
+
+      # Multiply each grid node of the enclosing cell with its corresponding
+      # interpolation weight.      
+      weighted_vals = tf.nest.map_structure(
+          tf.math.multiply,
+          interp_weights,
+          val_pt)
+
+      ##############
+      # Approach 1 (pure inverse distance weighting)
+      ##############
+      # Compute the interpolated flow field value at the image point
+      # interped_val = tf.math.reduce_sum(weighted_vals, axis=0)
+
+      ##############
+      # Approach 2 (weighting by maximum distance)
+      ##############
+      # Compute the interpolated flow field value at the image point
+      interped_val = tf.math.divide_no_nan(
+          tf.math.reduce_sum(weighted_vals, axis=0),
+          summed_weights,
+      )
+
+      # Compute the ghost point value depending on the desired boundary
+      # condition
+      if sign == -1:
+        # ===================================
+        # DIRICHLET BOUNDARY CONDITION ONLY!
+        # ===================================
+        gp_val = tf.nest.map_structure(
+            lambda _u: sign * _u + 2 * bi_value,
+            interped_val
+        )
+      else:
+        # ===================================
+        # NEUMANN BOUNDARY CONDITION
+        # ===================================
+        raise NotImplementedError('Only Dirichlet boundary conditions '
+            'supported.')
+
+      # Since the ghost point values are stored in a 1D-vector, we need to
+      # scatter these values to the corresponding grid node in the 3D grid,
+      # i.e., generate a 3D tensor.
+      # gp_tensor will only have non-zero values at ghost point indices
+      # (ijk_gp), all other points will be zero.
+      gp_tensor = common_ops.scatter(gp_val,
+          ijk_gp,
+          shape=[self._params.core_nz + 2 * self._params.halo_width,
+                 self._params.core_nx + 2 * self._params.halo_width,
+                 self._params.core_ny + 2 * self._params.halo_width],
+          dtype=tf.float32)
+
+      return tf.nest.map_structure(
+          lambda _u, _u_F: -beta * (_u - _u_F),
+          u,
+          gp_tensor)
+
+    return get_ib_force
+
+  def _apply_ghost_point_method(
+      self,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
+  ) -> FlowFieldMap:
+    """Computes the force due to IB to be applied at the ghost points.
+
+    Args:
+      states: Field variables to which the immersed boundary method are applied.
+      additional_states: Helper states that are required to compute the new
+        right hand side function. Must contain 'ib_interp_weights', which stores
+        the interpolation weights above and below the immersed boundary.
+
+    Returns:
+      A dictionary of force terms with names `src_\w+` for variables that
+      requires the IB closure.
+    """
+    ib_force_fn = self._ib_gp_force_fn(
+        additional_states['ib_interp_weights'],
+        additional_states['summed_weights'],
+        additional_states['ib_interior_mask'],
+        additional_states['ijk_gp'],
+        additional_states['idx_p'],
+        additional_states['idx_q'],
+        additional_states['idx_s'],
+        additional_states['dist'],
+    )
+
+    def update_rhs(
+        value: FlowFieldVal,
+        bi_value: float,
+        rhs: FlowFieldVal,
+        damping_coeff: float,
+        sign: float,
+    ) -> FlowFieldVal:
+      """Updates the right hand side function with direct forcing using the
+         ghost point method."""
+      beta = 1.0 / (damping_coeff * self._params.dt)
+      ib_force = ib_force_fn(value, bi_value, beta, sign)
+
+      return tf.nest.map_structure(
+          lambda m, r, f: (1.0 - m) * r + m * f,
+          additional_states['gp_mask'],
+          rhs,
+          ib_force,
+      )
+
+    var_dict = {
+        variable.name: variable
+        for variable in self._ib_params.ghost_point_method.variables
+    }
+
+    rhs_updated = {}
+
+    for key, value in states.items():
+      rhs_name = self.ib_rhs_name(key)
+      assert rhs_name in additional_states, (
+          f'RHS for {key} is required by the ghost point IB method, but is not'
+          ' provided.'
+      )
+
+      if key not in var_dict:
+        # Use a warning here instead failing the function because we always
+        # go through the IB step for all variables, but applying IB doesn't
+        # have to be applied to all of them.
+        logging.warn(
+            'States information for %s is not provided in the IB. Available '
+            'states are: %r. Right hand side for %s is not updated and IB not '
+            'applied.', key, var_dict.keys(), key)
+        rhs_updated[rhs_name] = additional_states[rhs_name]
+      else:
+        damping_coeff = var_dict[key].damping_coeff if var_dict[key].HasField(
+            'damping_coeff') else (self._ib_params.ghost_point_method
+              .damping_coeff)
+
+        sign = (-1.0 if var_dict[key].bc
+                == immersed_boundary_method_pb2
+                .IBVariableInfo.DIRICHLET else 1.0)
+
+        rhs_updated.update({
+            rhs_name: update_rhs(
+                value,
+                var_dict[key].value,
+                additional_states[rhs_name],
+                damping_coeff,
+                sign,
+            )
+        })
+
+    return rhs_updated
 
 
 def immersed_boundary_method_factory(

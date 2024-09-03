@@ -1574,8 +1574,8 @@ def strip_halos(
   # Handles the case of single 3D tensor.
   if isinstance(f, tf.Tensor):
     nz, nx, ny = f.get_shape().as_list()
-    return f[halos[2]:nz - halos[2], halos[0]:nx - halos[0],
-             halos[1]:ny - halos[1]]
+    return f[halos[2]: - halos[2], halos[0]: - halos[0],
+             halos[1]: - halos[1]]
 
   # Handles the case of a list of 2D tensor.
   nx = f[0].get_shape().as_list()[0]
@@ -1668,8 +1668,8 @@ def gather(x: tf.Tensor, indices: tf.Tensor) -> tf.Tensor:
     matching the first dimension of `indices`.  If `indices` is empty, return
     a vector with length 0.
   """
-  if  tf.shape(indices)[0] == 0:
-    return tf.constant([])
+  # if  tf.shape(indices)[0] == 0: # <-- Unsupported!
+  #   return tf.constant([])
 
   i, j, k = [
       tf.cast(tf.one_hot(indices[:, l], depth=tf.shape(x)[l]), dtype=x.dtype)
@@ -1721,8 +1721,8 @@ def scatter(
     with everywhere else being 0. If `indices` is empty, a 3D tensor with all
     zeros will be returned.
   """
-  if tf.shape(indices)[0] == 0:
-    return tf.zeros(shape, dtype=dtype)
+  # if tf.shape(indices)[0] == 0: # <-- Unsupported!
+  #   return tf.zeros(shape, dtype=dtype)
 
   i, j, k = [
       tf.cast(tf.one_hot(indices[:, l], depth=shape[l]), dtype=x.dtype)

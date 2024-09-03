@@ -78,7 +78,9 @@ class TerrainType(enum.Enum):
   WEDGE = 3
   # Read the terrain map from a file.
   FILE = 4
-
+  SINE = 5
+  WITCHOFAGNESI = 6 
+  WITCHOFAGNESI2D = 7 
 
 # Flags for the terrain initialization.
 _TERRAIN_FILEPATH = flags.DEFINE_string(
@@ -452,6 +454,7 @@ class Fire:
       self.h_0 = _FLAT_SURFACE_INITIAL_HEIGHT.value
       self.slope = FLAGS.flat_surface_slope
       x = tf.linspace(0.0, self.config.lx, self.config.fx)
+      y = tf.linspace(0.0, self.config.ly, self.config.fy)
 
       if _TERRAIN_TYPE.value == TerrainType.RAMP:
         profile = self.h_0 + tf.clip_by_value(
@@ -459,14 +462,30 @@ class Fire:
             clip_value_min=0.0,
             clip_value_max=_FLAT_SURFACE_RAMP_LENGTH.value,
         ) * tf.tan(self.slope * np.pi / 180.0)
+        self.terrain_name = 'ramp'
       elif _TERRAIN_TYPE.value == TerrainType.BUMP:
         forward = self.h_0 + x * tf.tan(tf.abs(self.slope) * np.pi / 180.0)
         backward = forward[::-1]
         profile = tf.where(x <= 0.5 * self.config.lx, forward, backward)
+        self.terrain_name = 'bump'
       elif _TERRAIN_TYPE.value == TerrainType.WEDGE:
         profile = self.h_0 + tf.math.maximum(
             (x - 0.5 * self.config.lx) * tf.tan(self.slope * np.pi / 180.0), 0.0
         )
+        self.terrain_name = 'wedge'
+      elif _TERRAIN_TYPE.value == TerrainType.SINE:
+        profile = immersed_boundary_method.get_ib_profile(
+            x, None, profile='sine')
+        self.terrain_name = 'sine'
+      elif _TERRAIN_TYPE.value == TerrainType.WITCHOFAGNESI:
+        profile = immersed_boundary_method.get_ib_profile(
+            x, None, profile='witch_of_agnesi')
+        self.terrain_name = 'witch_of_agnesi'
+      elif _TERRAIN_TYPE.value == TerrainType.WITCHOFAGNESI2D:
+        x_grid, y_grid = tf.meshgrid(x, y)
+        profile = immersed_boundary_method.get_ib_profile(
+            x_grid, y_grid, profile='witch_of_agnesi_2d')
+        self.terrain_name = 'witch_of_agnesi_2d'
       else:
         profile = tf.zeros_like(x)
 
@@ -476,9 +495,16 @@ class Fire:
           clip_value_min=0.0,
       )
 
-      elevation = tf.transpose(
-          tf.maximum(tf.tile(profile[tf.newaxis, :], [self.config.fy, 1]), 0.0)
-      )
+      if _TERRAIN_TYPE.value == TerrainType.WITCHOFAGNESI2D:
+        # Terrain is a function of the x and y axis
+        elevation = tf.transpose(tf.maximum(profile, 0.0))
+      else:
+        # Terrain is a sole function of the x, and CONSTANT along the y axis! 
+        elevation = tf.transpose(
+            tf.maximum(
+                tf.tile(profile[tf.newaxis, :], [self.config.fy, 1]),
+                0.0)
+        )
 
     # Add obstacles if requested.
     if INCLUDE_OBSTACLES.value:
@@ -1319,7 +1345,8 @@ class Fire:
               (self.config.cx, self.config.cy, self.config.cz),
           )
           if self.ib.type
-          in ('direct_forcing_1d_interp', 'feedback_force_1d_interp')
+          in ('direct_forcing_1d_interp', 'feedback_force_1d_interp',
+              'ghost_point_method')
           else self.map_utils.ib_boundary_mask_fn(coordinates)
       )
       output.update(
@@ -1339,6 +1366,47 @@ class Fire:
                 )
             }
         )
+
+        ib_norm_surf_dist_fn = (
+            immersed_boundary_method.norm_surf_dist_fn(  # pylint: disable=g-long-ternary
+                self.map_utils.elevation_map,
+                self.config.g_dim,
+                (self.config.cx, self.config.cy, self.config.cz),
+            )
+        )
+        output.update(
+            {
+                'ib_norm_dist': self.fire_utils.states_init(
+                    coordinates, ib_norm_surf_dist_fn
+                ),
+            }
+        )
+
+      # Init helper states for ghost point method
+      if 'ib_interp_weights' in self.config.helper_var_keys:
+        ib_init = immersed_boundary_method.init_ib_helper_states(
+            self.config,
+            coordinates,
+            output['ib_norm_dist'],
+            output['ib_interior_mask'],
+            self.terrain_name)
+
+        output.update({
+            'gp_mask': ib_init['gp_mask'],
+            'dist': ib_init['dist'],
+            'ijk_gp': ib_init['ijk_gp'],
+            'x_gp': ib_init['x_gp'],
+            'y_gp': ib_init['y_gp'],
+            'z_gp': ib_init['z_gp'],
+            'x_ip': ib_init['x_ip'],
+            'y_ip': ib_init['y_ip'],
+            'z_ip': ib_init['z_ip'],
+            'ib_interp_weights': ib_init['weights'],
+            'summed_weights': ib_init['summed_weights'],
+            'idx_p': ib_init['p'],
+            'idx_q': ib_init['q'],
+            'idx_s': ib_init['s'],
+        })
 
       # Update the initial velocity so that it is 0 inside the solid.
       output.update(

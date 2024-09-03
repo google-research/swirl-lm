@@ -1,0 +1,218 @@
+# proto-file: third_party/py/swirl_lm/base/parameters.proto
+# proto-message: SwirlLMParameters
+solver_procedure: VARIABLE_DENSITY
+convection_scheme: CONVECTION_SCHEME_QUICK
+diffusion_scheme: DIFFUSION_SCHEME_CENTRAL_3
+time_integration_scheme: TIME_SCHEME_CN_EXPLICIT_ITERATION
+enable_rhie_chow_correction: true
+num_sub_iterations: 3
+use_3d_tf_tensor: true
+simulation_time_info {
+  from_config {
+    num_cycles: 1
+    num_steps: 100
+  }
+}
+pre_post_process_info {
+  from_config {
+    apply_preprocess: true
+    preprocess_periodic: false
+    apply_postprocess: false
+    postprocess_periodic: false
+    preprocess_step_id: 0
+    postprocess_step_id: 1
+  }
+}
+use_sgs: false
+sgs_model {
+  smagorinsky {
+    c_s: 0.18
+    pr_t: 1.0
+  }
+}
+periodic {
+  dim_0: true dim_1: true dim_2: false
+}
+gravity_direction {
+  dim_0: 0.0 dim_1: 0.0 dim_2: -1.0
+}
+pressure {
+  solver {
+    jacobi {
+      max_iterations: 100 halo_width: 2 omega: 0.67
+    }
+  }
+  num_d_rho_filter: 3
+  pressure_outlet: true
+}
+thermodynamics {
+  constant_density {}
+  # ideal_gas_law {
+  #   const_theta: 283.0
+  # }
+}
+density: 1.0
+p_thermal: 1.01325e5
+kinematic_viscosity: 20.0
+scalars {
+  name: "T"
+  diffusivity: 1.0e-2
+  reference_value: 283.0
+}
+scalars {
+  name: "Y_O"
+  diffusivity: 1.0e-2
+  density: 1.0
+  molecular_weight: 0.029
+}
+scalars {
+  name: "ambient"
+  diffusivity: 1.0e-2
+  density: 1.0
+  molecular_weight: 0.029
+  solve_scalar: false
+}
+boundary_models {
+  ib {
+    ghost_point_method {
+      #damping_coeff: 10.0
+      variables { name: "rho_u" value: 0.0 bc: DIRICHLET override: false }
+      variables { name: "rho_v" value: 0.0 bc: DIRICHLET override: false }
+      variables { name: "rho_w" value: 0.0 bc: DIRICHLET override: false }
+      variables { name: "rho_T" value: 283.0 bc: DIRICHLET override: false }
+      variables { name: "rho_Y_O" value: 0.21 bc: DIRICHLET override: false }
+    }
+  }
+  # sponge {
+  #   orientation {dim: 0 face: 1 fraction: 0.05 }
+  #   orientation {dim: 2 face: 1 fraction: 0.05 }
+  #   variable_info {
+  #     name: "u" target_state_name: "u_log" override: true
+  #   }
+  #   variable_info {
+  #     name: "v" target_value: 0.0 override: true
+  #   }
+  #   variable_info {
+  #     name: "w" target_value: 0.0 override: true
+  #   }
+  #   variable_info {
+  #     name: "theta" target_value: 283.0 override: false
+  #   }
+  #   variable_info {
+  #     name: "Y_O" target_value: 0.21 override: false
+  #   }
+  # }
+}
+# additional_state_keys: "sponge_beta"
+# additional_state_keys: "u_log"
+# additional_state_keys: "zz"
+additional_state_keys: "ib_interior_mask"
+additional_state_keys: "ib_boundary"
+# additional_state_keys: "bc_u_0_0"
+
+additional_state_keys: "gp_mask"
+additional_state_keys: "ib_norm_dist"
+helper_var_keys: "ib_interp_weights"
+helper_var_keys: "summed_weights"
+helper_var_keys: "idx_p"
+helper_var_keys: "idx_q"
+helper_var_keys: "idx_s"
+helper_var_keys: "dist"
+helper_var_keys: "ijk_gp"
+helper_var_keys: "x_ip"
+helper_var_keys: "y_ip"
+helper_var_keys: "z_ip"
+helper_var_keys: "x_gp"
+helper_var_keys: "y_gp"
+helper_var_keys: "z_gp"
+
+boundary_conditions {
+  name: "u"
+  boundary_info {
+    dim: 0 location: 0 type: BC_TYPE_DIRICHLET value: 10.0
+  }
+  boundary_info {
+    dim: 0 location: 1 type: BC_TYPE_NEUMANN value: 0.0
+  }
+  boundary_info {
+    dim: 2 location: 0 type: BC_TYPE_NEUMANN value: 0.0
+  }
+  boundary_info {
+    dim: 2 location: 1 type: BC_TYPE_NEUMANN value: 0.0
+  }
+}
+boundary_conditions {
+  name: "v"
+  boundary_info {
+    dim: 0 location: 0 type: BC_TYPE_DIRICHLET value: 0.0
+  }
+  boundary_info {
+    dim: 0 location: 1 type: BC_TYPE_NEUMANN value: 0.0
+  }
+  boundary_info {
+    dim: 2 location: 0 type: BC_TYPE_NEUMANN value: 0.0
+  }
+  boundary_info {
+    dim: 2 location: 1 type: BC_TYPE_NEUMANN value: 0.0
+  }
+}
+boundary_conditions {
+  name: "w"
+  boundary_info {
+    dim: 0 location: 0 type: BC_TYPE_DIRICHLET value: 0.0
+  }
+  boundary_info {
+    dim: 0 location: 1 type: BC_TYPE_NEUMANN value: 0.0
+  }
+  boundary_info {
+    dim: 2 location: 0 type: BC_TYPE_NEUMANN value: 0.0
+  }
+  boundary_info {
+    dim: 2 location: 1 type: BC_TYPE_DIRICHLET value: 0.0
+  }
+}
+boundary_conditions {
+  name: "p"
+  boundary_info {
+    dim: 0 location: 0 type: BC_TYPE_NEUMANN value: 0.0
+  }
+  boundary_info {
+    dim: 0 location: 1 type: BC_TYPE_NEUMANN value: 0.0
+  }
+  boundary_info {
+    dim: 2 location: 0 type: BC_TYPE_NEUMANN value: 0.0
+  }
+  boundary_info {
+    dim: 2 location: 1 type: BC_TYPE_NEUMANN value: 0.0
+  }
+}
+boundary_conditions {
+  name: "T"
+  boundary_info {
+    dim: 0 location: 0 type: BC_TYPE_DIRICHLET value: 283.0
+  }
+  boundary_info {
+    dim: 0 location: 1 type: BC_TYPE_NEUMANN value: 0.0
+  }
+  boundary_info {
+    dim: 2 location: 0 type: BC_TYPE_NEUMANN value: 0.0
+  }
+  boundary_info {
+    dim: 2 location: 1 type: BC_TYPE_NEUMANN value: 0.0
+  }
+}
+boundary_conditions {
+  name: "Y_O"
+  boundary_info {
+    dim: 0 location: 0 type: BC_TYPE_DIRICHLET value: 0.21
+  }
+  boundary_info {
+    dim: 0 location: 1 type: BC_TYPE_NEUMANN value: 0.0
+  }
+  boundary_info {
+    dim: 2 location: 0 type: BC_TYPE_NEUMANN value: 0.0
+  }
+  boundary_info {
+    dim: 2 location: 1 type: BC_TYPE_NEUMANN value: 0.0
+  }
+}

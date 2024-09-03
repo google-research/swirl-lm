@@ -35,6 +35,11 @@ GRID_PBTXT = """
     dim_1: 64
     dim_2: 64
   }
+  periodic {
+    dim_0: false
+    dim_1: false
+    dim_2: true
+  }
   # An indicator of mesh stretching in each dimension.
   stretched_grid_paths {
       dim_1: 'swirl_lm/example/channel/test_data/y_120.txt'
@@ -59,11 +64,6 @@ SIM_PBTXT = """
   enable_scalar_recorrection: true
   use_3d_tf_tensor: true
   num_sub_iterations: 3
-  periodic {
-    dim_0: false
-    dim_1: false
-    dim_2: true
-  }
   pressure {
     solver {
       jacobi {

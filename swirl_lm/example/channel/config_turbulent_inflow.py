@@ -35,6 +35,11 @@ GRID_PBTXT = """
     dim_1: 64
     dim_2: 64
   }
+  periodic {
+    dim_0: false
+    dim_1: false
+    dim_2: true
+  }
   # The width of the ghost cells on each side of the domain. It is set to 2
   # considering the stencil width of the QUICK scheme.
   halo_width: 2
@@ -55,11 +60,6 @@ SIM_PBTXT = """
   enable_scalar_recorrection: true
   use_3d_tf_tensor: true
   num_sub_iterations: 3
-  periodic {
-    dim_0: false
-    dim_1: false
-    dim_2: true
-  }
   pressure {
     solver {
       fast_diagonalization {

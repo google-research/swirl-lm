@@ -334,7 +334,7 @@ class DistTurbulenceSynthesizer(object):
       replica_dims = (0, 1, 2)
       periodic_dims = (True, True, True)
       u = halo_exchange.inplace_halo_exchange(
-          tf.unstack(u, axis=2),
+          tf.transpose(u, perm=(2, 0, 1)),
           halo_dims,
           replica_id,
           replicas,
@@ -347,9 +347,12 @@ class DistTurbulenceSynthesizer(object):
       )
 
       # Transpose back to [nx, ny, nz] shape. This is mostly for FFT.
-      return [tf.transpose(tf.stack(component), [1, 2, 0]) for component in
-              analytics_util.gradient(
-                  kernel_op, u, self._dx, self._dy, self._dz)]
+      return [
+          tf.transpose(component, perm=[1, 2, 0])
+          for component in analytics_util.gradient(
+              kernel_op, u, self._dx, self._dy, self._dz
+          )
+      ]
 
     grad_u = tf.cast(gradient(tf.math.real(u)), _C_TYPE)
     grad_v = tf.cast(gradient(tf.math.real(v)), _C_TYPE)

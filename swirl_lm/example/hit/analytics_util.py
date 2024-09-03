@@ -54,18 +54,12 @@ def compute_global_tke(
   homogeneous.
 
   Args:
-    u: The first component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order. The halos of the field are included.
-    v: The second component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order. The halos of the field are included.
-    w: The third component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order. The halos of the field are included.
+    u: The first component of the field/variable on the local core. The halos of
+      the field are included.
+    v: The second component of the field/variable on the local core. The halos
+      of the field are included.
+    w: The third component of the field/variable on the local core. The halos of
+      the field are included.
     halos: The width of the (symmetric) halos for each dimension: for example
       [1, 2, 3] means the halos for `u`, `v`, and `w` have width of 1, 2, 3 on
       both sides in x, y, z dimension respectively.
@@ -81,8 +75,7 @@ def compute_global_tke(
   u_mean = common_ops.global_mean(u, replicas, halos)
   v_mean = common_ops.global_mean(v, replicas, halos)
   w_mean = common_ops.global_mean(w, replicas, halos)
-  local_tke = [(u_i - u_mean)**2 + (v_i - v_mean)**2 + (w_i - w_mean)**2
-               for u_i, v_i, w_i in zip(u, v, w)]
+  local_tke = (u - u_mean)**2 + (v - v_mean)**2 + (w - w_mean)**2
   return (0.5 * common_ops.global_mean(local_tke, replicas, halos),
           u_mean, v_mean, w_mean)
 
@@ -131,18 +124,12 @@ def global_energy_spectrum(
 
   Args:
     l: The length of the cubic domain.
-    u: The first component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order. The halos of the field are included.
-    v: The second component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order. The halos of the field are included.
-    w: The third component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order. The halos of the field are included.
+    u: The first component of the field/variable on the local core. The halos of
+      the field are included.
+    v: The second component of the field/variable on the local core. The halos
+      of the field are included.
+    w: The third component of the field/variable on the local core. The halos of
+      the field are included.
     halos: The width of the (symmetric) halos for each dimension: for example
       [1, 2, 3] means the halos for `u`, `v`, and `w` have width of 1, 2, 3 on
       both sides in x, y, z dimension respectively. The halo region of the field
@@ -194,9 +181,11 @@ def global_energy_spectrum(
               spectral_grid_square(2))), tf.int32)
 
   update_indices = tf.reshape(update_indices, [-1, 1])
-  u_merged = tf.stack(u, axis=2)
-  v_merged = tf.stack(v, axis=2)
-  w_merged = tf.stack(w, axis=2)
+
+  # Permute from (nz, nx, ny) to (nx, ny, nz)
+  u_merged = tf.transpose(u, perm=(1, 2, 0))
+  v_merged = tf.transpose(v, perm=(1, 2, 0))
+  w_merged = tf.transpose(w, perm=(1, 2, 0))
 
   transformer = dist_tpu_fft.DistTPUFFT(replicas, replica_id)
   # Note all values in halo region will be zero.
@@ -241,18 +230,9 @@ def curl(
   Args:
     kernel_op: An `get_kernel_fn.ApplyKernelOp` object that implements the
       finite difference operations.
-    u: The first component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order.
-    v: The second component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order.
-    w: The third component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order.
+    u: The first component of the field/variable on the local core.
+    v: The second component of the field/variable on the local core.
+    w: The third component of the field/variable on the local core.
     dx: The grid space in x dimension.
     dy: The grid space in y dimension.
     dz: The grid space in z dimension.
@@ -262,21 +242,17 @@ def curl(
     ∇ × (u, v, w).
   """
 
-  curl_x = [
-      0.5 * (dw / dy - dv / dz) for dw, dv in zip(
-          kernel_op.apply_kernel_op_y(w, 'kDy'),
-          kernel_op.apply_kernel_op_z(v, 'kDz', 'kDzsh'))
-  ]
-  curl_y = [
-      0.5 * (du / dz - dw / dx) for du, dw in zip(
-          kernel_op.apply_kernel_op_z(u, 'kDz', 'kDzsh'),
-          kernel_op.apply_kernel_op_x(w, 'kDx'))
-  ]
-  curl_z = [
-      0.5 * (dv / dx - du / dy) for dv, du in zip(
-          kernel_op.apply_kernel_op_x(v, 'kDx'),
-          kernel_op.apply_kernel_op_y(u, 'kDy'))
-  ]
+  dwdy = kernel_op.apply_kernel_op_y(w, 'kDy') / dy
+  dvdz = kernel_op.apply_kernel_op_z(v, 'kDz', 'kDzsh') / dz
+  curl_x = 0.5 * (dwdy - dvdz)
+
+  dudz = kernel_op.apply_kernel_op_z(u, 'kDz', 'kDzsh') / dz
+  dwdx = kernel_op.apply_kernel_op_x(w, 'kDx') / dx
+  curl_y = 0.5 * (dudz - dwdx)
+
+  dvdx = kernel_op.apply_kernel_op_x(v, 'kDx') / dx
+  dudy = kernel_op.apply_kernel_op_y(u, 'kDy') / dy
+  curl_z = 0.5 * (dvdx - dudy)
 
   return (curl_x, curl_y, curl_z)
 
@@ -299,18 +275,9 @@ def enstrophy(
   Args:
     kernel_op: An `get_kernel_fn.ApplyKernelOp` object that implements the
       finite difference operations.
-    u: The first component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order.
-    v: The second component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order.
-    w: The third component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order.
+    u: The first component of the field/variable on the local core.
+    v: The second component of the field/variable on the local core.
+    w: The third component of the field/variable on the local core.
     dx: The grid space in x dimension.
     dy: The grid space in y dimension.
     dz: The grid space in z dimension.
@@ -324,11 +291,10 @@ def enstrophy(
   Returns:
     A scalar Tensor representing the Entropy from the group the core belongs to.
   """
-  curl_full = curl(kernel_op, u, v, w, dx, dy, dz)
-  return common_ops.global_mean([
-      tf.square(curl_x) + tf.square(curl_y) + tf.square(curl_z) for curl_x,
-      curl_y, curl_z in zip(curl_full[0], curl_full[1], curl_full[2])
-  ], replicas, halos)
+  curl_x, curl_y, curl_z = curl(kernel_op, u, v, w, dx, dy, dz)
+  return common_ops.global_mean(
+      curl_x**2 + curl_y**2 + curl_z**2, replicas, halos
+  )
 
 
 def gradient(
@@ -345,23 +311,20 @@ def gradient(
   Args:
     kernel_op: An `get_kernel_fn.ApplyKernelOp` object that implements the
       finite difference operations.
-    u: A scalar field/variable on the local core. This is expected to be
-      expressed in the form of a list of 2D Tensors representing x-y slices,
-      where each list element represents the slice of at a given z coordinate in
-      ascending z order.
+    u: A scalar field/variable on the local core.
     dx: The grid space in x dimension.
     dy: The grid space in y dimension.
     dz: The grid space in z dimension.
 
   Returns:
     The gridient of input field `u`. The result is represented as a 3-Tuple with
-    each element representing one component of the vector. Each component is
-    also in the same xy slice format as the input. Note the width one halo
-    region will not have the correct values.
+    each element representing one component of the vector. Note the width one
+    halo region will not have the correct values.
   """
-  return ([0.5 * du / dx for du in kernel_op.apply_kernel_op_x(u, 'kDx')], [
-      0.5 * du / dy for du in kernel_op.apply_kernel_op_y(u, 'kDy')
-  ], [0.5 * du / dz for du in kernel_op.apply_kernel_op_z(u, 'kDz', 'kDzsh')])
+  grad_x = 0.5 * kernel_op.apply_kernel_op_x(u, 'kDx') / dx
+  grad_y = 0.5 * kernel_op.apply_kernel_op_y(u, 'kDy') / dy
+  grad_z = 0.5 * kernel_op.apply_kernel_op_z(u, 'kDz', 'kDzsh') / dz
+  return (grad_x, grad_y, grad_z)
 
 
 def strain_rate(
@@ -379,17 +342,8 @@ def strain_rate(
     kernel_op: An `get_kernel_fn.ApplyKernelOp` object that implements the
       finite difference operations.
     u: The first velocity component of the field/variable on the local core.
-      This is expected to be expressed in the form of a list of 2D Tensors
-      representing x-y slices, where each list element represents the slice of
-      at a given z coordinate in ascending z order.
     v: The second velocity component of the field/variable on the local core.
-      This is expected to be expressed in the form of a list of 2D Tensors
-      representing x-y slices, where each list element represents the slice of
-      at a given z coordinate in ascending z order.
     w: The third velocity component of the field/variable on the local core.
-      This is expected to be expressed in the form of a list of 2D Tensors
-      representing x-y slices, where each list element represents the slice of
-      at a given z coordinate in ascending z order.
     dx: The grid space in x dimension.
     dy: The grid space in y dimension.
     dz: The grid space in z dimension.
@@ -400,18 +354,17 @@ def strain_rate(
          (s21, s22, s23),
          (s31, s32, s33))
     Note that the value in the width-one halo region on each core will not be
-    correct. Each of the compoments is also represented in the 2D xy slices
-    format as the input field components.
+    correct.
   """
   s1 = gradient(kernel_op, u, dx, dy, dz)
   s2 = gradient(kernel_op, v, dx, dy, dz)
   s3 = gradient(kernel_op, w, dx, dy, dz)
   s11 = s1[0]
-  s12 = [0.5 * (a + b) for a, b in zip(s1[1], s2[0])]
-  s13 = [0.5 * (a + b) for a, b in zip(s1[2], s3[0])]
+  s12 = 0.5 * (s1[1] + s2[0])
+  s13 = 0.5 * (s1[2] + s3[0])
   s21 = s12
   s22 = s2[1]
-  s23 = [0.5 * (a + b) for a, b in zip(s2[2], s3[1])]
+  s23 = 0.5 * (s2[2] + s3[1])
   s31 = s13
   s32 = s23
   s33 = s3[2]
@@ -437,18 +390,9 @@ def dissipation_rate(
   Args:
     kernel_op: An `get_kernel_fn.ApplyKernelOp` object that implements the
       finite difference operations.
-    u: The first component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order.
-    v: The second component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order.
-    w: The third component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order.
+    u: The first component of the field/variable on the local core.
+    v: The second component of the field/variable on the local core.
+    w: The third component of the field/variable on the local core.
     dx: The grid space in x dimension.
     dy: The grid space in y dimension.
     dz: The grid space in z dimension.
@@ -464,11 +408,10 @@ def dissipation_rate(
     The dissipation rate for the group the core belongs to.
   """
   s = strain_rate(kernel_op, u, v, w, dx, dy, dz)
-  square_sum = [0.0 for _ in s[0][0]]
+  square_sum = tf.zeros_like(s[0][0])
   for i in range(3):
     for j in range(3):
-      for n, v in enumerate(s[i][j]):
-        square_sum[n] += tf.square(v)
+      square_sum += tf.square(s[i][j])
   return 2.0 * nu * common_ops.global_mean(square_sum, replicas, halos)
 
 
@@ -491,18 +434,9 @@ def kolmogorov_scales(
   Args:
     kernel_op: An `get_kernel_fn.ApplyKernelOp` object that implements the
       finite difference operations.
-    u: The first component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order.
-    v: The second component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order.
-    w: The third component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order.
+    u: The first component of the field/variable on the local core.
+    v: The second component of the field/variable on the local core.
+    w: The third component of the field/variable on the local core.
     dx: The grid space in x dimension.
     dy: The grid space in y dimension.
     dz: The grid space in z dimension.
@@ -536,23 +470,14 @@ def max_abs_velocity(
     halos: Sequence[int],
     group_assignment: np.ndarray,
 ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:
-  """Calculates the max velocity magintude and max for each velocity component.
+  """Calculates the max velocity magnitude and max for each velocity component.
 
   The calculation will exclude the halo region on each core.
 
   Args:
-    u: The first component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order.
-    v: The second component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order.
-    w: The third component of the field/variable on the local core. This is
-      expected to be expressed in the form of a list of 2D Tensors representing
-      x-y slices, where each list element represents the slice of at a given z
-      coordinate in ascending z order.
+    u: The first component of the field/variable on the local core.
+    v: The second component of the field/variable on the local core.
+    w: The third component of the field/variable on the local core.
     halos: The width of the (symmetric) halos for each dimension: for example
       [1, 2, 3] means the halos for `u`, `v`, and `w` have width of 1, 2, 3 on
       both sides in x, y, z dimension respectively.
@@ -570,14 +495,13 @@ def max_abs_velocity(
   """
   common_ops.validate_fields(u, v, w)
   nx, ny, nz = common_ops.get_field_shape(u)
-  abs_velocity = [
-      tf.math.abs(tf.stack(v_component, axis=2)) for v_component in (u, v, w)
-  ]
+  slc = (
+      slice(halos[2], nz - halos[2]),
+      slice(halos[0], nx - halos[0]),
+      slice(halos[1], ny - halos[1]),
+  )
+  abs_velocity = [tf.math.abs(v_j[slc]) for v_j in (u, v, w)]
 
-  abs_velocity = [
-      v_component[halos[0]:nx - halos[0], halos[1]:ny - halos[1],
-                  halos[2]:nz - halos[2]] for v_component in abs_velocity
-  ]
   velocity_mag = tf.math.sqrt(abs_velocity[0]**2 + abs_velocity[1]**2 +
                               abs_velocity[2]**2)
   u_max = common_ops.global_reduce(abs_velocity[0], tf.math.reduce_max,

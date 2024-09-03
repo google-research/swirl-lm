@@ -1249,7 +1249,7 @@ class Fire:
       halo_width = self.config.halo_width
       self.init_fn_uvw = {  # pylint: disable=g-complex-comprehension
           key: geophysical_flow_utils.perturbed_constant_init_fn(
-              seed=(seed[key], self.perturb_init_velocity_rand_seed),
+              seed=seed[key] + self.perturb_init_velocity_rand_seed,
               mean=mean_velocity[key],
               g_dim=2,
               local_grid_no_halos=(

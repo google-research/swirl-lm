@@ -114,6 +114,7 @@ class MoninObukhovSimilarityTheory(object):
     self.enable_theta_reg = most_params.enable_theta_reg
     self.theta_max = most_params.theta_max
     self.theta_min = most_params.theta_min
+    self.surface_gustiness = most_params.surface_gustiness
 
     self.dbg = most_params.debug
 
@@ -427,7 +428,9 @@ class MoninObukhovSimilarityTheory(object):
       return _KAPPA**2 / (rho * (tf.math.log(height / self.z_0) - phi_m)**2)
 
     u_mag = tf.nest.map_structure(
-        lambda u, v: tf.math.sqrt(u**2 + v**2), u1, u2
+        lambda u, v: tf.math.sqrt(self.surface_gustiness**2 + u**2 + v**2),
+        u1,
+        u2,
     )
     zeta = self._normalized_height(theta, u1, u2, height)
     phi_m, phi_h = self._stability_correction_function(zeta, theta)
@@ -602,8 +605,12 @@ class MoninObukhovSimilarityTheory(object):
         phi_z0_i: tf.Tensor,
     ) -> tf.Tensor:
       """Computes the energy flux."""
-      return -rho_i * c_h_i * tf.math.sqrt(u1_i**2 + u2_i**2) * (
-          phi_zm_i - phi_z0_i)
+      return (
+          -rho_i
+          * c_h_i
+          * tf.math.sqrt(self.surface_gustiness**2 + u1_i**2 + u2_i**2)
+          * (phi_zm_i - phi_z0_i)
+      )
 
     if isinstance(phi_z0, Sequence) and isinstance(c_h, Sequence):
       sc_flux = tf.nest.map_structure(
@@ -825,57 +832,60 @@ class MoninObukhovSimilarityTheory(object):
 
   def _compute_monin_obukhov_length_scale(self, u_star, temperature, heat_flux):
     """Computes the Monin-Obukhov length scale."""
-    return [
+    return tf.nest.map_structure(
+        lambda u_star_i, t_i:
         tf.math.divide_no_nan(-u_star_i**3 * t_i,
-                              _KAPPA * constants.G * heat_flux)
-        for u_star_i, t_i in zip(u_star, temperature)
-    ]
+                              _KAPPA * constants.G * heat_flux),
+        u_star, temperature)
 
   def _compute_surface_heat(self, u_star):
     """Computes the surface heat -T*."""
-    return [
-        tf.math.divide_no_nan(self.heat_flux, u_star_i) for u_star_i in u_star
-    ]
+    return tf.nest.map_structure(
+        lambda u_star_i: tf.math.divide_no_nan(self.heat_flux, u_star_i), u_star
+    )
 
   def _compute_shear_stresses(self, u, v, z, replicas):
     """Computes the shear stresses 𝛕₀₂ and 𝛕₁₂."""
-    u_norm = [tf.math.sqrt(u_i**2 + v_i**2) for u_i, v_i in zip(u, v)]
+    u_norm = tf.nest.map_structure(
+        lambda u_i, v_i: tf.math.sqrt(u_i**2 + v_i**2), u, v)
     u_mean = tf.squeeze(common_ops.global_mean(u_norm, replicas))
     u_star = tf.math.divide_no_nan(u_mean * _KAPPA,
                                    tf.math.log(z / self.z_0) - _PHI_M)
-    return [tf.math.divide_no_nan(-u_star**2 * u_i, u_mean) for u_i in u
-           ], [tf.math.divide_no_nan(-u_star**2 * v_i, u_mean) for v_i in v]
+    return (tf.nest.map_structure(
+        lambda u_i: tf.math.divide_no_nan(-u_star**2 * u_i, u_mean), u),
+            tf.nest.map_structure(
+                lambda v_i: tf.math.divide_no_nan(-u_star**2 * v_i, u_mean), v))
 
   def _compute_friction_velocity(self, u, v, z, replicas):
     """Computes the friction velocity."""
     tau_vertical_0, tau_vertical_1 = self._compute_shear_stresses(
         u, v, z, replicas)
-    return [
-        tf.math.pow(tau_0_i**2 + tau_1_i**2, 0.25)
-        for tau_0_i, tau_1_i in zip(tau_vertical_0, tau_vertical_1)
-    ]
+    return tf.nest.map_structure(
+        lambda tau_0_i, tau_1_i:
+        tf.math.pow(tau_0_i**2 + tau_1_i**2, 0.25),
+        tau_vertical_0, tau_vertical_1)
 
   def _compute_nondimensional_gradient(self, u, v, temperature, z, replicas):
     """Computes the nondimensional gradient."""
     u_star = self._compute_friction_velocity(u, v, z, replicas)
-    l = [
-        -l_i for l_i in self._compute_monin_obukhov_length_scale(
+    l = tf.nest.map_structure(
+        lambda l_i:
+        -l_i, self._compute_monin_obukhov_length_scale(
             u_star, temperature, self.heat_flux)
-    ]
+    )
     if self.heat_flux >= 0.0:
-      return [
-          tf.math.pow(
+      return tf.nest.map_structure(
+          lambda l_i: tf.math.pow(
               tf.maximum(1.0 - tf.math.divide_no_nan(15.0 * z, l_i), 0.0),
-              -0.25) for l_i in l
-      ]
-    return [1.0 + tf.math.divide_no_nan(4.7 * z, l_i) for l_i in l]
+              -0.25), l)
+    return tf.nest.map_structure(
+        lambda l_i: 1.0 + tf.math.divide_no_nan(4.7 * z, l_i), l)
 
   def _compute_dimensional_gradient(self, f_star, phi, z):
     """Computes the dimensional gradient that is used for the Neumann BC."""
-    return [
-        tf.math.divide_no_nan(f_star_i * phi_i, _KAPPA * z)
-        for f_star_i, phi_i in zip(f_star, phi)
-    ]
+    return tf.nest.map_structure(
+        lambda f_star_i, phi_i: tf.math.divide_no_nan(
+            f_star_i * phi_i, _KAPPA * z), f_star, phi)
 
   def _check_additional_states_keys(
       self,
@@ -995,19 +1005,25 @@ class MoninObukhovSimilarityTheory(object):
   ) -> FlowFieldVal:
     """Returns a horizontal slice of `f` at level `idx`."""
     slices = common_ops.get_face(f, self.vertical_dim, 0, idx)
-    return slices if self.vertical_dim == 2 else slices[0]
+    if isinstance(f, tf.Tensor):
+      return slices[0]
+    else:
+      return slices if self.vertical_dim == 2 else slices[0]
 
   def _expand_state(
       self, f: FlowFieldVal,
       params: grid_parametrization.GridParametrization) -> FlowFieldVal:
     """Expands the state variable along the vertical dimension."""
     if self.vertical_dim == 2:
-      return f * params.nz
+      if isinstance(f, tf.Tensor):
+        return tf.tile(f, [params.nz, 1, 1])
+      else:
+        return f * params.nz
     else:
       ns = [params.nx, params.ny]
       repeats = [1, 1]
       repeats[self.vertical_dim] = ns[self.vertical_dim]
-      return [tf.tile(f_i, repeats) for f_i in f]
+      return tf.nest.map_structure(lambda f_i: tf.tile(f_i, repeats), f)
 
   def _get_horizontal_slices(
       self,
@@ -1105,10 +1121,14 @@ class MoninObukhovSimilarityTheory(object):
     horizontal_velocity_fields = list(dim_to_horizontal_velocity.values())
 
     nu_slice = self._get_slice(additional_states['nu_t'], params.halo_width)
-    nu = [nu_slice_i + self.nu for nu_slice_i in nu_slice]
-    v_0_sq = [v_i**2 for v_i in horizontal_velocity_fields[0]]
-    v_1_sq = [v_i**2 for v_i in horizontal_velocity_fields[1]]
-    m = [tf.math.sqrt(v_0_i + v_1_i) for v_0_i, v_1_i in zip(v_0_sq, v_1_sq)]
+    nu = tf.nest.map_structure(
+        lambda nu_slice_i: nu_slice_i + self.nu, nu_slice)
+    v_0_sq = tf.nest.map_structure(
+        lambda v_i: v_i**2, horizontal_velocity_fields[0])
+    v_1_sq = tf.nest.map_structure(
+        lambda v_i: v_i**2, horizontal_velocity_fields[1])
+    m = tf.nest.map_structure(
+        lambda v_0_i, v_1_i: tf.math.sqrt(v_0_i + v_1_i), v_0_sq, v_1_sq)
 
     m_avg = tf.squeeze(
         common_ops.global_mean(m, replicas, axis=self.horizontal_dims)[0])
@@ -1122,17 +1142,18 @@ class MoninObukhovSimilarityTheory(object):
     tau = {}
     for dim, v in dim_to_horizontal_velocity.items():
       tau.update(
-          {dim: [tf.math.divide_no_nan(-tau_s_avg * v_i, m_avg) for v_i in v]})
+          {dim: tf.nest.map_structure(
+              lambda v_i: tf.math.divide_no_nan(-tau_s_avg * v_i, m_avg), v)})
 
     # Regularizes the change in velocity so that flow at the boundary is not
     # in the reverted direction.
     dv = {}
     for dim, u in dim_to_horizontal_velocity.items():
-      dv.update({dim: [
-          tf.sign(u_i) * tf.minimum(
+      dv.update({dim: tf.nest.map_structure(
+          lambda u_i, tau_i, nu_i: tf.sign(u_i) * tf.minimum(
               tf.abs(tf.math.divide_no_nan(tau_i * height_m, nu_i)),
-              tf.abs(u_i)) for u_i, tau_i, nu_i in zip(u, tau[dim], nu)
-      ]})
+              tf.abs(u_i)), u, tau[dim], nu)
+                 })
 
     additional_states_new = {}
     most_bc_keys = set()
@@ -1157,17 +1178,18 @@ class MoninObukhovSimilarityTheory(object):
     if update_bc_t:
       q_s_avg = self._q_s_average(height_m, m_avg, t_avg, self.t_s, l)
 
-      tau_t_vertical = [-q_s_avg * tf.math.divide_no_nan(
-          (m_i * (t_avg - self.t_s) + m_avg * (t_i - t_avg)),
-          (m_avg * (t_avg - self.t_s))) * height_m for m_i, t_i in zip(m, t)]
+      tau_t_vertical = tf.nest.map_structure(
+          lambda m_i, t_i: -q_s_avg * tf.math.divide_no_nan(
+              (m_i * (t_avg - self.t_s) + m_avg * (t_i - t_avg)),
+              (m_avg * (t_avg - self.t_s))) * height_m, m, t)
       # Regularizes the temperature change so that the temperature at the
       # ground will not drop below the reference surface temperature.
       dt_max = t_avg - self.t_s
-      dt = [
-          tf.sign(dt_max) * tf.minimum(
-              tf.abs(tau_t_vertical_i * height_m / nu_i), tf.abs(dt_max))
-          for tau_t_vertical_i, nu_i in zip(tau_t_vertical, nu)
-      ]
+      dt = tf.nest.map_structure(
+          lambda tau_t_vertical_i, nu_i: tf.sign(dt_max) * tf.minimum(
+              tf.abs(tau_t_vertical_i * height_m / nu_i), tf.abs(dt_max)),
+          tau_t_vertical, nu)
+
       bc_t_key = self.bc_manager.generate_bc_key('T', self.vertical_dim, 0)
       additional_states_new.update({bc_t_key: self._expand_state(dt, params)})
       bc_tau_t_key = 'bc_tauT{vertical_dim}_{vertical_dim}_0'.format(
@@ -1284,7 +1306,8 @@ class MoninObukhovSimilarityTheory(object):
     paddings = [(params.halo_width, params.halo_width)] * 3
     paddings[self.vertical_dim] = (0, 0)
     dimensional_grad = self._compute_dimensional_gradient(u_star, phi, height)
-    du = [dg_i * height for dg_i in dimensional_grad]
+    du = tf.nest.map_structure(
+        lambda dg_i: dg_i * height, dimensional_grad)
     du = common_ops.pad(du, paddings, value=0.0)
 
     additional_states_new = {}
@@ -1303,7 +1326,7 @@ class MoninObukhovSimilarityTheory(object):
     if update_bc_t:
       t_star = self._compute_surface_heat(u_star)
       dimensional_grad = self._compute_dimensional_gradient(t_star, phi, height)
-      dt = [dg_i * height for dg_i in dimensional_grad]
+      dt = tf.nest.map_structure(lambda dg_i: dg_i * height, dimensional_grad)
       dt = common_ops.pad(dt, paddings, value=0.0)
       bc_t_key = self.bc_manager.generate_bc_key('T', self.vertical_dim, 0)
       additional_states_new.update({bc_t_key: self._expand_state(dt, params)})

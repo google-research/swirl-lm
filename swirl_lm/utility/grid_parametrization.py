@@ -93,6 +93,16 @@ _STRETCHED_GRID_Z_PATH = flags.DEFINE_string(
 FLAGS = flags.FLAGS
 
 
+def flags_present_at_launch():
+  flags_in_grid_params = [
+      'cx', 'cy', 'cz', 'lx', 'ly', 'lz', 'nx', 'ny', 'nz', 'halo_width', 'dt',
+      'kernel_size', 'input_chunk_size', 'num_output_splits',
+      'num_boundary_points', 'stretched_grid_x_path', 'stretched_grid_y_path',
+      'stretched_grid_z_path',
+  ]
+  return [flag for flag in flags_in_grid_params if FLAGS[flag].present]
+
+
 def _get_core_n(n: int, halo_width: int) -> Optional[int]:
   core_n = n - 2 * halo_width
   return core_n if core_n > 0 else None
@@ -434,6 +444,12 @@ class GridParametrization(object):
         True if params.stretched_grid_paths.dim_1 else False,
         True if params.stretched_grid_paths.dim_2 else False,
     )
+
+    # Whether the dimensions are periodic or not.
+    self.periodic_dims = (
+        params.periodic.dim_0, params.periodic.dim_1, params.periodic.dim_2
+    )
+
     # Get coordinate grid spacings (valid with or without stretched grid). To be
     # compatible with stretched grids, use these values instead of
     # self.{dx,dy,dz}.

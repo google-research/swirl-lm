@@ -60,8 +60,10 @@ def outflow_boundary_condition() -> StatesUpdateFn:
         [np.reshape(replicas[i, :, :], -1) for i in range(replicas.shape[0])])
 
     u_max = common_ops.global_reduce(
-        tf.concat([u_i[-params.halo_width - 1, :] for u_i in states['u']],
-                  axis=0), tf.math.reduce_max, group_assignment)
+        states['u'][:, -params.halo_width - 1, :],
+        tf.math.reduce_max,
+        group_assignment,
+    )
 
     cfl = params.dt * u_max / params.dx
     coeff = 1.0 - cfl
@@ -69,14 +71,7 @@ def outflow_boundary_condition() -> StatesUpdateFn:
     def mass_flux_x_face(face_index):
       """Computes the mass flux in x face at `face_index`."""
       return common_ops.global_reduce(
-          tf.concat(
-              tf.nest.map_structure(
-                  lambda rho_i, u_i: rho_i[face_index, :] * u_i[face_index, :],
-                  states['rho'],
-                  states['u'],
-              ),
-              axis=0,
-          ),
+          states['rho'][:, face_index, :] * states['u'][:, face_index, :],
           tf.math.reduce_sum,
           group_assignment,
       )
@@ -89,11 +84,10 @@ def outflow_boundary_condition() -> StatesUpdateFn:
       """Update the boundary values for variable `var_name`."""
       bc_name = 'bc_{}_0_1'.format(var_name)
       correction_factor = mass_correction if var_name == 'u' else 1.0
-      return tf.nest.map_structure(
-          lambda u_j, u_j_1: correction_factor
-          * (coeff * u_j + (1.0 - coeff) * u_j_1[-params.halo_width - 1, :]),
-          additional_states[bc_name],
-          states[var_name],
+      return correction_factor * (
+          coeff * additional_states[bc_name]
+          + (1.0 - coeff)
+          * states[var_name][:, -params.halo_width - 1 : -params.halo_width, :]
       )
 
     return {

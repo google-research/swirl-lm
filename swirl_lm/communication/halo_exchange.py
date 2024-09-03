@@ -478,7 +478,8 @@ def inplace_halo_exchange(
       taking boundary conditions into account.
   """
   periodic_dims = periodic_dims or [None] * len(dims)
-  boundary_conditions = boundary_conditions or [[None, None]] * len(dims)
+  boundary_conditions = (boundary_conditions if boundary_conditions is not None
+                         else [[None, None]] * len(dims))
 
   assert len(dims) == len(replica_dims)
   assert len(dims) == len(periodic_dims)
@@ -486,7 +487,7 @@ def inplace_halo_exchange(
 
   def get_bc_val(bc_info, plane):
     """Updates the boundary condition information at a specific `plane`."""
-    if bc_info:
+    if bc_info is not None:
       # Create a mutable copy of the bc passed in.
       bc_info_plane = list(bc_info)
       # If the boundary condition is a list of planes select the relevant one.
@@ -504,7 +505,7 @@ def inplace_halo_exchange(
     for dim, replica_dim, periodic, bc in zip(
         dims, replica_dims, periodic_dims, boundary_conditions
     ):
-      bc_low, bc_high = bc if bc else (None, None)
+      bc_low, bc_high = bc if bc is not None else (None, None)
       _validate_boundary_condition(bc_low, tensor, dim, width)
       _validate_boundary_condition(bc_high, tensor, dim, width)
 
@@ -562,7 +563,7 @@ def _validate_boundary_condition(bc, tensor, dim, width):
   Raises:
     ValueError if the boundary condition is invalid.
   """
-  if not bc:
+  if bc is None:
     return
 
   bc_type, bc_value = bc

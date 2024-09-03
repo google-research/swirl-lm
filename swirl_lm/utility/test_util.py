@@ -20,8 +20,14 @@ from typing import Any
 from absl.testing import absltest
 import numpy as np
 import numpy.typing as npt
+from swirl_lm.base import parameters
+from swirl_lm.base import parameters_pb2
 from swirl_lm.utility import common_ops
+from swirl_lm.utility import grid_parametrization
+from swirl_lm.utility import grid_parametrization_pb2
 import tensorflow as tf
+
+from google.protobuf import text_format
 
 
 def get_split_inputs(
@@ -101,6 +107,42 @@ def get_split_inputs(
             ]
         ]
   return split_inputs
+
+
+def get_split_inputs_3d_tensor(
+    u_full,
+    v_full,
+    w_full,
+    replicas,
+    halos,
+) -> list[list[tf.Tensor]]:
+  """Creates split inputs from full field components with halos added.
+
+  This is the same as `get_split_inputs`, but outputs 3D tensors instead of
+  lists of 2D tensors.
+
+  Args:
+    u_full: The x component of the full-grid vector field.
+    v_full: They y component of the full-grid vector field.
+    w_full: The z component of the full-grid vector field.
+    replicas: A 3D numpy array representing the mapping from the core replica
+      coordinate to the `replica_id`. The number of cores in each dimension is
+      the number of splits of the global input for the transformation.
+    halos: The width of the (symmetric) halos for each dimension: for example
+      [1, 2, 3] means the halos have width of 1, 2, 3 on both sides in x, y, z
+      dimension respectively.
+
+  Returns:
+    An array mapping the replica id to the local vector field that was assigned
+    to it. The output format is a list of list of 3D tensors, where output[i][j]
+    gets the ith replica, and u, v, w for j=0, 1, 2.
+  """
+  split_inputs = get_split_inputs(u_full, v_full, w_full, replicas, halos)
+  # Stack the output to return 3D tensors instead of lists of 2D tensors.
+  return [
+      [tf.stack(split_inputs[i][j]) for j in (0, 1, 2)]
+      for i in range(len(split_inputs))
+  ]
 
 
 def merge_output(
@@ -235,3 +277,46 @@ def compute_power_exponent(x: npt.ArrayLike, y: npt.ArrayLike) -> float:
   logy = np.log(y)
   logx = np.log(x)
   return np.polyfit(logx, logy, 1)[0]
+
+
+def create_swirl_lm_params(
+    config: parameters_pb2.SwirlLMParameters | str,
+    grid_params: (grid_parametrization_pb2.GridParametrization | str |
+                  None) = None,
+) -> parameters.SwirlLMParameters:
+  """Fills SwirlLMParams with backward-compatible defaults for tests.
+
+  Do not use this function in new tests - create SwirlLMParameters using one of
+  the functions in parameters.py instead. Also note that this function does not
+  allow the input `config` to include the 'grid_params' message. New tests
+  should set up SwirlLMParameters with 'grid_params'.
+
+  Args:
+    config: Either a SwirlLMParameters proto message or a string. If a string,
+      then the string will be parsed as a text-formatted SwirlLMParameters
+      proto.
+    grid_params: A GridParametrization proto message, a string, or None. If a
+      string, then the string will be parsed as a text-formatted
+      GridParametrization proto. If None, GridParametrization will be
+      initialized from flag values.
+
+  Returns:
+    A new SwirlLMParameters initialized from `config` and `grid_params`.
+
+  """
+  if grid_params is None:
+    grid_params = grid_parametrization.params_from_flags()
+  elif isinstance(grid_params, str):
+    grid_params = grid_parametrization.params_from_text_proto(grid_params)
+
+  if isinstance(config, str):
+    config = text_format.Parse(config, parameters_pb2.SwirlLMParameters())
+
+  assert not config.HasField('grid_params'), (
+      'Use one of functions in parameters.py to create a SwirlLMParameters '
+      'object from a SwirlLMParameters message that includes the grid_params '
+      'message.')
+  new_config = parameters_pb2.SwirlLMParameters()
+  new_config.CopyFrom(config)
+  new_config.grid_params.CopyFrom(grid_params)
+  return parameters.SwirlLMParameters(new_config)

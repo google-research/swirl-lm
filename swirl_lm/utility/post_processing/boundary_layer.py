@@ -26,11 +26,8 @@ from typing import Optional, Tuple
 
 import numpy as np
 from swirl_lm.base import parameters as parameters_lib
-from swirl_lm.base import parameters_pb2
 from swirl_lm.boundary_condition import monin_obukhov_similarity_theory
 import tensorflow as tf
-
-from google.protobuf import text_format
 
 _TF_DTYPE = tf.float32
 
@@ -40,10 +37,8 @@ class BoundaryLayer():
 
   def __init__(self, config_filepath: str, tf1: bool = False):
     """Initializes the boundary layer related libraries in the NS solver."""
-    with tf.io.gfile.GFile(config_filepath, 'r') as f:
-      config = text_format.Parse(f.read(), parameters_pb2.SwirlLMParameters())
-
-    params = parameters_lib.SwirlLMParameters(config)
+    params = parameters_lib.SwirlLMParameters.config_from_proto(
+        config_filepath, grid_params_from_flags=True)
 
     self.most = (
         monin_obukhov_similarity_theory.monin_obukhov_similarity_theory_factory(

@@ -14,15 +14,17 @@
 
 """Implementation of a radiative transfer solver."""
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.physics.atmosphere import microphysics_one_moment
 from swirl_lm.physics.atmosphere import microphysics_pb2
+from swirl_lm.physics.radiation import rrtmgp_common
 from swirl_lm.physics.radiation.rte import two_stream
 from swirl_lm.physics.thermodynamics import water
 from swirl_lm.utility import common_ops
+from swirl_lm.utility import grid_extension
 from swirl_lm.utility import stretched_grid_util
 from swirl_lm.utility import types
 import tensorflow as tf
@@ -31,6 +33,9 @@ import tensorflow as tf
 FlowFieldMap = types.FlowFieldMap
 FlowFieldVal = types.FlowFieldVal
 
+PRIMARY_GRID_KEY = two_stream.PRIMARY_GRID_KEY
+EXTENDED_GRID_KEY = two_stream.EXTENDED_GRID_KEY
+
 
 class RRTMGP:
   """Rapid Radiative Transfer Model for General Circulation Models (RRTMGP)."""
@@ -38,12 +43,14 @@ class RRTMGP:
   def __init__(
       self,
       config: parameters_lib.SwirlLMParameters,
+      grid_extension_lib: Optional[grid_extension.GridExtension] = None,
   ):
     self._kernel_op = config.kernel_op
     self._kernel_op.add_kernel({
         'shift_up': ([1.0, 0.0, 0.0], 1),
         'shift_dn': ([0.0, 0.0, 1.0], 1)
     })
+    self._config = config
     # A thermodynamics manager that handles moisture related physics.
     self._water = water.Water(config)
     # The vertical dimension.
@@ -61,6 +68,7 @@ class RRTMGP:
         config,
         self._kernel_op,
         self._g_dim,
+        grid_extension_lib
     )
     # Data library containing atmospheric gas concentrations.
     self._atmospheric_state = self._two_stream_solver.atmospheric_state
@@ -68,6 +76,7 @@ class RRTMGP:
     self._microphysics_lib = microphysics_one_moment.Adapter(
         config, self._water, microphysics_pb2.OneMoment()
     )
+    self._vertical_coord_name = ('xx', 'yy', 'zz')[self._g_dim]
 
   def _compute_cloud_path(
       self,
@@ -84,34 +93,12 @@ class RRTMGP:
         return rho * q_c * self._dh
       return tf.nest.map_structure(cloud_path_fn, rho, q_c)
 
-  def compute_heating_rate(
+  def _prepare_states(
       self,
-      replica_id: tf.Tensor,
-      replicas: np.ndarray,
       states: FlowFieldMap,
       additional_states: FlowFieldMap,
-      sfc_temperature: Optional[FlowFieldVal | float] = None,
-  ):
-    """Computes the local heating rate due to radiative transfer.
-
-    The optical properties of the layered atmosphere are computed using RRTMGP
-    and the two-stream radiative transfer equation is solved for the net fluxes
-    at the atmospheric grid cell faces. Based on the overall net radiative flux
-    of the grid cell, a local heating rate is determined.
-
-    Args:
-      replica_id: The index of the current TPU replica.
-      replicas: A numpy array that maps grid coordinates to replica id numbers.
-      states: A dictionary that holds all flow field variables and must include
-        the total specific humidity (`q_t`).
-      additional_states: A dictionary that holds all helper variables and must
-        include temperatue (`T`).
-      sfc_temperature: The optional surface temperature [K] represented as
-        either a 3D field having a single vertical dimension or as a scalar.
-
-    Returns:
-      A `FlowFieldVal` for the local heating rate due to radiative fluxes [K/s].
-    """
+  ) -> Dict[str, Any]:
+    """Prepares the states for the two-stream radiative transfer solver."""
     assert 'q_t' in states, (
         'RRTMGP requires the total specific humidity (`q_t`) to be present in'
         ' `states`.'
@@ -131,12 +118,14 @@ class RRTMGP:
     q_t = tf.nest.map_structure(
         tf.maximum,
         states['q_t'],
-        tf.nest.map_structure(tf.zeros_like, states['q_t'])
+        tf.nest.map_structure(tf.zeros_like, states['q_t']),
     )
     q_liq, q_ice = self._water.equilibrium_phase_partition(
         additional_states['T'], states['rho'], q_t
     )
-    pressure = self._water.p_ref(additional_states['zz'], additional_states)
+    pressure = self._water.p_ref(
+        additional_states[self._vertical_coord_name], additional_states
+    )
 
     # Condensed phase specific humidity required for cloud optics.
     q_c = tf.nest.map_structure(tf.math.add, q_liq, q_ice)
@@ -160,33 +149,162 @@ class RRTMGP:
     cloud_r_eff_ice = self._microphysics_lib.cloud_particle_effective_radius(
         states['rho'], q_ice, 'i'
     )
+    return dict(
+        pressure=pressure,
+        temperature=additional_states['T'],
+        molecules=molecules_per_area,
+        vmr_fields=vmr_fields,
+        cloud_r_eff_liq=cloud_r_eff_liq,
+        cloud_path_liq=lwp,
+        cloud_r_eff_ice=cloud_r_eff_ice,
+        cloud_path_ice=iwp,
+    )
+
+  def _clear_sky_states(
+      self,
+      states: dict[str, Any],
+  ) -> dict[str, Any]:
+    """Removes all the cloud states from the input states."""
+    cloud_state_names = (
+        'cloud_r_eff_liq',
+        'cloud_path_liq',
+        'cloud_r_eff_ice',
+        'cloud_path_ice',
+    )
+    return {k: v for k, v in states.items() if k not in cloud_state_names}
+
+  def compute_heating_rate(
+      self,
+      replica_id: tf.Tensor,
+      replicas: np.ndarray,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
+      sfc_temperature: Optional[FlowFieldVal | float] = None,
+      upper_atmosphere_states: Optional[Dict[str, FlowFieldVal]] = None,
+  ):
+    """Computes the local heating rate due to radiative transfer.
+
+    The optical properties of the layered atmosphere are computed using RRTMGP
+    and the two-stream radiative transfer equation is solved for the net fluxes
+    at the atmospheric grid cell faces. Based on the overall net radiative flux
+    of the grid cell, a local heating rate is determined.
+
+    Args:
+      replica_id: The index of the current TPU replica.
+      replicas: A numpy array that maps grid coordinates to replica id numbers.
+      states: A dictionary that holds all flow field variables and must include
+        the total specific humidity (`q_t`).
+      additional_states: A dictionary that holds all helper variables and must
+        include temperatue (`T`).
+      sfc_temperature: The optional surface temperature [K] represented as
+        either a 3D field having a single vertical dimension or as a scalar.
+      upper_atmosphere_states: An optional dictionary containing all the
+        required states for computing radiative transfer in the extended grid
+        above the simulation domain. These states will typically come directly
+        from a single column of a global circulation model (GCM) in equilibrium.
+
+    Returns:
+      A dictionary containing the following entries:
+      'rad_heat_src' -> The heating rate due to radiative transfer, in K/s.
+      'rad_flux_lw' -> The net longwave radiative flux in the upper atmosphere,
+        in W/m².
+      'rad_flux_sw' -> The net shortwave radiative flux in the upper atmosphere,
+        W/m².
+      'rad_flux_lw_clear' -> The net longwave radiative flux in the upper
+        atmosphere with cloud effects removed, in W/m².
+      'rad_flux_sw_clear' -> The net shortwave radiative flux in the upper
+        atmosphere with cloud effects removed, in W/m².
+    """
+    primary_grid_states = self._prepare_states(states, additional_states)
+    extended_grid_states = None
+    if upper_atmosphere_states is not None:
+      state_keys = ('rho', 'q_t')
+      additional_state_keys = [
+          k
+          for k in (self._vertical_coord_name, 'T', 'p_ref')
+          if k in additional_states
+      ]
+      states_ext = {k: upper_atmosphere_states[k] for k in state_keys}
+      additional_states_ext = {
+          k: upper_atmosphere_states[k] for k in additional_state_keys
+      }
+      extended_grid_states = self._prepare_states(
+          states_ext, additional_states_ext
+      )
 
     lw_fluxes = self._two_stream_solver.solve_lw(
         replica_id,
         replicas,
-        pressure,
-        additional_states['T'],
-        molecules_per_area,
-        vmr_fields=vmr_fields,
+        **primary_grid_states,
         sfc_temperature=sfc_temperature,
-        cloud_r_eff_liq=cloud_r_eff_liq,
-        cloud_path_liq=lwp,
-        cloud_r_eff_ice=cloud_r_eff_ice,
-        cloud_path_ice=iwp,
+        extended_grid_states=extended_grid_states,
     )
     sw_fluxes = self._two_stream_solver.solve_sw(
         replica_id,
         replicas,
-        pressure,
-        additional_states['T'],
-        molecules_per_area,
-        vmr_fields=vmr_fields,
-        cloud_r_eff_liq=cloud_r_eff_liq,
-        cloud_path_liq=lwp,
-        cloud_r_eff_ice=cloud_r_eff_ice,
-        cloud_path_ice=iwp,
+        **primary_grid_states,
+        extended_grid_states=extended_grid_states,
     )
     flux_net = tf.nest.map_structure(
         tf.math.add, lw_fluxes['flux_net'], sw_fluxes['flux_net']
     )
-    return self._two_stream_solver.compute_heating_rate(flux_net, pressure)
+    # Heating rate in (K / s).
+    heating_rate = self._two_stream_solver.compute_heating_rate(
+        flux_net, primary_grid_states['pressure']
+    )
+    output = {
+        rrtmgp_common.KEY_STORED_RADIATION: heating_rate
+    }
+    flux_keys = [
+        rrtmgp_common.KEY_RADIATIVE_FLUX_LW,
+        rrtmgp_common.KEY_RADIATIVE_FLUX_SW,
+        rrtmgp_common.KEY_RADIATIVE_FLUX_LW_CLEAR,
+        rrtmgp_common.KEY_RADIATIVE_FLUX_SW_CLEAR,
+    ]
+    required_flux_keys = [k for k in flux_keys if k in additional_states]
+
+    if not required_flux_keys:
+      return output
+
+    # Construct input states with cloud properties removed in case clear sky
+    # fluxes are requested.
+    primary_grid_states_clr = self._clear_sky_states(primary_grid_states)
+    extended_grid_states_clr = None
+    if upper_atmosphere_states is not None:
+      extended_grid_states_clr = self._clear_sky_states(extended_grid_states)
+
+    # Get net fluxes (upwelling - downwelling) from the upper atmosphere. If an
+    # extended grid is present, that is where the net fluxes should come from.
+    flux_net_key = (
+        f'{EXTENDED_GRID_KEY}_flux_net'
+        if upper_atmosphere_states is not None
+        else 'flux_net'
+    )
+    for k in required_flux_keys:
+      if k == rrtmgp_common.KEY_RADIATIVE_FLUX_LW:
+        output[k] = lw_fluxes[flux_net_key]
+      elif k == rrtmgp_common.KEY_RADIATIVE_FLUX_SW:
+        output[k] = sw_fluxes[flux_net_key]
+      # Compute clear sky fluxes by removing all cloud water and executing a
+      # second pass of the two-stream solver.
+      elif k == rrtmgp_common.KEY_RADIATIVE_FLUX_LW_CLEAR:
+        lw_fluxes_clear = self._two_stream_solver.solve_lw(
+            replica_id,
+            replicas,
+            **primary_grid_states_clr,
+            sfc_temperature=sfc_temperature,
+            extended_grid_states=extended_grid_states_clr,
+        )
+        output[k] = lw_fluxes_clear[flux_net_key]
+      elif k == rrtmgp_common.KEY_RADIATIVE_FLUX_SW_CLEAR:
+        sw_fluxes_clear = self._two_stream_solver.solve_sw(
+            replica_id,
+            replicas,
+            **primary_grid_states_clr,
+            extended_grid_states=extended_grid_states_clr,
+        )
+        output[k] = sw_fluxes_clear[flux_net_key]
+      else:
+        raise ValueError(f'Unknown RRTMGP flux key: {k}')
+
+    return output

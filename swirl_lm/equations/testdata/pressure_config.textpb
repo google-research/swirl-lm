@@ -1,6 +1,10 @@
 # proto-file: swirl_lm/base/parameters.proto
 # proto-message: SwirlLMParameters
 
+solver_procedure: VARIABLE_DENSITY
+convection_scheme: CONVECTION_SCHEME_QUICK
+time_integration_scheme: TIME_SCHEME_CN_EXPLICIT_ITERATION
+use_3d_tf_tensor: true
 gravity_direction {
   dim_0: 0.0 dim_1: 0.0 dim_2: -1.0
 }

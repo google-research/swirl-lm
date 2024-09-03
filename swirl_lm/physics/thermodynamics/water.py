@@ -525,6 +525,8 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       The reference density as a function of height.
     """
     if additional_states is not None:
+      if 'rho_ref' in additional_states:
+        return additional_states['rho_ref']
       if 'q_t_init' in additional_states:
         q_t = additional_states['q_t_init']
       elif ('q_c_init' in additional_states and
@@ -918,7 +920,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       temperature: FlowFieldVal,
       rho: FlowFieldVal,
       q_tot: FlowFieldVal,
-  ) -> Sequence[FlowFieldVal]:
+  ) -> tuple[FlowFieldVal, FlowFieldVal]:
     """Partitions the water phases in equilibrium.
 
     Args:

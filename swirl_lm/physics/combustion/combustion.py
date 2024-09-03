@@ -288,6 +288,17 @@ def ignition_with_hot_kernel(
               for vel in ('u', 'v', 'w')
           }
       )
+      # Remove moisture from the region of the ignition kernel assuming
+      # instantaneous ignition. This prevents the unphysical heat sink provided
+      # by instantaneous evaporation of the moisture.
+      if 'rho_m' in output:
+        output['rho_m'] = tf.nest.map_structure(
+            lambda rho_m, ignition_kernel: tf.where(
+                tf.greater(ignition_kernel, 0), tf.zeros_like(rho_m), rho_m
+            ),
+            additional_states['rho_m'],
+            additional_states['ignition_kernel'],
+        )
 
     return output
 

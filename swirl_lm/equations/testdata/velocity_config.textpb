@@ -1,9 +1,9 @@
-periodic {
-  dim_0: false
-  dim_1: false
-  dim_2: false
-}
+# proto-file: swirl_lm/base/parameters.proto
+# proto-message: SwirlLMParameters
+
+solver_procedure: VARIABLE_DENSITY
 time_integration_scheme: TIME_SCHEME_CN_EXPLICIT_ITERATION
+use_3d_tf_tensor: true
 kinematic_viscosity: 1e-5
 density: 1.0
 thermodynamics { constant_density {} }

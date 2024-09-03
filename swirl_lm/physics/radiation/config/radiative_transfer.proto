@@ -79,4 +79,16 @@ message RadiativeTransfer {
   // long an update cycle can lead to instabilities (Pauluis and Emanuel 2004,
   // https://doi.org/10.1175/1520-0493(2004)132<0673:NIRFIC>2.0.CO;2).
   optional float update_cycle_seconds = 3 [default = 600.0];
+  // Supercycling time interval between applying the radiative transfer model in
+  // the energy equation (in seconds). When it is applied, its amplitude will be
+  // scaled larger appropriately. This option exists because the radiation
+  // update in the temperature equation can be too small relative to the
+  // existing temperature and be lost to floating point truncation in single
+  // precision. In practice, the supercycling time interval should be less
+  // than or equal to `update_cycle_seconds`. Furthermore, the supercycling time
+  // interval should be as small as possible, but large enough such that
+  // floating point precision is not an issue. If this field is left empty, or
+  // set to 0, we do no supercycling and apply the radiative heating at every
+  // step.
+  optional float apply_cadence_seconds = 4;
 }

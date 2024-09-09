@@ -4,8 +4,33 @@
 solver_procedure: SEQUENTIAL
 convection_scheme: CONVECTION_SCHEME_UPWIND_1
 time_integration_scheme: TIME_SCHEME_RK3
-periodic {
-  dim_0: false dim_1: false dim_2: false
+use_3d_tf_tensor: true
+grid_params {
+  computation_shape {
+    dim_0: 2
+    dim_1: 2
+    dim_2: 2
+  }
+  length {
+    dim_0: 8
+    dim_1: 8
+    dim_2: 8
+  }
+  grid_size {
+    dim_0: 256
+    dim_1: 256
+    dim_2: 256
+  }
+  periodic {
+    dim_0: false
+    dim_1: false
+    dim_2: false
+}
+  halo_width: 1
+  dt: 0.00003
+  kernel_size: 128
+  input_chunk_size: 128
+  num_output_splits: 1
 }
 scalars {
   name: "Y1" diffusivity: 1e-6 density: 1.0 }

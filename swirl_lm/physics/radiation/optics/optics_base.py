@@ -172,7 +172,7 @@ class OpticsScheme(metaclass=abc.ABCMeta):
 
   @property
   @abc.abstractmethod
-  def solar_fraction_by_gpt(self) -> Sequence[float]:
+  def solar_fraction_by_gpt(self) -> tf.Tensor:
     """Mapping from g-point to the fraction of total solar radiation."""
 
   def _exchange_halos(

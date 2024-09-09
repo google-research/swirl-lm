@@ -21,6 +21,7 @@ from swirl_lm.equations import utils as eq_utils
 from swirl_lm.equations.source_function import scalar_generic
 from swirl_lm.physics.atmosphere import cloud
 from swirl_lm.physics.atmosphere import microphysics_utils
+from swirl_lm.physics.radiation import rrtmgp_common
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import water
 from swirl_lm.utility import get_kernel_fn
@@ -92,12 +93,11 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
         )
         microphysics_model_params = (
             microphysics_utils.get_model_params_from_proto(
-                self._scalar_params.potential_temperature)
-        )
-        self._microphysics = (
-            microphysics_utils.select_microphysics(
-                microphysics_model_params, self._params, self._thermodynamics
+                self._scalar_params.potential_temperature
             )
+        )
+        self._microphysics = microphysics_utils.select_microphysics(
+            microphysics_model_params, self._params, self._thermodynamics
         )
 
   def _get_thermodynamic_variables(
@@ -138,11 +138,19 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
     if 'q_c' in states and 'theta' in states:
       temperature = (
           self._thermodynamics.model.potential_temperature_to_temperature(
-              'theta', states['theta'], q_t, states['q_c'],
-              tf.nest.map_structure(tf.zeros_like, phi), zz, additional_states))
+              'theta',
+              states['theta'],
+              q_t,
+              states['q_c'],
+              tf.nest.map_structure(tf.zeros_like, phi),
+              zz,
+              additional_states,
+          )
+      )
     else:
       temperature = self._thermodynamics.model.saturation_adjustment(
-          self._scalar_name, phi, rho_thermal, q_t, zz, additional_states)
+          self._scalar_name, phi, rho_thermal, q_t, zz, additional_states
+      )
     thermo_states.update({'T': temperature})
 
     # Compute the potential temperature.
@@ -230,11 +238,12 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
           ' in the potential temperature equation.'
       )
       if self._params.radiative_transfer is not None:
-        assert 'rad_heat_src' in additional_states, (
-            'The radiative transfer library requires `rad_heat_src` as an'
-            ' additional state.'
-        )
-        radiative_heating_rate = additional_states['rad_heat_src']
+        # Access the temperature tendency due to radiation, in K/s.
+        radiative_heating_rate = additional_states[
+            rrtmgp_common.KEY_APPLIED_RADIATION
+        ]
+
+        # Convert to potential temperature tendency due to radiation, in K/s.
         q_t = thermo_states['q_t']
         exner_inv = self._thermodynamics.model.exner_inverse(
             states['rho_thermal'],
@@ -243,13 +252,23 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
             thermo_states['zz'],
             additional_states,
         )
-        source = tf.nest.map_structure(
+        radiative_heating_rate_theta = tf.nest.map_structure(
             tf.math.multiply, radiative_heating_rate, exner_inv
         )
-      # Default to a simplified radiation model that captures only longwave
-      # radiative fluxes as a function of height and liquid water content
-      # (Stevens et al. 2005, https://doi.org/10.1175/MWR2930.1).
+
+        # The scalar equation is implemented in the form
+        #     d/dt(rho*theta_li) = ... + source
+        # Therefore, the units of the source term must be (kg/m^3) * K/s. Hence
+        # we must multiply the potential temperature tendency by the density.
+        source = tf.nest.map_structure(
+            tf.math.multiply,
+            radiative_heating_rate_theta,
+            states[common.KEY_RHO],
+        )
       else:
+        # Default to a simplified radiation model that captures only longwave
+        # radiative fluxes as a function of height and liquid water content
+        # (Stevens et al. 2005, https://doi.org/10.1175/MWR2930.1).
         assert (
             self._g_dim is not None
         ), 'Gravity dimension must be 0, 1, or 2, but it is None.'

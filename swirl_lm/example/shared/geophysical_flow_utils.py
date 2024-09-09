@@ -29,8 +29,19 @@ V_SEED = 64567
 W_SEED = 93097
 
 
+def generate_local_seed(
+    seed: int,
+    logical_coordinates: initializer.ThreeIntTuple,
+) -> tuple[int, int]:
+  """Generates a local random seed based on replica coordinate."""
+  coord = tf.convert_to_tensor(logical_coordinates, dtype=tf.int32)
+  return tf.bitcast(
+      tf.reshape(tf.fingerprint([coord + seed]), (-1, 4)), tf.int32
+  )
+
+
 def perturbed_constant_init_fn(
-    seed: Tuple[int, int],
+    seed: int,
     mean: float,
     g_dim: int,
     local_grid_no_halos: Tuple[int, int, int],
@@ -68,10 +79,7 @@ def perturbed_constant_init_fn(
 
     # We want to make sure different cores are seeded differently, so here we
     # incorporate the core cooridinates signature as part of the seed.
-    seed_base = 702626207
-    local_seed = (int.from_bytes(
-        bytes('{}-{}-{}-{}'.format(coord[0], coord[1], coord[2], seed[0]),
-              'utf-8'), 'big') % seed_base, seed[1])
+    local_seed = generate_local_seed(seed, coord)
     pert_val = tf.random.stateless_normal(
         local_grid_no_halos, local_seed, stddev=rms,
         dtype=mean_val.dtype) + mean_val

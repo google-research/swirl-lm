@@ -35,6 +35,11 @@ GRID_PBTXT = """
     dim_1: 128
     dim_2: 6
   }
+  periodic {
+    dim_0: false
+    dim_1: false
+    dim_2: true
+  }
   # The width of the ghost cells on each side of the domain. It is set to 2
   # considering the stencil width of the QUICK scheme.
   halo_width: 2
@@ -57,11 +62,6 @@ SIM_PBTXT = """
   enable_rhie_chow_correction: true
   enable_scalar_recorrection: true
   num_sub_iterations: 10
-  periodic {
-    dim_0: false
-    dim_1: false
-    dim_2: true
-  }
   pressure {
     solver {
       jacobi {

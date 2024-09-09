@@ -28,11 +28,12 @@
 """Utility library for solving the radiative transfer equation (RTE)."""
 
 import inspect
-from typing import Callable, List, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Literal
 
 import numpy as np
 from swirl_lm.communication import halo_exchange
 from swirl_lm.utility import common_ops
+from swirl_lm.utility import grid_extension
 from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import types
 import tensorflow as tf
@@ -41,6 +42,10 @@ import tensorflow as tf
 FlowFieldVal = types.FlowFieldVal
 FlowFieldMap = types.FlowFieldMap
 
+X0_KEY = 'x0'
+PRIMARY_GRID_KEY = 'primary'
+EXTENDED_GRID_KEY = 'extended'
+
 
 class RTEUtils:
   """A library for distributing radiative transfer computations on TPU's.
@@ -48,6 +53,8 @@ class RTEUtils:
   Attributes:
     params: An instance of `GridParametrization` containing the grid dimensions
     and information about the TPU computational topology.
+    grid_extension_lib: An instance of `GridExtension`, a library for
+      facilitating TPU communication when an extended grid is present.
     num_cores: A 3-tuple containing the number of cores assigned to each
       dimension.
     grid_size: The local grid dimensions per core.
@@ -57,8 +64,10 @@ class RTEUtils:
   def __init__(
       self,
       params: grid_parametrization.GridParametrization,
+      grid_extension_lib: Optional[grid_extension.GridExtension] = None,
   ):
     self.params = params
+    self.grid_extension_lib = grid_extension_lib
     self.num_cores = (params.cx, params.cy, params.cz)
     self.grid_size = (params.nx, params.ny, params.nz)
     self.halos = params.halo_width
@@ -188,7 +197,7 @@ class RTEUtils:
       any field in `variables` that is not `x0`. 2) the 2D output of the last
       recurrent transformation.
     """
-    x = variables['x0']
+    x = variables[X0_KEY]
 
     for i in range(n):
       prev_idx = i - 1
@@ -196,10 +205,10 @@ class RTEUtils:
       plane_args = {
           k: common_ops.slice_field(v, dim, slice_idx, size=1)
           for k, v in variables.items()
-          if k != 'x0'
+          if k != X0_KEY
       }
       prev_slice_idx = prev_idx if forward else -prev_idx - 1
-      plane_args['x0'] = (
+      plane_args[X0_KEY] = (
           x
           if i == 0
           else common_ops.slice_field(x, dim, prev_slice_idx, size=1)
@@ -262,13 +271,13 @@ class RTEUtils:
     kwargs = {
         k: common_ops.strip_halos(v, halos)
         for k, v in variables.items()
-        if k != 'x0'
+        if k != X0_KEY
     }
-    kwargs['x0'] = variables['x0']
+    kwargs[X0_KEY] = variables[X0_KEY]
 
     def local_fn(x0: FlowFieldVal) -> Tuple[FlowFieldVal, FlowFieldVal]:
       """Generates the output of a cumulative operation and its last layer."""
-      kwargs['x0'] = x0
+      kwargs[X0_KEY] = x0
       return self._local_recurrent_op(recurrent_fn, kwargs, dim, n, forward)
 
     def communicate_fn(x):
@@ -282,7 +291,7 @@ class RTEUtils:
     # for the first level of the computational topology. All the subsequent
     # levels will need to wait for the output from the previous level before
     # evaluating their local function.
-    x_cum, x_out = local_fn(x0=variables['x0'])
+    x_cum, x_out = local_fn(x0=variables[X0_KEY])
 
     pair_groups = self._generate_adjacent_pair_assignments(
         replicas, dim, forward
@@ -306,6 +315,73 @@ class RTEUtils:
     # Pad the result with halo layers.
     return self._pad(x_cum, self.halos, self.halos, dim)
 
+  def _exchange_halos(
+      self,
+      replica_id: tf.Tensor,
+      replicas: np.ndarray,
+      f: FlowFieldVal,
+      x0: FlowFieldVal,
+      dim: int,
+      x0_face: Literal[0, 1],
+  ) -> FlowFieldVal:
+    """Exchanges halos along the specified dimension."""
+    bc = [[(halo_exchange.BCType.NEUMANN, 0.0)] * 2 for _ in range(3)]
+    # Set the boundary plane that initiates the recurrent operation as the
+    # boundary values.
+    bc[dim][x0_face] = (
+        halo_exchange.BCType.DIRICHLET,
+        [x0] * self.halos,
+    )
+    return halo_exchange.inplace_halo_exchange(
+        f,
+        (0, 1, 2),
+        replica_id,
+        replicas,
+        (0, 1, 2),
+        (False, False, False),
+        boundary_conditions=bc,
+        width=self.halos,
+    )
+
+  def _exchange_halos_with_ext_grid(
+      self,
+      replica_id: tf.Tensor,
+      replicas: np.ndarray,
+      f: FlowFieldVal,
+      f_ext: FlowFieldVal,
+      x0: FlowFieldVal,
+      dim: int,
+      x0_face: Literal[0, 1],
+  ) -> Tuple[FlowFieldVal, FlowFieldVal]:
+    """Exchanges halos consistently with the extended computational grid."""
+    assert self.grid_extension_lib is not None, (
+        'An instance of `GridExtension` is required for handling'
+        ' `extended_grid_variables`.'
+    )
+
+    neumann_bc = [[(halo_exchange.BCType.NEUMANN, 0.0)] * 2 for _ in range(3)]
+    bc_with_boundary_val = [
+        [(halo_exchange.BCType.NEUMANN, 0.0)] * 2 for _ in range(3)
+    ]
+    # Set the plane that initiates the recurrent operation as boundary value.
+    bc_with_boundary_val[dim][x0_face] = (
+        halo_exchange.BCType.DIRICHLET,
+        [x0] * self.halos,
+    )
+    # The boundary value stays with the logical grid that initiates the
+    # recurrence: the primary grid if `forward` is `True` and the extended grid
+    # otherwise.
+    bc_primary = bc_with_boundary_val if x0_face == 0 else neumann_bc
+    bc_extended = neumann_bc if x0_face == 0 else bc_with_boundary_val
+    return self.grid_extension_lib.exchange_halos_with_extended_grid(
+        replica_id,
+        replicas,
+        f,
+        f_ext,
+        bc_primary,
+        bc_extended,
+    )
+
   def cumulative_recurrent_op(
       self,
       replica_id: tf.Tensor,
@@ -314,11 +390,12 @@ class RTEUtils:
       variables: FlowFieldMap,
       dim: int,
       forward: bool = True,
-  ) -> FlowFieldVal:
+      extended_grid_variables: Optional[FlowFieldMap] = None,
+  ) -> Dict[str, FlowFieldVal]:
     """Applies a recurrent operation globally along a specified dimension.
 
     This global operation is sequential and will process each layer along `dim`
-    at a time in increase order if `forward` is `True` and in decreasing order
+    at a time in ascending order if `forward` is `True` and in descending order
     otherwise. As a consequence, if there are multiple TPU cores assigned to
     dimension `dim` in the computational topology some cores will experience
     idleness as they wait for previous layers residing in other cores to be
@@ -338,40 +415,81 @@ class RTEUtils:
         coefficients. If set to False, then the recurrence relation unravels
         from the last layer to the first as follows:
         x[i] = recurrent_fn({'x0': x[i + 1], ...})
+      extended_grid_variables: An optional dictionary of state variables for the
+        extended grid above the simulation domain. This will be used instead of
+        `variables` when the recurrence unrolling reaches the extended domain.
 
     Returns:
-      A 3D variable with the cumulative output from the chain of recurrent
-      transformations having the same structure and shape as any field in
-      `variables` that is not `x0` and having `x0` as the boundary value at the
-      face that initiates the recurrence.
+      If `extended_grid_variables` is not provided:
+        A dictionary containing a single entry ('primary') for the 3D field with
+        the cumulative output from the chain of recurrent transformations having
+        the same structure and shape as any field in `variables` that is not
+        `x0`, and having `x0` as the boundary value at the face that initiates
+        the recurrence.
+      If `extended_grid_variables` is provided:
+        A dictionary with one 3D field for the primary grid, with key 'primary',
+        and one for the extended grid, with key 'extended'.
     """
-    val = self._cumulative_recurrent_op_sequential(
-        replica_id, replicas, recurrent_fn, variables, dim, forward
-    )
-    x0 = variables['x0']
-
+    # Store the initial plane to be used as the boundary value when updating
+    # halos.
+    x0 = variables[X0_KEY]
+    # Face that initiates the recurrence.
+    x0_face = 0 if forward else 1
     # If the boundary condition is set along the list dimension, the halo
     # exchange expects the boundary plane represented as a 2D tensor. Otherwise,
-    # if set along one of the tensor dimensions, a list of thin tensors of
-    # dimension (1, ny) or (nx, 1) is expected.
-    if isinstance(x0, Sequence) and dim == 2:
+    # a list of thin tensors of dimension (1, ny) or (nx, 1) is expected.
+    if not isinstance(x0, tf.Tensor) and dim == 2:
       x0 = x0[0]
 
-    face = 0 if forward else 1
-    bc = [[(halo_exchange.BCType.NEUMANN, 0.0)] * 2 for _ in range(3)]
-    # Set the boundary plane that initiates the recurrent operation above as the
-    # halo values.
-    bc[dim][face] = (
-        halo_exchange.BCType.DIRICHLET,
-        [x0] * self.halos,
+    def single_grid_op(variables):
+      """Calls the recurrent operation for a single grid."""
+      return self._cumulative_recurrent_op_sequential(
+          replica_id, replicas, recurrent_fn, variables, dim, forward
+      )
+
+    if extended_grid_variables is None:
+      val = single_grid_op(variables)
+      return {
+          'primary': self._exchange_halos(
+              replica_id, replicas, val, x0, dim, x0_face
+          )
+      }
+
+    assert self.grid_extension_lib is not None, (
+        'An instance of `GridExtension` is required for handling'
+        ' `extended_grid_variables`.'
     )
-    return halo_exchange.inplace_halo_exchange(
-        val,
-        (0, 1, 2),
-        replica_id,
-        replicas,
-        (0, 1, 2),
-        (False, False, False),
-        boundary_conditions=bc,
-        width=self.halos,
+
+    # Swap the order of execution if the propagation is not forward.
+    ordered_vars = [variables, extended_grid_variables]
+    if not forward:
+      ordered_vars.reverse()
+
+    first_output = single_grid_op(ordered_vars[0])
+    # The last output of the first grid becomes the initiating plane of the
+    # second recurrent operation.
+    second_vars = dict(ordered_vars[1])
+    if self.num_cores[dim] == 1:
+      last_plane_idx = -self.halos - 1 if forward else self.halos
+      last_plane = common_ops.slice_field(
+          first_output, dim, last_plane_idx, size=1
+      )
+    else:
+      last_plane = self.grid_extension_lib.get_layer_across_interface(
+          replica_id, replicas, first_output, first_output, layer_idx=self.halos
+      )
+    second_vars[X0_KEY] = last_plane
+    second_output = single_grid_op(second_vars)
+    outputs = [first_output, second_output]
+    # Revert to natural order of logical grids, where the extended grid is
+    # always above the primary grid.
+    if not forward:
+      outputs.reverse()
+
+    outputs = self._exchange_halos_with_ext_grid(
+        replica_id, replicas, *outputs, x0, dim, x0_face,
     )
+    return {
+        PRIMARY_GRID_KEY: outputs[0],
+        EXTENDED_GRID_KEY: outputs[1],
+    }

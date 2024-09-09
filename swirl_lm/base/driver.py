@@ -28,7 +28,9 @@ from swirl_lm.base import target_flag  # pylint: disable=unused-import
 from swirl_lm.boundary_condition import nonreflecting_boundary
 from swirl_lm.core import simulation
 from swirl_lm.linalg import poisson_solver
+from swirl_lm.physics.radiation import rrtmgp_common
 from swirl_lm.utility import common_ops
+from swirl_lm.utility import debug_output
 from swirl_lm.utility import stretched_grid
 from swirl_lm.utility import text_util
 from swirl_lm.utility import tpu_util
@@ -103,6 +105,7 @@ S = TypeVar('S')
 
 class _NonRecoverableError(Exception):
   """Errors that cannot be recovered from via restarts, e.g., config issues."""
+
   pass
 
 
@@ -117,7 +120,7 @@ def _stateless_update_if_present(
 
 def _local_state(
     strategy: tf.distribute.Strategy,
-    distributed_state: tf.distribute.DistributedValues,
+    distributed_state: Dict[str, tf.distribute.DistributedValues],
 ) -> Tuple[Structure]:
   return strategy.experimental_local_results(distributed_state)
 
@@ -179,6 +182,9 @@ def _get_state_keys(params: parameters_lib.SwirlLMParameters):
   additional_keys.extend(stretched_grid_additional_keys)
   helper_var_keys.extend(stretched_grid_helper_var_keys)
 
+  # Add additional keys required by the radiative transfer library.
+  additional_keys += rrtmgp_common.required_keys(params.radiative_transfer)
+
   # Check to make sure we don't have keys duplicating / overwriting each other.
   if len(set(essential_keys)) + len(set(additional_keys)) + len(
       set(helper_var_keys)
@@ -234,8 +240,9 @@ def _init_fn(
       # entries corresponding to that step with the computed values. The
       # tensor will be written to disk together with the rest of the state
       # at the end of each cycle.
-      states[_MAX_UVW_CFL] = tf.zeros((params.num_steps, 4),
-                                      dtype=types.TF_DTYPE)
+      states[_MAX_UVW_CFL] = tf.zeros(
+          (params.num_steps, 4), dtype=types.TF_DTYPE
+      )
 
     # Apply the user defined `init_fn` in the end to allow it to override
     # default initializations.
@@ -317,8 +324,9 @@ def _update_additional_states(
   for varname in updated_additional_states:
     if not varname.startswith('src_'):
       continue
-    zeros = tf.nest.map_structure(tf.zeros_like,
-                                  updated_additional_states[varname])
+    zeros = tf.nest.map_structure(
+        tf.zeros_like, updated_additional_states[varname]
+    )
     updated_additional_states[varname] = zeros
 
   # Update BC additional states. Note currently this is only done
@@ -447,12 +455,17 @@ def _one_cycle(
   essential_keys, additional_keys, helper_var_keys = _get_state_keys(params)
 
   init_state_keys = set(init_state.keys())
-  keys_declared_in_params = (set(essential_keys) | set(additional_keys) |
-                             set(helper_var_keys))
-  logging.info('Keys in init_state but not in params: %s',
-               sorted(init_state_keys - keys_declared_in_params))
-  logging.info('Keys in params but not in init_state: %s',
-               sorted(keys_declared_in_params - init_state_keys))
+  keys_declared_in_params = (
+      set(essential_keys) | set(additional_keys) | set(helper_var_keys)
+  )
+  logging.info(
+      'Keys in init_state but not in params: %s',
+      sorted(init_state_keys - keys_declared_in_params),
+  )
+  logging.info(
+      'Keys in params but not in init_state: %s',
+      sorted(keys_declared_in_params - init_state_keys),
+  )
 
   computation_shape = np.array([params.cx, params.cy, params.cz])
   logical_replicas = np.arange(
@@ -634,8 +647,10 @@ def get_init_state(
   replica_values = state['replica_id'].values
   logging.info('State initialized. Replicas are : %s', str(replica_values))
   t_post_init = time.time()
-  logging.info('Initialization stage took %s.',
-               text_util.seconds_to_string(t_post_init - t_start))
+  logging.info(
+      'Initialization stage took %s.',
+      text_util.seconds_to_string(t_post_init - t_start),
+  )
 
   return state
 
@@ -698,6 +713,7 @@ def solver(
     as a checkpoint.
 
   Categories of tensors in `state`:
+
     The tensors in `state` consist of 3 categories, which `driver._one_cycle()`
     treats differently. There are `essential_keys`, `additional_keys`, and
     `helper_var_keys`.  Tensors corresponding to `essential_keys` and
@@ -737,8 +753,8 @@ def solver(
   Args:
     customized_init_fn: The function that initializes the flow field. The
       function needs to be replica dependent.
-    params: An instance of parameters that will be used in the simulation,
-      e.g. the mesh size, fluid properties.
+    params: An instance of parameters that will be used in the simulation, e.g.
+      the mesh size, fluid properties.
 
   Returns:
     A tuple of the final state on each replica.
@@ -746,15 +762,21 @@ def solver(
   try:
     if params is None:
       params = parameters_lib.params_from_config_file_flag()
+    params.save_to_file(FLAGS.data_dump_prefix)
+
     # Initialize the TPU.
     strategy, logical_coordinates = get_strategy_and_coordinates(params)
-    init_state = get_init_state(customized_init_fn, strategy, params,
-                                logical_coordinates)
+    init_state = get_init_state(
+        customized_init_fn, strategy, params, logical_coordinates
+    )
+    debug_output.initialize(params, strategy)
     return solver_loop(strategy, logical_coordinates, init_state, params)
   except _NonRecoverableError:
-    logging.exception('Non-recoverable error in solve - returning None '
-                      'instead of raising an exception to avoid automatic '
-                      'restarts.')
+    logging.exception(
+        'Non-recoverable error in solve - returning None '
+        'instead of raising an exception to avoid automatic '
+        'restarts.'
+    )
 
 
 def solver_loop(
@@ -764,9 +786,6 @@ def solver_loop(
     params: Union[parameters_lib.SwirlLMParameters, Any],
 ):
   """Runs the solver on an initialized TPU system starting with `init_state`."""
-  # Obtain params either from the provided input or the flags.
-  params.save_to_file(FLAGS.data_dump_prefix)
-
   logging.info('Entering solver_loop.')
   t_pre_restore = time.time()
 
@@ -838,13 +857,14 @@ def solver_loop(
     return tf.constant(step_id.numpy(), tf.int32)
 
   def write_state_and_sync(
-      state: Tuple[Structure],
+      state: Dict[str, tf.distribute.DistributedValues],
       step_id: Array,
       data_dump_filter: Optional[Sequence[str]] = None,
   ):
+    write_state = dict(state) | debug_output.get_vars(strategy, state.keys())
     write_status = driver_tpu.distributed_write_state(
         strategy,
-        state,
+        _local_state(strategy, write_state),
         logical_coordinates=logical_coordinates,
         output_dir=output_dir,
         filename_prefix=filename_prefix,
@@ -926,9 +946,7 @@ def solver_loop(
 
   if write_initial_state:
     logging.info('Starting `write_state` for the initial state.')
-    write_status = write_state_and_sync(
-        state=_local_state(strategy, state), step_id=step_id_value()
-    )
+    write_status = write_state_and_sync(state=state, step_id=step_id_value())
     logging.info(
         '`restoring-checkpoint-if-necessary` stage '
         'done with writing initial steps. Write status are: %s',
@@ -940,8 +958,10 @@ def solver_loop(
     ckpt_manager.save()
 
   t_post_restore = time.time()
-  logging.info('restore-if-necessary-or-write took %s.',
-               text_util.seconds_to_string(t_post_restore - t_pre_restore))
+  logging.info(
+      'restore-if-necessary-or-write took %s.',
+      text_util.seconds_to_string(t_post_restore - t_pre_restore),
+  )
 
   if params.num_steps < 0:
     raise _NonRecoverableError(
@@ -997,8 +1017,10 @@ def solver_loop(
     if SAVE_MAX_UVW_AND_CFL.value:
       # CFL number is guaranteed to be identical for all replicas, so take
       # replica 0 value.
-      cfl_values = params.dt * _local_state(
-          strategy, state[_MAX_UVW_CFL])[0].numpy()[:, 3]
+      cfl_values = (
+          params.dt
+          * _local_state(strategy, state[_MAX_UVW_CFL])[0].numpy()[:, 3]
+      )
       max_cfl_number_from_cycle = tf.reduce_max(cfl_values)
       cfl_number_from_last_step = cfl_values[completed_steps - 1]
       logging.info(
@@ -1007,6 +1029,11 @@ def solver_loop(
           max_cfl_number_from_cycle,
           cfl_number_from_last_step,
       )
+
+    # If we just attempted the first cycle, log information about available
+    # debug variables to help with debugging.
+    if cycle == 0:
+      debug_output.log_variable_use()
 
     # Check if we did not complete a full cycle.
     if completed_steps < params.num_steps:
@@ -1017,9 +1044,7 @@ def solver_loop(
           step_id_value() + 1,
           step_id_value(),
       )
-      write_status = write_state_and_sync(
-          _local_state(strategy, state), step_id=step_id_value()
-      )
+      write_status = write_state_and_sync(state, step_id=step_id_value())
       logging.info(
           'Dumping full state done. Write status are: %s', write_status
       )
@@ -1039,13 +1064,10 @@ def solver_loop(
       )
 
     replica_id_values = []
-    for i in range(num_replicas):
-      replica_id_values.append(
-          _local_state(strategy, state)[i]['replica_id'].numpy()
-      )
+    replica_id_values.extend(_local_state(strategy, state['replica_id']))
     logging.info(
         'One cycle computation is done. Replicas are: %s',
-        str(replica_id_values),
+        str([v.numpy() for v in replica_id_values]),
     )
     t1 = time.time()
     # "Recover" float64 precision for dt by rounding the 32 bit value to 6
@@ -1057,8 +1079,9 @@ def solver_loop(
         'Took %s for the last cycle (%d steps).',
         step_id_value(),
         cycle + 1,
-        text_util.seconds_to_string(int(step_id_value()) * dt64,
-                                    precision=dt64),
+        text_util.seconds_to_string(
+            int(step_id_value()) * dt64, precision=dt64
+        ),
         text_util.seconds_to_string(t1 - t0),
         params.num_steps,
     )
@@ -1067,9 +1090,7 @@ def solver_loop(
     # is a multiple of the checkpoint interval, else just record, a possibly
     # shortened version of the current state.
     if (step_id_value() - params.start_step) % checkpoint_interval == 0:
-      write_status = write_state_and_sync(
-          _local_state(strategy, state), step_id=step_id_value()
-      )
+      write_status = write_state_and_sync(state=state, step_id=step_id_value())
       logging.info(
           '`Post cycle writing full state done. Write status are: %s',
           write_status,
@@ -1080,9 +1101,10 @@ def solver_loop(
       ckpt_manager.save()
     else:
       # Note, the first time this is called retracing will occur for the
-      # subgraphs in `distribted_write_state` if data_dump_filter is not `None`.
+      # subgraphs in `distributed_write_state` if data_dump_filter is not
+      # `None`.
       write_status = write_state_and_sync(
-          _local_state(strategy, state),
+          state=state,
           step_id=step_id_value(),
           data_dump_filter=data_dump_filter,
       )
@@ -1091,8 +1113,10 @@ def solver_loop(
           write_status,
       )
     t2 = time.time()
-    logging.info('Writing output & checkpoint took %s.',
-                 text_util.seconds_to_string(t2 - t1))
+    logging.info(
+        'Writing output & checkpoint took %s.',
+        text_util.seconds_to_string(t2 - t1),
+    )
 
   # Wait for checkpoint manager before marking completion.
   ckpt_manager.sync()

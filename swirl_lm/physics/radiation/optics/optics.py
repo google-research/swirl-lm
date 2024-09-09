@@ -672,7 +672,7 @@ class RRTMOptics(optics_base.OpticsScheme):
     return self.gas_optics_sw.n_gpt
 
   @property
-  def solar_fraction_by_gpt(self) -> Sequence[float]:
+  def solar_fraction_by_gpt(self) -> tf.Tensor:
     """Mapping from g-point to the fraction of total solar radiation."""
     return self.gas_optics_sw.solar_src_scaled
 
@@ -703,6 +703,7 @@ class GrayAtmosphereOptics(optics_base.OpticsScheme):
       self,
       pressure: FlowFieldVal,
       *args,
+      **kwargs,
   ) -> FlowFieldMap:
     """Computes longwave optical properties based on pressure and lapse rate.
 
@@ -716,6 +717,7 @@ class GrayAtmosphereOptics(optics_base.OpticsScheme):
     Args:
       pressure: The pressure field [Pa].
       *args: Miscellaneous inherited arguments.
+      **kwargs: Miscellaneous inherited keyword arguments.
 
     Returns:
       A dictionary containing the optical depth (`optical_depth`), the single-
@@ -747,6 +749,7 @@ class GrayAtmosphereOptics(optics_base.OpticsScheme):
       self,
       pressure,
       *args,
+      **kwargs,
   ):
     """Computes the shortwave optical properties of a gray atmosphere.
 
@@ -759,6 +762,7 @@ class GrayAtmosphereOptics(optics_base.OpticsScheme):
     Args:
       pressure: The pressure field [Pa].
       *args: Miscellaneous inherited arguments.
+      **kwargs: Miscellaneous inherited keyword arguments.
 
     Returns:
       A dictionary containing the optical depth (`optical_depth`), the single-
@@ -841,9 +845,9 @@ class GrayAtmosphereOptics(optics_base.OpticsScheme):
     return 1
 
   @property
-  def solar_fraction_by_gpt(self) -> Sequence[float]:
+  def solar_fraction_by_gpt(self) -> tf.Tensor:
     """Mapping from g-point to the fraction of total solar radiation."""
-    return [1.0]
+    return tf.constant([1.0], dtype=tf.float32)
 
 
 def optics_factory(

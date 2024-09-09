@@ -1,7 +1,10 @@
 # proto-file: swirl_lm/base/parameters.proto
 # proto-message: SwirlLMParameters
 
+convection_scheme: CONVECTION_SCHEME_QUICK
 diffusion_scheme: DIFFUSION_SCHEME_CENTRAL_3
+time_integration_scheme: TIME_SCHEME_CN_EXPLICIT_ITERATION
+solver_procedure: VARIABLE_DENSITY
 kinematic_viscosity: 1e-5
 gravity_direction {
   dim_0: 0.0

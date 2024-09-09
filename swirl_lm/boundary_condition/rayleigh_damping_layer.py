@@ -37,7 +37,6 @@ from typing import Dict, Iterable, Mapping, Optional, Sequence, Text, Union
 from absl import logging
 import numpy as np
 from swirl_lm.base import initializer
-from swirl_lm.base import parameters_pb2
 from swirl_lm.boundary_condition import rayleigh_damping_layer_pb2
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
@@ -53,7 +52,6 @@ TargetValueLib = Dict[Text, Optional[Union[float, Text]]]
 _InitFn = initializer.ValueFunction
 _Orientation = rayleigh_damping_layer_pb2.RayleighDampingLayer.Orientation
 _SpongeInfo = rayleigh_damping_layer_pb2.RayleighDampingLayer.VariableInfo
-_PeriodicDimensionInfo = parameters_pb2.PeriodicDimensions
 _RayleighDampingLayerSeq = Sequence[
     rayleigh_damping_layer_pb2.RayleighDampingLayer]
 

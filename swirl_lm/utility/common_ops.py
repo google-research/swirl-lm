@@ -301,8 +301,8 @@ def get_field(
     state: TensorMap,
     field_name: Text,
     nz: int,
-) -> list[tf.Tensor]:
-  return [state[get_tile_name(field_name, i)] for i in range(nz)]
+) -> tf.Tensor:
+  return tf.stack([state[get_tile_name(field_name, i)] for i in range(nz)])
 
 
 def convert_to_3d_tensor_and_tile(
@@ -1860,10 +1860,11 @@ def get_face(
       list has size nx x 1;
     if `dim` is 2 (z plane): returns a list with length 1, each tensor in the
       list has size nx x ny.
-  * If the 3D tensor is a 3D `tf.Tensor`, the returned value depends on `dim`:
-    if `dim` is 0 (x plane): returns a 3D `tf.Tensor` with shape (1, ny, nz);
-    if `dim` is 1 (y plane): returns a 3D `tf.Tensor` with shape (nx, 1, nz);
-    if `dim` is 2 (z plane): returns a 3D `tf.Tensor` with shape (nx, ny, 1).
+  * If the 3D tensor is a 3D `tf.Tensor`, the returned value is a one-element
+    list [f], where f is a 3D `tf.Tensor` whose shape depends on `dim`:
+      if `dim` is 0 (x plane): f has shape (nz, 1, ny);
+      if `dim` is 1 (y plane): f has shape (nz, nx, 1);
+      if `dim` is 2 (z plane): f has shape (1, nx, ny).
 
   Args:
     value: A list of 2D `tf.Tensor` or a single 3D `tf.Tensor` representing a 3D
@@ -1880,7 +1881,9 @@ def get_face(
   Returns:
     If face is 0, then the (index + 1)'th plane is returned; if face is 1, then
     the length - index'th plane is returned. The returned slice will be
-    multiplied by `scaling_factor`.
+    multiplied by `scaling_factor`. If `value` is a 3D `tf.Tensor`, the returned
+    value is a `list` with a single element consisting of a rank-3 tensor, where
+    one of the shape dimensions is 1.
   """
   if face not in (0, 1):
     raise ValueError(

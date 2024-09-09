@@ -19,7 +19,7 @@ package research.simulation;
 option java_multiple_files = true;
 
 // Parameters required by the Monin-Obukhov Similarity Theory.
-// Next id = 19;
+// Next id = 20;
 message MoninObukhovSimilarityTheory {
   // The roughness length, in units of m.
   optional float z_0 = 1;
@@ -86,4 +86,9 @@ message MoninObukhovSimilarityTheory {
   // An option for printing debuging information in log. To activate the debug
   // prints, the following flag is required: swirl_debug_log_level=INFO.
   optional bool debug = 18 [default = false];
+
+  // Gustiness parameter, used as the minimum value for the surface wind speed
+  // when computing surface fluxes, in units of m/s. See, e.g., Wing et al.
+  // (2018), Radiative-convective equilibrium model intercomparison project.
+  optional float surface_gustiness = 19 [default = 0.0];
 }

@@ -1,12 +1,10 @@
 # proto-file: swirl_lm/base/parameters.proto
 # proto-message: SwirlLMParameters
 
-periodic {
-  dim_0: false
-  dim_1: false
-  dim_2: false
-}
+solver_procedure: VARIABLE_DENSITY
+convection_scheme: CONVECTION_SCHEME_QUICK
 time_integration_scheme: TIME_SCHEME_CN_EXPLICIT_ITERATION
+use_3d_tf_tensor: true
 thermodynamics { constant_density {} }
 # Boundary conditions are constructed as:
 # Dim 0: Inflow - Free-slip wall

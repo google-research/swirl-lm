@@ -103,8 +103,14 @@ message CoordinateStr {
   optional string dim_2 = 3;
 }
 
+message CoordinateBool {
+  optional bool dim_0 = 1;
+  optional bool dim_1 = 2;
+  optional bool dim_2 = 3;
+}
+
 // A message that parameterizes a distributed simulation.
-// Next id: 12
+// Next id: 13
 message GridParametrization {
   // The shape or topology of compute cores.
   optional CoordinateInt computation_shape = 1;
@@ -123,10 +129,12 @@ message GridParametrization {
   // The convolutional kernel dimension.
   optional int32 kernel_size = 6;
   // The chunk size for input.
-  optional int32 input_chunk_size = 7;
+  optional int32 input_chunk_size = 7 [default = 128];
   // The number of splits for processing outputs.
-  optional int32 num_output_splits = 8;
+  optional int32 num_output_splits = 8 [default = 1];
   optional int32 num_boundary_points = 10 [default = 1, deprecated = true];
   // The paths to files containing stretched grid data.
   optional CoordinateStr stretched_grid_paths = 11;
+  // Specifies if the flow field is periodic in a direction.
+  optional CoordinateBool periodic = 12;
 }

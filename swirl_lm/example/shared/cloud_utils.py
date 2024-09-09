@@ -19,7 +19,7 @@ energy equation and the humidity equation, which are required in cloud
 simulations.
 """
 
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from absl import flags
 import numpy as np
@@ -47,6 +47,17 @@ _CLOUD_SIM_INITIAL_CLOUD_TOP = flags.DEFINE_float(
 FlowFieldVal = types.FlowFieldVal
 FlowFieldMap = types.FlowFieldMap
 VectorField = types.VectorField
+SourceFn = Callable[
+    [
+        get_kernel_fn.ApplyKernelOp,
+        tf.Tensor,
+        np.ndarray,
+        FlowFieldMap,
+        FlowFieldMap,
+        grid_parametrization.GridParametrization,
+    ],
+    FlowFieldMap,
+]
 
 # The rotation rate of the Earth, in units of rad/s.
 _OMEGA = 7.2721e-5
@@ -232,6 +243,7 @@ def compute_buoyancy_balanced_hydrodynamic_pressure(
   b_dz = 2 * b * h
 
   # Remove the halos along the vertical direction.
+  b = _slice_in_dim(b, halo_width, core_n, g_dim)
   b_dz = _slice_in_dim(b_dz, halo_width, core_n, g_dim)
 
   # Split the buoyancy term into odd and even indices. The first internal fluid
@@ -252,13 +264,41 @@ def compute_buoyancy_balanced_hydrodynamic_pressure(
   p_even = even_mask * _slice_in_dim(p_even, 0, core_n, g_dim)
 
   # Shifting the starting point of integration of the odd part so that the
-  # overall profile is smooth.
-  shifted_dim = (g_dim + 1) % 3
-  p_1a = _slice_in_dim(p_even, 0, 3, g_dim)
-  p_1b = _slice_in_dim(b_dz_even, 0, 1, g_dim)
-  p_1 = 0.5 * tf.math.reduce_sum(p_1a, axis=shifted_dim, keepdims=True) - p_1b
+  # overall profile is smooth. That is, the p_odd and p_even sequences are
+  # decoupled, so we choose the starting point of p_odd so that the p profile
+  # is smooth.
+  # We can choose a smooth p by using trapezoidal integration from z0 to z1 on
+  # the continuous buoyancy equilibrium equation, obtaining:
+  #   p1 = p0 + hf[1] * (b0 + b1) / 2, where hf[1] = z1 - z0
+  p_0 = _slice_in_dim(p_even, 0, 1, g_dim)
+  b0 = _slice_in_dim(b, 0, 1, g_dim)
+  b1 = _slice_in_dim(b, 1, 1, g_dim)
+  b_dz_0 = _slice_in_dim(b_dz_even, 1, 1, g_dim)
 
-  p_odd = _cumsum(replica_id, replicas, b_dz_even, p_1, g_dim)
+  if params.use_stretched_grid[g_dim]:
+    h_face = additional_states[stretched_grid_util.h_face_key(g_dim)]
+    hf1 = tf.squeeze(h_face)[halo_width + 1]  # z1 - z0.
+    delta_p = hf1 * (b0 + b1) / 2
+  else:
+    delta_p = params.grid_spacings[g_dim] * (b0 + b1) / 2
+
+  # The desired value for p_1 is p_0 + delta_p. But because of the way the
+  # cumsum function behaves, b_dz_0 is added, so we need to subtract it here.
+  # Detailed explanation:
+  #   b_dz_even:
+  #     [0, g0, 0, g2, 0, g4, 0, ...]
+  #   cumsum with f_0 = 0 is:
+  #     [0, g0, g0, g0 + g2, g0 + g2, g0 + g2 + g4, ...]
+  #   cumsum with nonzero f_0 is
+  #     [f_0, f_0 + g0, f_0 + g0, f_0 + g0 + g2, f_0 + g0 + g2, ...]
+  #   Apply odd mask:
+  #     [0, f_0 + g0, 0, f_0 + g0 + g2, 0, f_0 + g0 + g2 + g4, 0, ...]
+  #   Take f_0 = p_1 - g0:
+  #     [0, p1, 0, p1 + g2, ...]
+  p_1 = p_0 + delta_p
+  f_0 = p_1 - b_dz_0
+
+  p_odd = _cumsum(replica_id, replicas, b_dz_even, f_0, g_dim)
   p_odd = odd_mask * _slice_in_dim(p_odd, 0, core_n, g_dim)
 
   # Combine the 2 tensors into one and update values in the halos. Note that
@@ -404,6 +444,44 @@ def coriolis_force(
     return additional_states_new
 
   return get_force_update_fn
+
+
+def add_source_fns(source_fns: Sequence[SourceFn]) -> SourceFn:
+  """Generates a function that computes the sum of all source functions.
+
+  Args:
+    source_fns: A sequence of source functions. The source functions can contain
+      source terms for multiple variables.
+
+  Returns:
+    The sum of sources computed with all source function in `source_fns`.
+  """
+
+  def source_fn(
+      kernel_op: get_kernel_fn.ApplyKernelOp,
+      replica_id: tf.Tensor,
+      replicas: np.ndarray,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
+      params: grid_parametrization.GridParametrization,
+  ) -> FlowFieldMap:
+    """Computes the sum of all source functions in `source_fns`."""
+    combined_source_fns = {}
+    for source_fn in source_fns:
+      source = source_fn(
+          kernel_op, replica_id, replicas, states, additional_states, params
+      )
+      for key, val in source.items():
+        if key in combined_source_fns:
+          combined_source_fns[key] = tf.nest.map_structure(
+              tf.math.add, combined_source_fns[key], val
+          )
+        else:
+          combined_source_fns[key] = val
+
+    return combined_source_fns
+
+  return source_fn
 
 
 class CloudUtils(object):

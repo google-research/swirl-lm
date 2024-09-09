@@ -1366,10 +1366,9 @@ class ImmersedBoundaryMethod(object):
     """Applies the marker-and-cell method."""
 
     def neumann_z(val: FlowFieldVal) -> FlowFieldVal:
-      """Shifts `val` down by 1 index to mimik Neumann BC in z direction."""
-      return list(val[1:]) + [
-          tf.zeros_like(val[0], dtype=val[0].dtype),
-      ]
+      """Shifts `val` down by 1 index to mimic Neumann BC in z direction."""
+      return tf.concat([val[1:], tf.zeros_like(val[:1], dtype=val[0].dtype)],
+                       axis=0)
 
     states_new = {}
     states_new.update(states)

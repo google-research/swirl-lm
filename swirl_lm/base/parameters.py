@@ -176,24 +176,17 @@ def _get_gravity_direction(
 class SwirlLMParameters(grid_parametrization.GridParametrization):
   """Parameters for running the incompressible Navier-Stokes solver."""
 
-  def __init__(
-      self,
-      config: parameters_pb2.SwirlLMParameters,
-      grid_params: Optional[
-          grid_parametrization_pb2.GridParametrization
-      ] = None,
-  ):
+  def __init__(self, config: parameters_pb2.SwirlLMParameters):
     """Initializes the SwirlLMParameters object.
 
     Args:
       config: An instance of the `SwirlLMParameters` proto.
-      grid_params: An instance of the `GridParametrization` proto.
 
     Raises:
       ValueError: If the kernel operator type or scheme used for discretizing
         the diffusion term is not recognized.
     """
-    super(SwirlLMParameters, self).__init__(grid_params)
+    super(SwirlLMParameters, self).__init__(config.grid_params)
 
     self.swirl_lm_parameters_proto = config
     self.bc_manager = (
@@ -263,6 +256,7 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
 
     self.additional_state_keys = config.additional_state_keys
     self.helper_var_keys = config.helper_var_keys
+    self.debug_variables = config.debug_variables
     self.states_from_file = config.states_from_file
     self.states_to_file = list(config.states_to_file)
     self.monitor_spec = config.monitor_spec
@@ -330,11 +324,6 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
             f'{scalar_config} is using a different microphysics model'
             f' ({microphysics_current}) from others ({microphysics}).'
         )
-
-    # Boundary conditions.
-    self.periodic_dims = [
-        config.periodic.dim_0, config.periodic.dim_1, config.periodic.dim_2
-    ]
 
     self.bc = {'u': None, 'v': None, 'w': None, 'p': None}
     self.bc.update({scalar.name: None for scalar in self.scalars})
@@ -618,11 +607,22 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
   def config_from_text_proto(
       cls,
       text_proto: str,
-      grid_params: Optional[
-          grid_parametrization_pb2.GridParametrization] = None,
+      grid_params_from_flags: bool = False,
   ) -> 'SwirlLMParameters':
     """Parses the config proto in text format into SwirlLMParameters."""
     config = text_format.Parse(text_proto, parameters_pb2.SwirlLMParameters())
+    if not config.HasField('grid_params') and grid_params_from_flags:
+      logging.warning(
+          'Flags to set grid parameters are deprecated. Use the grid_params '
+          'field in SwirlLMParameters instead.')
+      config.grid_params.CopyFrom(grid_parametrization.params_from_flags())
+    else:
+      grid_flags = grid_parametrization.flags_present_at_launch()
+      if grid_flags:
+        raise ValueError(
+            f'Setting grid flags {grid_flags} is not allowed when grid_params '
+            'is specified as part of the config. Remove the grid flags from '
+            'the command line - these flags are deprecated.')
 
     # Sanity check for the solver procedure.
     if config.solver_procedure not in (SolverProcedure.SEQUENTIAL,
@@ -638,14 +638,13 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
         TimeIntegrationScheme.TIME_SCHEME_UNKNOWN):
       raise NotImplementedError('Time integration scheme is not specified.')
 
-    return cls(config, grid_params)
+    return cls(config)
 
   @classmethod
   def config_from_proto(
       cls,
       config_filepath: str,
-      grid_params: Optional[
-          grid_parametrization_pb2.GridParametrization] = None,
+      grid_params_from_flags: bool = False,
   ) -> 'SwirlLMParameters':
     """Reads the config text proto file."""
     text_proto: str = None
@@ -654,7 +653,7 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
         text_proto = f.read()
       logging.info('Loaded config file `%s` from file.', config_filepath)
 
-    return cls.config_from_text_proto(text_proto, grid_params)
+    return cls.config_from_text_proto(text_proto, grid_params_from_flags)
 
   @property
   def num_cycles(self) -> int:
@@ -982,20 +981,27 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
 
     return self.time_integration_scheme
 
-  def save_to_file(self, prefix: str) -> None:
-    """Saves configuration protos as text to files with the given prefix."""
-    output_dir, _ = os.path.split(prefix)
+  def save_to_file(self, output_prefix: str) -> None:
+    """Saves configuration protos as text to files."""
+    output_dir, _ = os.path.split(output_prefix)
     tf.io.gfile.makedirs(output_dir)
-    with tf.io.gfile.GFile(f'{prefix}_cmdline_args.json', 'w') as f:
+    with tf.io.gfile.GFile(f'{output_prefix}_cmdline_args.json', 'w') as f:
       f.write(json.dumps(sys.argv))
-    with tf.io.gfile.GFile(f'{prefix}_swirl_lm.pbtxt', 'w') as f:
+    with tf.io.gfile.GFile(get_swirl_lm_pbtxt_path(output_prefix), 'w') as f:
       f.write(text_format.MessageToString(self.swirl_lm_parameters_proto))
-    with tf.io.gfile.GFile(get_grid_pbtxt_path(prefix), 'w') as f:
-      f.write(text_format.MessageToString(self.grid_params_proto))
 
 
-def get_grid_pbtxt_path(prefix: str) -> str:
-  return f'{prefix}_grid.pbtxt'
+def get_swirl_lm_pbtxt_path(output_prefix: str) -> str:
+  """Returns the path where SwirlLMParams proto is saved."""
+  return f'{output_prefix}_swirl_lm.pbtxt'
+
+
+def load_params_from_output_dir(output_prefix: str) -> SwirlLMParameters:
+  """Loads configuration proto from location determined by `output_prefix`."""
+  with tf.io.gfile.GFile(get_swirl_lm_pbtxt_path(output_prefix), 'r') as f:
+    text_proto = f.read()
+  config = text_format.Parse(text_proto, parameters_pb2.SwirlLMParameters())
+  return SwirlLMParameters(config)
 
 
 def params_from_config_file_flag() -> SwirlLMParameters:
@@ -1003,7 +1009,8 @@ def params_from_config_file_flag() -> SwirlLMParameters:
   if not FLAGS.config_filepath:
     raise ValueError('Flag --config_filepath is not set.')
 
-  return SwirlLMParameters.config_from_proto(FLAGS.config_filepath)
+  return SwirlLMParameters.config_from_proto(FLAGS.config_filepath,
+                                             grid_params_from_flags=True)
 
 
 def _validate_config_for_stretched_grid(

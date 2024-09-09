@@ -87,7 +87,7 @@ _CP_F = 1850.0
 _CP_W = 4182.0
 # The relative threshold with respect to the maximum fuel density below which
 # the fuel is considered depleted.
-_EPSILON = 1e-2
+_EPSILON = 1e-3
 
 _TF_DTYPE = types.TF_DTYPE
 
@@ -330,7 +330,7 @@ def _localize_by_fuel(
   """
   return tf.nest.map_structure(
       lambda f, s: tf.where(  # pylint: disable=g-long-lambda
-          tf.math.less_equal(f, _EPSILON * tf.reduce_max(f)), tf.zeros_like(s),
+          tf.math.less_equal(f, _EPSILON), tf.zeros_like(s),
           s),
       rho_f,
       src)
@@ -496,10 +496,9 @@ class Wood(object):
         if self.include_radiation
         else 0.0
     )
-    q_conv = _localize_by_fuel(rho_f, self.h_conv * self.a_v * (t_g - t_s))
-    q_comb = _localize_by_fuel(
-        rho_f, f_f * (theta * self.h_f - _CP_F * self.t_pyr * _N_F))
-    rhs = q_conv + q_comb - q_rad
+    q_conv = self.h_conv * self.a_v * (t_g - t_s)
+    q_comb = f_f * (theta * self.h_f - _CP_F * self.t_pyr * _N_F)
+    rhs = _localize_by_fuel(rho_f, q_conv + q_comb - q_rad)
 
     if (f_w is not None and
         self.model_params.WhichOneof('combustion_model_option')
@@ -679,7 +678,7 @@ class Wood(object):
 
         return (
             rhs_rho_f,
-            _localize_by_fuel(rho_f, rhs_t_s),
+            rhs_t_s,
             rhs_t_g,
             _localize_by_fuel(rho_f, rhs_y_o),
         )
@@ -896,7 +895,7 @@ class Wood(object):
         return (
             rhs_rho_f,
             rhs_rho_m,
-            _localize_by_fuel(rho_f, rhs_t_s),
+            rhs_t_s,
             rhs_t_g,
             _localize_by_fuel(rho_f, rhs_y_o),
             rhs_phi_w,

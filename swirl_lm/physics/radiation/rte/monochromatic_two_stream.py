@@ -50,12 +50,13 @@ References:
 """
 
 import math
-from typing import Callable, Optional
+from typing import Any, Callable, Dict, Optional
 
 import numpy as np
 import swirl_lm.physics.radiation.rte.rte_utils as utils
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
+from swirl_lm.utility import grid_extension
 from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import types
 import tensorflow as tf
@@ -63,6 +64,9 @@ import tensorflow as tf
 
 FlowFieldVal = types.FlowFieldVal
 FlowFieldMap = types.FlowFieldMap
+X0_KEY = utils.X0_KEY
+PRIMARY_GRID_KEY = utils.PRIMARY_GRID_KEY
+EXTENDED_GRID_KEY = utils.EXTENDED_GRID_KEY
 
 # Secant of the longwave diffusivity angle per Fu et al. (1997).
 _LW_DIFFUSIVE_FACTOR = 1.66
@@ -71,6 +75,8 @@ _EPSILON = 1e-6
 _MIN_TAU_FOR_LW_SRC = 1e-4
 # Minimum value of the k parameter used in the transmittance.
 _K_MIN = 1e-2
+PRIMARY_GRID_KEY = utils.PRIMARY_GRID_KEY
+EXTENDED_GRID_KEY = utils.EXTENDED_GRID_KEY
 
 
 class MonochromaticTwoStreamSolver:
@@ -81,10 +87,11 @@ class MonochromaticTwoStreamSolver:
       params: grid_parametrization.GridParametrization,
       kernel_op: get_kernel_fn.ApplyKernelOp,
       g_dim: int,
+      grid_extension_lib: Optional[grid_extension.GridExtension] = None,
   ):
     self.halos = params.halo_width
     self.g_dim = g_dim
-    self.rte_utils = utils.RTEUtils(params)
+    self.rte_utils = utils.RTEUtils(params, grid_extension_lib)
     self._shift_up_fn = (
         lambda f: kernel_op.apply_kernel_op_x(f, 'shift_upx'),
         lambda f: kernel_op.apply_kernel_op_y(f, 'shift_upy'),
@@ -484,7 +491,8 @@ class MonochromaticTwoStreamSolver:
       toa_flux: FlowFieldVal,
       sfc_albedo_direct: FlowFieldVal,
       zenith: float,
-  ) -> FlowFieldMap:
+      extended_grid_optical_props: Optional[FlowFieldMap] = None,
+  ) -> Dict[str, FlowFieldMap]:
     """Computes monochromatic shortwave direct-beam flux and diffuse source.
 
     Args:
@@ -497,9 +505,15 @@ class MonochromaticTwoStreamSolver:
       toa_flux: The top of atmosphere incoming flux represented by a 2D plane.
       sfc_albedo_direct: The surface albedo with respect to direct radiation.
       zenith: The zenith solar angle.
+      extended_grid_optical_props: An optional dictionary of optical properties
+        for the extended grid above the simulation domain. It should contain the
+        following keys: `t_dir, `r_dir`, and `optical_depth`.
 
     Returns:
-      A dictionary containing the following items:
+      A dictionary containing a `FlowFieldMap` for the primary grid with key
+      'primary' and possibly a `FlowFieldMap` for the extended grid with key
+      'extended' if an extended grid is present.
+      Each `FlowFieldMap` contains the following items:
       'src_up': A 3D variable for the cell center upward source.
       'src_down': A 3D variable for the cell center downward source.
       'flux_down_dir': A 3D variable for the solved downwelling direct-beam
@@ -526,29 +540,48 @@ class MonochromaticTwoStreamSolver:
     op = lambda w, x0: w * x0
     kwargs = {
         'w': t_noscat,
-        'x0': flux_down_direct_bc,
+        X0_KEY: flux_down_direct_bc,
     }
+
+    use_extended_grid = extended_grid_optical_props is not None
+    kwargs_ext = None
+
+    if use_extended_grid:
+      t_noscat_ext = tf.nest.map_structure(
+          t_noscat_fn, extended_grid_optical_props['optical_depth']
+      )
+      kwargs_ext = {
+          'w': t_noscat_ext,
+          'x0': flux_down_direct_bc,
+      }
+
     flux_down_direct = self.rte_utils.cumulative_recurrent_op(
-        replica_id, replicas, op, kwargs, dim=self.g_dim, forward=False
+        replica_id,
+        replicas,
+        op,
+        kwargs,
+        dim=self.g_dim,
+        forward=False,
+        extended_grid_variables=kwargs_ext,
     )
 
     # Upward source from direct-beam reflection at the cell center.
     src_up = tf.nest.map_structure(
         lambda r, flux_down: r * flux_down,
         r_dir,
-        self._shift_down_fn(flux_down_direct),
+        self._shift_down_fn(flux_down_direct[PRIMARY_GRID_KEY]),
     )
 
     # Downward source from direct-beam transmittance at the cell center.
     src_down = tf.nest.map_structure(
         lambda t, flux_down: t * flux_down,
         t_dir,
-        self._shift_down_fn(flux_down_direct),
+        self._shift_down_fn(flux_down_direct[PRIMARY_GRID_KEY]),
     )
 
     # Direct-beam flux incident on the surface.
     flux_down_sfc = common_ops.slice_field(
-        flux_down_direct, self.g_dim, self.halos, size=1
+        flux_down_direct[PRIMARY_GRID_KEY], self.g_dim, self.halos, size=1
     )
     core_idx = common_ops.get_core_coordinate(replicas, replica_id)[self.g_dim]
 
@@ -565,11 +598,39 @@ class MonochromaticTwoStreamSolver:
         sfc_src_fn, flux_down_sfc, sfc_albedo_direct
     )
 
-    return {
+    srcs_primary = {
         'src_up': src_up,
         'src_down': src_down,
-        'flux_down_dir': flux_down_direct,
+        'flux_down_dir': flux_down_direct[PRIMARY_GRID_KEY],
         'sfc_src': sfc_src,
+    }
+
+    if not use_extended_grid:
+      return {PRIMARY_GRID_KEY: srcs_primary}
+
+    # Upward source from direct-beam reflection for the extended grid.
+    flux_down_direct_ext = flux_down_direct[EXTENDED_GRID_KEY]
+    src_up_ext = tf.nest.map_structure(
+        lambda r, flux_down: r * flux_down,
+        extended_grid_optical_props['r_dir'],
+        self._shift_down_fn(flux_down_direct_ext),
+    )
+
+    # Downward source from direct-beam transmittance for the extended grid.
+    src_down_ext = tf.nest.map_structure(
+        lambda t, flux_down: t * flux_down,
+        extended_grid_optical_props['t_dir'],
+        self._shift_down_fn(flux_down_direct_ext),
+    )
+    srcs_ext = {
+        'src_up': src_up_ext,
+        'src_down': src_down_ext,
+        'flux_down_dir': flux_down_direct_ext,
+        'sfc_src': sfc_src,
+    }
+    return {
+        PRIMARY_GRID_KEY: srcs_primary,
+        EXTENDED_GRID_KEY: srcs_ext,
     }
 
   def _solve_rte_2stream(
@@ -583,7 +644,8 @@ class MonochromaticTwoStreamSolver:
       top_flux_down: FlowFieldVal,
       sfc_emission: FlowFieldVal,
       sfc_reflectance: FlowFieldVal,
-      ) -> FlowFieldMap:
+      extended_grid_optical_props: Optional[FlowFieldMap] = None,
+  ) -> FlowFieldMap:
     r"""Solves the monochromatic two-stream radiative transfer equation.
 
     Given boundary conditions for the downward flux at the top of the atmosphere
@@ -608,6 +670,9 @@ class MonochromaticTwoStreamSolver:
       sfc_emission: The upward surface emission. This corresponds to the bottom
         face of the bottom fluid layer in the grid.
       sfc_reflectance: The surface reflectance.
+      extended_grid_optical_props: An optional dictionary of optical properties
+        for the extended grid above the simulation domain. It should contain the
+        following keys: `t_diff`, `r_diff`, `src_up`, and `src_down`.
 
     Returns:
       A dictionary containing fluxes at the bottom cell face:
@@ -615,12 +680,14 @@ class MonochromaticTwoStreamSolver:
       'flux_down' -> The downwelling radiative flux.
       'flux_net' -> The net radiative flux.
     """
+    use_extended_grid = extended_grid_optical_props is not None
 
     def global_recurrent_op(
         kwargs: FlowFieldMap,
         forward: bool,
-        op: Optional[Callable[..., FlowFieldVal]] = None,
-    ) -> FlowFieldVal:
+        op: Callable[..., FlowFieldVal],
+        extended_grid_vars: Optional[FlowFieldMap] = None,
+    ) -> Dict[str, FlowFieldVal]:
       return self.rte_utils.cumulative_recurrent_op(
           replica_id,
           replicas,
@@ -628,11 +695,12 @@ class MonochromaticTwoStreamSolver:
           kwargs,
           dim=self.g_dim,
           forward=forward,
+          extended_grid_variables=extended_grid_vars,
       )
 
     # Global recurrent accumulation for the albedo of the atmosphere below a
     # certain level, computed from the surface all the way to the top boundary.
-    # The recurrence relation for albedo are taken from Shonk and Hogan Equation
+    # The recurrence relation for albedo is taken from Shonk and Hogan Equation
     # 9.
 
     def albedo_op(r_diff: tf.Tensor, t_diff: tf.Tensor, x0: tf.Tensor):
@@ -645,10 +713,21 @@ class MonochromaticTwoStreamSolver:
     albedo_vars = {
         'r_diff': r_diff,
         't_diff': t_diff,
-        'x0': sfc_reflectance,
+        X0_KEY: sfc_reflectance,
     }
+    # Variables for the extended grid.
+    albedo_vars_ext = None
+    if use_extended_grid:
+      albedo_vars_ext = {
+          'r_diff': extended_grid_optical_props['r_diff'],
+          't_diff': extended_grid_optical_props['t_diff'],
+          'x0': sfc_reflectance,
+      }
     albedo = global_recurrent_op(
-        albedo_vars, forward=True, op=albedo_op
+        albedo_vars,
+        forward=True,
+        op=albedo_op,
+        extended_grid_vars=albedo_vars_ext,
     )
 
     # Global recurrent accumulation for the aggregate upwelling source emission
@@ -672,11 +751,25 @@ class MonochromaticTwoStreamSolver:
         'src_down': src_down,
         't_diff': t_diff,
         'r_diff': r_diff,
-        'albedo': self._shift_up_fn(albedo),
-        'x0': sfc_emission,
+        'albedo': self._shift_up_fn(albedo[PRIMARY_GRID_KEY]),
+        X0_KEY: sfc_emission,
     }
+    # Variables for the extended grid.
+    emission_vars_ext = None
+    if use_extended_grid:
+      emission_vars_ext = {
+          'src_up': extended_grid_optical_props['src_up'],
+          'src_down': extended_grid_optical_props['src_down'],
+          't_diff': extended_grid_optical_props['t_diff'],
+          'r_diff': extended_grid_optical_props['r_diff'],
+          'albedo': self._shift_up_fn(albedo[EXTENDED_GRID_KEY]),
+          'x0': sfc_emission,
+      }
     emiss_up = global_recurrent_op(
-        emission_vars, forward=True, op=upward_emission_op
+        emission_vars,
+        forward=True,
+        op=upward_emission_op,
+        extended_grid_vars=emission_vars_ext,
     )
 
     # Global recurrent accumulation for the downwelling radiative flux solution
@@ -696,31 +789,55 @@ class MonochromaticTwoStreamSolver:
       return (t_diff * flux_dn_from_above + r_diff * emiss_up + src_down) * beta
 
     flux_down_vars = {
-        'emiss_up': self._shift_up_fn(emiss_up),
+        'emiss_up': self._shift_up_fn(emiss_up[PRIMARY_GRID_KEY]),
         'src_down': src_down,
         't_diff': t_diff,
         'r_diff': r_diff,
-        'albedo': self._shift_up_fn(albedo),
-        'x0': top_flux_down,
+        'albedo': self._shift_up_fn(albedo[PRIMARY_GRID_KEY]),
+        X0_KEY: top_flux_down,
     }
+    flux_down_vars_ext = None
+    if use_extended_grid:
+      flux_down_vars_ext = {
+          'emiss_up': self._shift_up_fn(emiss_up[EXTENDED_GRID_KEY]),
+          'src_down': extended_grid_optical_props['src_down'],
+          't_diff': extended_grid_optical_props['t_diff'],
+          'r_diff': extended_grid_optical_props['r_diff'],
+          'albedo': self._shift_up_fn(albedo[EXTENDED_GRID_KEY]),
+          'x0': top_flux_down,
+      }
     flux_down = global_recurrent_op(
-        flux_down_vars, forward=False, op=flux_down_op
+        flux_down_vars,
+        forward=False,
+        op=flux_down_op,
+        extended_grid_vars=flux_down_vars_ext,
     )
+    # After this, the extended grid can be forgotten.
 
     # The upwelling radiative flux at the bottom face can now be computed
     # directly from the cumulative upward emissions, the cumulative albedo of
     # the atmosphere below, and the downwelling radiative flux at the same face.
     flux_up = tf.nest.map_structure(
         lambda flux_dn, alb, emiss_up: flux_dn * alb + emiss_up,
-        flux_down,
-        self._shift_up_fn(albedo),
-        self._shift_up_fn(emiss_up),
+        flux_down[PRIMARY_GRID_KEY],
+        self._shift_up_fn(albedo[PRIMARY_GRID_KEY]),
+        self._shift_up_fn(emiss_up[PRIMARY_GRID_KEY]),
     )
 
-    return {
+    fluxes = {
         'flux_up': flux_up,
-        'flux_down': flux_down,
+        'flux_down': flux_down[PRIMARY_GRID_KEY],
     }
+
+    if use_extended_grid:
+      fluxes[f'{EXTENDED_GRID_KEY}_flux_up'] = tf.nest.map_structure(
+          lambda flux_dn, alb, emiss_up: flux_dn * alb + emiss_up,
+          flux_down[EXTENDED_GRID_KEY],
+          self._shift_up_fn(albedo[EXTENDED_GRID_KEY]),
+          self._shift_up_fn(emiss_up[EXTENDED_GRID_KEY]),
+      )
+      fluxes[f'{EXTENDED_GRID_KEY}_flux_down'] = flux_down[EXTENDED_GRID_KEY]
+    return fluxes
 
   def lw_transport(
       self,
@@ -733,7 +850,8 @@ class MonochromaticTwoStreamSolver:
       top_flux_down: FlowFieldVal,
       sfc_src: FlowFieldVal,
       sfc_emissivity: FlowFieldVal,
-      ) -> FlowFieldMap:
+      extended_grid_optical_props: Optional[Dict[str, Any]] = None,
+  ) -> FlowFieldMap:
     """Computes the monochromatic longwave diffusive flux of the atmosphere.
 
     The upwelling and downwelling fluxes are computed from the equations of
@@ -756,12 +874,19 @@ class MonochromaticTwoStreamSolver:
       top_flux_down: The downward flux at the top boundary of the atmosphere.
       sfc_src: The surface Planck source.
       sfc_emissivity: The surface emissivity.
+      extended_grid_optical_props: An optional dictionary containing the optical
+        properties of the extended grid. It should include `t_diff`, `r_diff`,
+        `src_up`, and `src_down`.
 
     Returns:
       A dictionary containing fluxes at the bottom cell face [W/m^2]:
       'flux_up' -> The upwelling radiative flux.
       'flux_down' -> The downwelling radiative flux.
       'flux_net' -> The net radiative flux.
+      If an extended grid is present, the following entries are also added:
+      'extended_flux_up' -> The upwelling radiative flux in the extended grid.
+      'extended_flux_down' -> The downwelling radiative flux in extended grid.
+      'extended_flux_net' -> The net radiative flux in the extended grid.
     """
     # The source of diffuse radiation is the surface emission.
     sfc_emission = tf.nest.map_structure(
@@ -781,15 +906,18 @@ class MonochromaticTwoStreamSolver:
             top_flux_down,
             sfc_emission,
             sfc_reflectance,
+            extended_grid_optical_props=extended_grid_optical_props,
         )
     )
-    fluxes.update(
-        {
-            'flux_net': tf.nest.map_structure(
-                tf.math.subtract, fluxes['flux_up'], fluxes['flux_down']
-            )
-        }
+    fluxes['flux_net'] = tf.nest.map_structure(
+        tf.math.subtract, fluxes['flux_up'], fluxes['flux_down']
     )
+    if extended_grid_optical_props is not None:
+      fluxes[f'{EXTENDED_GRID_KEY}_flux_net'] = tf.nest.map_structure(
+          tf.math.subtract,
+          fluxes[f'{EXTENDED_GRID_KEY}_flux_up'],
+          fluxes[f'{EXTENDED_GRID_KEY}_flux_down'],
+      )
     return fluxes
 
   def sw_transport(
@@ -803,7 +931,8 @@ class MonochromaticTwoStreamSolver:
       sfc_src: FlowFieldVal,
       sfc_albedo: FlowFieldVal,
       flux_down_dir: FlowFieldVal,
-      ) -> FlowFieldMap:
+      extended_grid_optical_props: Optional[Dict[str, Any]] = None,
+  ) -> FlowFieldMap:
     """Computes the monochromatic shortwave fluxes in a layered atmosphere.
 
     The direct-beam downward flux `flux_down_dir` is added to the downwelling
@@ -830,12 +959,19 @@ class MonochromaticTwoStreamSolver:
       sfc_albedo: The surface albedo.
       flux_down_dir: A 3D variable for the solved downwelling direct-beam
         radiative flux at the bottom cell face.
+      extended_grid_optical_props: An optional dictionary containing the optical
+        properties of the extended grid. It should include `t_diff`, `r_diff`,
+        `src_up`, `src_down`, and `flux_down_dir`.
 
     Returns:
       A dictionary containing fluxes at the bottom cell face:
       'flux_up' -> The upwelling radiative flux.
       'flux_down' -> The downwelling radiative flux.
       'flux_net' -> The net radiative flux.
+      If an extended grid is present, the following entries are also added:
+      'extended_flux_up' -> The upwelling radiative flux in the extended grid.
+      'extended_flux_down' -> The downwelling radiative flux in extended grid.
+      'extended_flux_net' -> The net radiative flux in the extended grid.
     """
     fluxes = {}
     fluxes.update(
@@ -849,24 +985,31 @@ class MonochromaticTwoStreamSolver:
             tf.nest.map_structure(tf.zeros_like, sfc_src),
             sfc_src,
             sfc_albedo,
+            extended_grid_optical_props=extended_grid_optical_props,
         )
     )
 
     # Add the direct-beam contribution to the downwelling flux.
-    fluxes.update(
-        {
-            'flux_down': tf.nest.map_structure(
-                tf.math.add, fluxes['flux_down'], flux_down_dir
-            )
-        }
+    fluxes['flux_down'] = tf.nest.map_structure(
+        tf.math.add, fluxes['flux_down'], flux_down_dir
+    )
+    # The net flux computed at cell faces.
+    fluxes['flux_net'] = tf.nest.map_structure(
+        tf.math.subtract, fluxes['flux_up'], fluxes['flux_down']
     )
 
-    # The net flux is computed only at cell faces.
-    fluxes.update(
-        {
-            'flux_net': tf.nest.map_structure(
-                tf.math.subtract, fluxes['flux_up'], fluxes['flux_down']
-            )
-        }
-    )
+    # Handle the extended grid, if one is present.
+    if extended_grid_optical_props is not None:
+      # Add the direct-beam contribution to the downwelling flux.
+      fluxes[f'{EXTENDED_GRID_KEY}_flux_down'] = tf.nest.map_structure(
+          tf.math.add,
+          fluxes[f'{EXTENDED_GRID_KEY}_flux_down'],
+          extended_grid_optical_props['flux_down_dir'],
+      )
+      fluxes[f'{EXTENDED_GRID_KEY}_flux_net'] = tf.nest.map_structure(
+          tf.math.subtract,
+          fluxes[f'{EXTENDED_GRID_KEY}_flux_up'],
+          fluxes[f'{EXTENDED_GRID_KEY}_flux_down'],
+      )
+
     return fluxes

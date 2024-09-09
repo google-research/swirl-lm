@@ -30,16 +30,6 @@ import "swirl_lm/utility/grid_parametrization.proto";
 import "swirl_lm/utility/monitor.proto";
 import "swirl_lm/utility/probe.proto";
 
-// Specifies if the flow field is periodic in a direction.
-message PeriodicDimensions {
-  // Periodicity in the x dimension.
-  optional bool dim_0 = 1 [default = false];
-  // Periodicity in the y dimension.
-  optional bool dim_1 = 2 [default = false];
-  // Periodicity in the z dimension.
-  optional bool dim_2 = 3 [default = false];
-}
-
 // Methods for how the simulation time, including the number of cycles
 // (`num_cycles`) and number of steps per cycles (`num_steps`), are determined.
 // Next id: 4
@@ -206,8 +196,11 @@ message SubGridScaleModel {
 }
 
 // Stores the parameters required by an incompressible Navier-Stokes simulation.
-// Next id: 39
+// Next id: 40
 message SwirlLMParameters {
+  // Deprecated/Removed fields.
+  reserved 4;
+
   // Defines the type of the simulation procedure to be used in the solver.
   enum SolverProcedureType {
     // The default option where no solver procedure is specified. Results in an
@@ -249,8 +242,8 @@ message SwirlLMParameters {
     KERNEL_OP_MATMUL = 3;
   }
 
-  // The mesh information. Deprecated. Do not use / rely on this.
-  optional swirl_lm.GridParametrization grid_info = 1 [deprecated = true];
+  // The mesh information.
+  optional swirl_lm.GridParametrization grid_params = 1;
   // The type of kernel operator to be used to represent finite difference
   // operators. Default set to `KERNEL_OP_CONV` to match previous behavior.
   optional KernelOpType kernel_op_type = 27 [default = KERNEL_OP_CONV];
@@ -301,8 +294,6 @@ message SwirlLMParameters {
   // degree of coupling between the pressure and the flow field.
   optional bool enable_rhie_chow_correction = 31 [default = true];
 
-  // The periodicity in each dimension.
-  optional PeriodicDimensions periodic = 4;
   // The boundary conditions for all variables.
   repeated BoundaryCondition boundary_conditions = 5;
   // The number of sub-iterations of the pressure solver.
@@ -375,4 +366,12 @@ message SwirlLMParameters {
   // The radiation model that solves a two-stream radiative transfer equation
   // taking into account the full atmospheric state.
   optional RadiativeTransfer radiative_transfer = 37;
+  // Names of debug variables to save at the end of each cycle. When adding code
+  // to output a new debug variable, update the list below, which serves as
+  // documentation for available debug variables.
+  //
+  // Available Debug Variables
+  // -------------------------------------------------------------------------
+  //
+  repeated string debug_variables = 39;
 }

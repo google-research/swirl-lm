@@ -15,7 +15,7 @@
 # coding=utf-8
 """Library of the convection scheme in the Navier-Stokes solver."""
 
-from typing import Callable, Optional, Text, Tuple, TypeAlias
+from typing import Callable, Literal, Optional, Text, Tuple, TypeAlias
 
 import numpy as np
 from swirl_lm.boundary_condition import boundary_condition_utils
@@ -36,12 +36,12 @@ FlowFieldMap: TypeAlias = types.FlowFieldMap
 
 
 def first_order_upwinding(
-    kernel_op: get_kernel_fn.ApplyKernelOp,
+    deriv_lib: derivatives.Derivatives,
     f: FlowFieldVal,
     velocity_in_dim: FlowFieldVal,
-    grid_spacing: float,
-    dim: int,
-) -> FlowFieldVal:
+    dim: Literal[0, 1, 2],
+    additional_states: FlowFieldMap,
+):
   """Computes the first order derivative of a variable in the convection term.
 
   The derivative to be computed for a variable `f` in the convection term takes
@@ -50,44 +50,45 @@ def first_order_upwinding(
   `velocity_in_dim` >= 0, otherwise the forward difference is used.
 
   Args:
-    kernel_op: An object holding a library of kernel operations.
+    deriv_lib: An instance of the derivatives library.
     f: The 3D scalar field.
-    velocity_in_dim: A list of `tf.Tensor` holding the velocity in the direction
-      where the derivative is computed. Each element in the `List` is an `x-y`
-      plane (aka z-slice).
-    grid_spacing: The mesh size in the direction where the derivative is
-      computed.
-    dim: The dimension of the derivative, with 0, 1, and 2 being x, y, and z,
-      respectively.
+    velocity_in_dim: 3D field holding the velocity in the direction in which the
+      derivative is computed.
+    dim: The dimension in which the derivative is taken.
+    additional_states: A dictionary of additional states that are needed to
+      compute the derivative, holding stretched grid scale factors.
 
   Returns:
     The upwinding first-order derivative of `f`, i.e. `df / dx`.
   """
-  grad_forward_fn = [
-      lambda g: kernel_op.apply_kernel_op_x(g, 'kdx+'),
-      lambda g: kernel_op.apply_kernel_op_y(g, 'kdy+'),
-      lambda g: kernel_op.apply_kernel_op_z(g, 'kdz+', 'kdz+sh'),
-  ]
-
-  grad_backward_fn = [
-      lambda g: kernel_op.apply_kernel_op_x(g, 'kdx'),
-      lambda g: kernel_op.apply_kernel_op_y(g, 'kdy'),
-      lambda g: kernel_op.apply_kernel_op_z(g, 'kdz', 'kdzsh'),
-  ]
-
-  df_dh_forward = tf.nest.map_structure(
-      lambda df: df / grid_spacing, grad_forward_fn[dim](f)
+  kernel_op = get_kernel_fn.ApplyKernelConvOp(
+      4, {'shift': ([0.0, 0.0, 1.0], 1)}
   )
-  df_dh_backward = tf.nest.map_structure(
-      lambda df: df / grid_spacing, grad_backward_fn[dim](f)
-  )
+
+  if dim == 0:
+    shift_op = ['shiftx']
+    kernel_fn = kernel_op.apply_kernel_op_x
+  elif dim == 1:
+    shift_op = ['shifty']
+    kernel_fn = kernel_op.apply_kernel_op_y
+  elif dim == 2:
+    shift_op = ['shiftz', 'shiftzsh']
+    kernel_fn = kernel_op.apply_kernel_op_z
+  else:
+    raise ValueError(f'`dim` has to be 0, 1, or 2. {dim} is provided.')
+
+  dfdx_backward_deriv = deriv_lib.deriv_node_to_face(f, dim, additional_states)
+  dfdx_forward_deriv = kernel_fn(dfdx_backward_deriv, *shift_op)
+
   return tf.nest.map_structure(
-      lambda velocity_in_dim_, df_dh_forward_, df_dh_backward_: tf.where(
-          tf.less(velocity_in_dim_, 0), df_dh_forward_, df_dh_backward_
+      lambda v, dfdx_forward, dfdx_backward: tf.where(
+          tf.less(v, 0),
+          dfdx_forward,
+          dfdx_backward,
       ),
       velocity_in_dim,
-      df_dh_forward,
-      df_dh_backward,
+      dfdx_forward_deriv,
+      dfdx_backward_deriv,
   )
 
 

@@ -79,8 +79,8 @@ class TerrainType(enum.Enum):
   # Read the terrain map from a file.
   FILE = 4
   SINE = 5
-  WITCHOFAGNESI = 6 
-  WITCHOFAGNESI2D = 7 
+  WITCHOFAGNESI = 6
+  WITCHOFAGNESI2D = 7
 
 # Flags for the terrain initialization.
 _TERRAIN_FILEPATH = flags.DEFINE_string(
@@ -499,7 +499,7 @@ class Fire:
         # Terrain is a function of the x and y axis
         elevation = tf.transpose(tf.maximum(profile, 0.0))
       else:
-        # Terrain is a sole function of the x, and CONSTANT along the y axis! 
+        # Terrain is a sole function of the x, and CONSTANT along the y axis!
         elevation = tf.transpose(
             tf.maximum(
                 tf.tile(profile[tf.newaxis, :], [self.config.fy, 1]),
@@ -1376,9 +1376,10 @@ class Fire:
         )
         output.update(
             {
-                'ib_norm_dist': self.fire_utils.states_init(
-                    coordinates, ib_norm_surf_dist_fn
-                ),
+                'ib_norm_dist':
+                    self.fire_utils.states_init(
+                        coordinates, ib_norm_surf_dist_fn
+                    ),
             }
         )
 
@@ -1389,24 +1390,27 @@ class Fire:
             coordinates,
             output['ib_norm_dist'],
             output['ib_interior_mask'],
-            self.terrain_name)
+            self.terrain_name,
+        )
 
-        output.update({
-            'gp_mask': ib_init['gp_mask'],
-            'dist': ib_init['dist'],
-            'ijk_gp': ib_init['ijk_gp'],
-            'x_gp': ib_init['x_gp'],
-            'y_gp': ib_init['y_gp'],
-            'z_gp': ib_init['z_gp'],
-            'x_ip': ib_init['x_ip'],
-            'y_ip': ib_init['y_ip'],
-            'z_ip': ib_init['z_ip'],
-            'ib_interp_weights': ib_init['weights'],
-            'summed_weights': ib_init['summed_weights'],
-            'idx_p': ib_init['p'],
-            'idx_q': ib_init['q'],
-            'idx_s': ib_init['s'],
-        })
+        output.update(
+            {
+                'gp_mask': ib_init['gp_mask'],
+                'dist': ib_init['dist'],
+                'ijk_gp': ib_init['ijk_gp'],
+                'x_gp': ib_init['x_gp'],
+                'y_gp': ib_init['y_gp'],
+                'z_gp': ib_init['z_gp'],
+                'x_ip': ib_init['x_ip'],
+                'y_ip': ib_init['y_ip'],
+                'z_ip': ib_init['z_ip'],
+                'ib_interp_weights': ib_init['weights'],
+                'summed_weights': ib_init['summed_weights'],
+                'idx_p': ib_init['p'],
+                'idx_q': ib_init['q'],
+                'idx_s': ib_init['s'],
+            }
+        )
 
       # Update the initial velocity so that it is 0 inside the solid.
       output.update(

@@ -392,9 +392,9 @@ class Velocity(object):
           rhs_name = self._ib.ib_rhs_name(var_name)
           helper_states = {rhs_name: rhs}
           for helper_var_name in ('ib_interior_mask', 'ib_boundary',
-              'ib_delta_weights', 'ib_norm_dist', 'ijk_gp', 'gp_mask',
+              'ib_norm_dist', 'ijk_gp', 'gp_mask',
               'ib_interp_weights', 'idx_p', 'idx_q', 'idx_s', 'dist',
-              'summed_weights'):
+              'ib_interp_weights_neumann'):
             if helper_var_name in additional_states:
               helper_states[helper_var_name] = additional_states[
                   helper_var_name

@@ -23,6 +23,8 @@ from swirl_lm.base import initializer
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.boundary_condition import immersed_boundary_method_pb2
 from swirl_lm.communication import halo_exchange
+from swirl_lm.example.fire.terrain_utils import compute_custom_terrain_gradients
+from swirl_lm.example.fire.terrain_utils import generate_custom_terrain_profile
 from swirl_lm.numerics import root_finder
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
@@ -35,10 +37,11 @@ InterpFnType = Callable[[FlowFieldVal], FlowFieldVal]
 InitFn = initializer.ValueFunction
 ThreeIntTuple = initializer.ThreeIntTuple
 
-_PI = np.pi
 # Set number of ghost point layers beneath the IB
 # Value must be >= 1
 _NUM_GP_LAYERS = 1
+_EXP = 0.5
+_EPSILON = 1e-6
 
 def _apply_3d_kernel(
     f: FlowFieldVal,
@@ -421,40 +424,17 @@ def norm_surf_dist_fn(
   return init_fn
 
 
-def get_ib_profile(xx, yy, profile):
-  """Generate a fluid/solid interface function"""
-  if profile == 'sine':
-    res = 0.2 + 0.1 * tf.math.sin(2. * np.pi * xx)
-  elif profile == 'ramp':
-    res = 0.2 + xx * tf.math.tan(3. * np.pi / 180.)
-  elif profile == 'witch_of_agnesi':
-    h_p = 100.0  # peak height in meters
-    a = 100.0  # half-width in meters
-    offset = 297.5
-    res = h_p / (1.0 + ((xx - offset) / a)**2.0)
-  elif profile == 'witch_of_agnesi_2d':
-    h_p = 350.0
-    a = 800.0
-    b = 800.0
-    offset = 3000.0
-    z0_offset = 0.
-    res = h_p / (
-        1.0 + ((xx - offset) / a)**2.0 + ((yy - offset) / b)**2.0
-    ) + z0_offset
-
-  return res
-
-
 def compute_normal_projection(
     pointx: tf.Tensor,
     pointy: tf.Tensor,
     pointz: tf.Tensor,
-    surface_type: Text):
+    surface_type: str,
+):
   """Computes the normal projection of a given point onto the immersed boundary
      surface by solving a minimization problem using the Newton method.
      Having a point and its projection is useful to compute the surface normal
      that intersects with the point. Note that we currently support analytical
-     surfaces only!
+     surfaces only.
 
   Args:
     pointx: A tensor containing the x-coordinates of the points for which we
@@ -465,7 +445,7 @@ def compute_normal_projection(
       seek the normal projection onto the immersed boundary surface.
     surface_type: A string defining the type of the immersed boundary surface.
 
-  Return:
+  Returns:
     The normal projection of each point onto the immersed boundary surface.
   """
 
@@ -493,63 +473,15 @@ def compute_normal_projection(
     """
 
     x, y, z = coords[:, 0], coords[:, 1], coords[:, 2]
-
-    if surface_type == 'sine':
-      d_dx = -2 * x0 + tf.math.cos(2 * _PI * x) * (
-          -2 * _PI * 0.2 * z0 + 2 * _PI * 0.1 * 0.2 * tf.math.sin(2 * _PI * x) +
-          2 * (2 * _PI * 0.1 * 0.2)
-      ) + 2 * x
-      d_dy = tf.zeros_like(y)
-      d_dz = tf.zeros_like(z)
-    elif surface_type == 'ramp':
-      d_dx = 2 * (
-          -x0 + tf.math.tan(3. * np.pi / 180.) *
-          (z0 + 0.2 + x * tf.math.tan(3. * np.pi / 180.)) + x
-      )
-      d_dy = tf.zeros_like(y)
-      d_dz = tf.zeros_like(z)
-    elif surface_type == 'witch_of_agnesi':
-      h_p = 100.0
-      a = 100.0
-      offset = 297.5
-      d_dx = (
-          -4 * offset * z0 * h_p / (a**2 * (((x - offset)**2) / a**2 + 1)**2) +
-          4 * z0 * h_p * x / (a**2 * (((x - offset)**2) / a**2 + 1)**2) +
-          4 * offset * (h_p**2) / (a**2 * (((x - offset)**2) / a**2 + 1)**3) -
-          4 * (h_p**2) * x / (a**2 * (((x - offset)**2) / a**2 + 1)**3) -
-          2 * x0 + 2 * x
-      )
-      d_dy = tf.zeros_like(y)
-      d_dz = tf.zeros_like(z)
-    elif surface_type == 'witch_of_agnesi_2d':
-      h_p = 350.0
-      a = 800.0
-      b = 800.0
-      # Offset peak such that it is located in x>0, y>0.
-      # Note that the physical domain origin is at (0,0,0), thus without
-      # any offset, the peak would be at (0,0,0) as well.
-      offset = 3000.0
-      # Offset in vertical dimension to ensure that the IB never coincides with
-      # the physical domain boundary at z = 0 m.
-      z1 = 0.0
-      d_dx = (
-          (
-              4 * a**2 * b**4 * h_p * (offset - x) * (
-                  a**2 * (
-                      b**2 * (z1 - z0 + h_p) + (z1 - z0) *
-                      (-2 * offset * y + offset**2 + y**2)
-                  ) + b**2 * (z1 - z0) * (-2 * offset * x + offset**2 + x**2)
-              )
-          )
-      ) / (
-          a**2 * (b**2 - 2 * offset * y + offset**2 + y**2) + b**2 *
-          (-2 * offset * x + offset**2 + x**2)
-      )**3 - 2 * x0 + 2 * x
-      d_dy = 2 * (y - y0) - (
-          4 * h_p * (y - offset) *
-          (h_p / (1 + ((x - offset) / a)**2 + ((y - offset) / b)**2) + z1 - z0)
-      ) / (b**2 * (1 + ((x - offset) / a)**2 + ((y - offset) / b)**2)**2)
-      d_dz = tf.zeros_like(z)
+    d_dx, d_dy, d_dz = compute_custom_terrain_gradients(
+        x,
+        y,
+        z,
+        surface_type,
+        x0,
+        y0,
+        z0,
+    )
 
     return tf.stack([d_dx, d_dy, d_dz], axis=-1)
 
@@ -575,7 +507,7 @@ def init_ib_helper_states(
     ib_norm_dist: FlowFieldVal,
     ib_interior_mask: FlowFieldVal,
     ib_profile: str,
-) -> FlowFieldMap:
+) -> Dict:
 
   # Compute a mask that flags all ghost nodes with 1, and all other nodes as 0.
   # Ghost nodes are nodes beneath the immersed boundary surface, and one may
@@ -589,11 +521,6 @@ def init_ib_helper_states(
       1.0 - ib_interior_mask,
       tf.zeros_like(ib_interior_mask),
   )
-  #gp_mask = tf.nest.map_structure(
-  #              lambda w, m: tf.math.ceil(w) * (1.0 - m),
-  #              ib_boundary,
-  #              ib_interior_mask,
-  #)
 
   # Since we cannot use clear_halos with dynamic types, we "replace" that
   # operation by stripping the halos first, and zero-padding the stripped
@@ -630,7 +557,7 @@ def init_ib_helper_states(
   x_proj = tf.cast(pt_proj[:, 0], dtype=tf.float32)
   y_proj = tf.cast(pt_proj[:, 1], dtype=tf.float32)
   z_proj = tf.cast(
-      get_ib_profile(x_proj, y_proj, profile=ib_profile),
+      generate_custom_terrain_profile(x_proj, y_proj, profile=ib_profile),
       dtype=tf.float32,
   )
 
@@ -764,7 +691,7 @@ def init_ib_helper_states(
       x: tf.Tensor,
       y: tf.Tensor,
       z: tf.Tensor,
-  ) -> tf.Tensor:
+  ) -> Dict[str, tf.Tensor]:
     """Computes the interpolation weights of the enclosing grid nodes around
        each image point. We only consider grid nodes as valid nodes for
        interpolation, if they are in the fluid domain. These nodes will be
@@ -815,9 +742,16 @@ def init_ib_helper_states(
           )
       )
 
-    # ------------
-    # Approach 2: Weighting by maximum distance
-    # ------------
+    # We mask out all enclosing grid nodes that lay in the solid domain by
+    # multiplying their distance to the image point with zero, while all grid
+    # nodes in the solid are masked with 1 (i.e., our
+    # `fluid_corner_point_mask`).
+    node_dist = tf.nest.map_structure(
+        tf.math.multiply,
+        node_dist,
+        fluid_corner_point_mask,
+    )
+
     # Flag all image points that have less than 8 enclosing grid nodes
     # in the FLUID domain. If all enclosing grid nodes for a given image point
     # are inside the fluid domain, the sum of `fluid_corner_point_mask` will be
@@ -854,25 +788,61 @@ def init_ib_helper_states(
 
     # Next, we compute the corresponding interpolation weight of each enclosing
     # grid node as follows:
-    # w_i = ((node_dist_max_i - node_dist_i) / (node_dist_max_i * node_dist_i))**0.5
-    # where w_i is the interpolation weight of the i-th enclosing grid node
-    # for a given image point.
+    # gamma_i = ((node_dist_max_i - node_dist_i) / (
+    #     node_dist_max_i * node_dist_i)
+    # )**0.5
+    # where gamma_i is the un-normalized interpolation weight of the i-th
+    # enclosing grid node for a given image point. The normalized weight is
+    # then obtained by
+    # w = (1 / denom) * ∑_k gamma_k.
+    # Note that we always exclude the body intercept weight for Neumann boundary
+    # conditions. This is because the value AT the body intercept is not known
+    # before executing the interpolation of the enclosing grid nodes onto the
+    # image point. Consequently, we need a separate set of interpolation weights
+    # for Neumann boundary conditions.
     # Reference: R. Franke, Scattered data interpolation: tests of some
     # methods, Mathematics of Computation 38(157), 1982,
     # https://www.ams.org/mcom/1982-38-157/S0025-5718-1982-0637296-4/
     # And:
     # Cai et al., JCP 429, 2021, specifically Eq. 35, p. 9
 
-    return tf.nest.map_structure(
-        lambda w: tf.math.divide_no_nan(node_dist_max - w, node_dist_max * w)**
-        0.5,
+    # For Dirichlet boundary conditions:
+    gamma = tf.nest.map_structure(
+        lambda _w: tf.math.divide(
+            node_dist_max - _w, node_dist_max * _w + _EPSILON)**_EXP,
         node_dist,
     )
+    denom = tf.math.reduce_sum(gamma, axis=0)
 
-  w = tf.convert_to_tensor(
-      get_interp_weights([x_ip, y_ip, z_ip], [p, q, s], x, y, z),
-      dtype=tf.float32
-  )
+    # For Neumann boundary conditions:
+    gamma_n = tf.nest.map_structure(
+        lambda _w: tf.math.divide(
+            node_dist_max - _w, node_dist_max * _w + _EPSILON)**_EXP,
+        node_dist[0:8],
+    )
+    denom_n = tf.math.reduce_sum(gamma_n, axis=0)
+
+    output = {}
+
+    output.update(
+        {
+            'w':
+                tf.nest.map_structure(
+                    lambda _g: tf.math.divide(_g, denom),
+                    gamma,
+                ),
+            'w_neumann':
+                tf.nest.map_structure(
+                    lambda _g: tf.math.divide(_g, denom_n),
+                    gamma_n,
+                )
+        }
+    )
+
+    return output
+
+
+  interp_helper = get_interp_weights([x_ip, y_ip, z_ip], [p, q, s], x, y, z)
 
   output = {}
   output.update(
@@ -900,10 +870,10 @@ def init_ib_helper_states(
           'z_proj':
               tf.convert_to_tensor(z_proj, dtype=tf.float32),
           'weights':
-              w,
-          'summed_weights':
+              tf.convert_to_tensor(interp_helper['w'], dtype=tf.float32),
+          'weights_neumann':
               tf.convert_to_tensor(
-                  tf.math.reduce_sum(w, axis=0), dtype=tf.float32
+                  interp_helper['w_neumann'], dtype=tf.float32
               ),
           'p':
               p,
@@ -1732,7 +1702,7 @@ class ImmersedBoundaryMethod(object):
   def _ib_gp_force_fn(
       self,
       interp_weights: FlowFieldVal,
-      summed_weights: FlowFieldVal,
+      interp_weights_neumann: FlowFieldVal,
       ib_interior_mask: FlowFieldVal,
       ijk_gp: tf.Tensor,
       idx_p: tf.Tensor,
@@ -1755,7 +1725,8 @@ class ImmersedBoundaryMethod(object):
         additional non-zero interpolation weight of the body intercept if the
         enclosing cell is degenerated (i.e., has less than 8 grid nodes in the
         fluid domain).
-      summed_weights: The denominator of the interpolation function.
+      interp_weights_neumann: Same as `interp_weights` except for the body
+        intercept weight which is excluded.
       ib_interior_mask: A 3D tensor that holds a binary mask where fluid is 1
         and solid is 0.
       ijk_gp: The indices of the ghost points. Note that the mode is z-x-y!
@@ -1775,6 +1746,7 @@ class ImmersedBoundaryMethod(object):
       (-1 for Dirichlet boundary conditions, +1 for Neumann boundary
       conditions), and returns the force term due to the IB.
     """
+
     def get_ib_force(
         u: FlowFieldVal,
         bi_value: float,
@@ -1799,10 +1771,6 @@ class ImmersedBoundaryMethod(object):
           Returns:
             The flow field values at the corner points enclosing the image
               points.
-
-          Raises:
-            NotImplementedError if Neumann boundary condition is set which is
-              currently not yet supported.
         """
 
         res = []
@@ -1825,54 +1793,40 @@ class ImmersedBoundaryMethod(object):
       # image point.
       val_pt = get_corner_points(u, [idx_p, idx_q, idx_s])
 
-      # Adding additional value of the target quantity at the body intercept.
+      # Adding additional value of the target quantity at the body intercept if
+      # boundary condition is a Dirichlet condition. The body intercept value is
+      # excluded for Neumann boundary conditions.
       if sign == -1:
-        # DIRICHLET BC
         val_pt.append(tf.math.multiply(tf.ones_like(dist), bi_value))
+        weights = interp_weights
       else:
-        # NEUMANN BC
-        raise NotImplementedError('Only Dirichlet boundary conditions '
-            'supported.')
+        weights = interp_weights_neumann
 
       val_pt = tf.convert_to_tensor(val_pt, dtype=tf.float32)
 
       # Multiply each grid node of the enclosing cell with its corresponding
       # interpolation weight.
-      weighted_vals = tf.nest.map_structure(
-          tf.math.multiply, interp_weights, val_pt
-      )
+      weighted_vals = tf.nest.map_structure(tf.math.multiply, weights, val_pt)
 
-      ##############
-      # Approach 1 (pure inverse distance weighting)
-      ##############
       # Compute the interpolated flow field value at the image point
-      # interped_val = tf.math.reduce_sum(weighted_vals, axis=0)
-
-      ##############
-      # Approach 2 (weighting by maximum distance)
-      ##############
-      # Compute the interpolated flow field value at the image point
-      interped_val = tf.math.divide_no_nan(
-          tf.math.reduce_sum(weighted_vals, axis=0),
-          summed_weights,
-      )
+      interped_val = tf.math.reduce_sum(weighted_vals, axis=0)
 
       # Compute the ghost point value depending on the desired boundary
       # condition
       if sign == -1:
-        # ===================================
-        # DIRICHLET BOUNDARY CONDITION ONLY!
-        # ===================================
+        # DIRICHLET BOUNDARY CONDITION
         gp_val = tf.nest.map_structure(
             lambda _u: sign * _u + 2 * bi_value, interped_val
         )
       else:
-        # ===================================
         # NEUMANN BOUNDARY CONDITION
-        # ===================================
-        raise NotImplementedError(
-            'Only Dirichlet boundary conditions supported.'
+        # @NOTE: This approach is only first order accurate! See Luo et al.,
+        # International Journal of Heat and Mass Transfer 92, 2016, p. 710.
+        logging.warn(
+            'Neumann boundary condition assumes zero-gradient. '
+            'This approach is first order accurate only!'
         )
+        gp_val = interped_val
 
       # Since the ghost point values are stored in a 1D-vector, we need to
       # scatter these values to the corresponding grid node in the 3D grid,
@@ -1915,7 +1869,7 @@ class ImmersedBoundaryMethod(object):
     """
     ib_force_fn = self._ib_gp_force_fn(
         additional_states['ib_interp_weights'],
-        additional_states['summed_weights'],
+        additional_states['ib_interp_weights_neumann'],
         additional_states['ib_interior_mask'],
         additional_states['ijk_gp'],
         additional_states['idx_p'],

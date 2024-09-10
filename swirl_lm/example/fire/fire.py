@@ -474,16 +474,16 @@ class Fire:
         )
         self.terrain_name = 'wedge'
       elif _TERRAIN_TYPE.value == TerrainType.SINE:
-        profile = immersed_boundary_method.get_ib_profile(
+        profile = terrain_utils.generate_custom_terrain_profile(
             x, None, profile='sine')
         self.terrain_name = 'sine'
       elif _TERRAIN_TYPE.value == TerrainType.WITCHOFAGNESI:
-        profile = immersed_boundary_method.get_ib_profile(
+        profile = terrain_utils.generate_custom_terrain_profile(
             x, None, profile='witch_of_agnesi')
         self.terrain_name = 'witch_of_agnesi'
       elif _TERRAIN_TYPE.value == TerrainType.WITCHOFAGNESI2D:
         x_grid, y_grid = tf.meshgrid(x, y)
-        profile = immersed_boundary_method.get_ib_profile(
+        profile = terrain_utils.generate_custom_terrain_profile(
             x_grid, y_grid, profile='witch_of_agnesi_2d')
         self.terrain_name = 'witch_of_agnesi_2d'
       else:
@@ -1405,7 +1405,7 @@ class Fire:
                 'y_ip': ib_init['y_ip'],
                 'z_ip': ib_init['z_ip'],
                 'ib_interp_weights': ib_init['weights'],
-                'summed_weights': ib_init['summed_weights'],
+                'ib_interp_weights_neumann': ib_init['weights_neumann'],
                 'idx_p': ib_init['p'],
                 'idx_q': ib_init['q'],
                 'idx_s': ib_init['s'],

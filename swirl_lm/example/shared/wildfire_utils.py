@@ -563,7 +563,8 @@ class WildfireUtils:
 
     if (self.config.combustion is None or
         not self.config.combustion.HasField('wood')):
-      raise ValueError('Wood model is not defined as a combustion model.')
+      # raise ValueError('Wood model is not defined as a combustion model.')
+      logging.warning('Combustion model deactivated')
 
     # The update function for reactive variables and their source terms.
     self.combustion_step_fn = combustion.combustion_step
@@ -632,9 +633,12 @@ class WildfireUtils:
     )
 
     # Parameters for the drag force.
-    self.drag_force_fn = self.vegetation_drag_update_fn(
-        _C_D.value, self.config.combustion.wood.a_v
-    )
+    if not self.config.combustion is None:
+      self.drag_force_fn = self.vegetation_drag_update_fn(
+          _C_D.value, self.config.combustion.wood.a_v
+      )
+    else:
+      logging.warning('No vegetation drag')
 
     # Parameters for the inflow.
     self.u_mean = self.u_init

@@ -124,8 +124,19 @@ message FeedbackForce1DInterp {
   optional float damping_coeff = 3 [default = 1.0];
 }
 
+message GhostPointMethod {
+  // Variables for which the ghost point method is applied.
+  repeated IBVariableInfo variables = 1;
+  // The surface function of the immersed boundary. Only analytical functions
+  // are currently supported. Should be one of `sine`, `ramp`,
+  // `witch_of_agnesi`, or `witch_of_agnesi_2d`. 
+  // optional string profile = 2;
+  // The value of the damping coefficient.
+  optional float damping_coeff = 2 [default = 10.0];
+}
+
 // Parameters required by the immersed boundary method.
-// Next id: 7
+// Next id: 8
 message ImmersedBoundaryMethod {
   oneof type {
     CartesianGridMethod cartesian_grid = 1;
@@ -134,5 +145,6 @@ message ImmersedBoundaryMethod {
     DirectForcingMethod direct_forcing = 4;
     DirectForcing1DInterp direct_forcing_1d_interp = 6;
     FeedbackForce1DInterp feedback_force_1d_interp = 5;
+    GhostPointMethod ghost_point_method = 7;
   }
 }

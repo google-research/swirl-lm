@@ -41,6 +41,7 @@ RangeIndices = Tuple[int, int]
 RangeIndices3D = Tuple[RangeIndices, RangeIndices, RangeIndices]
 FlowFieldVal = types.FlowFieldVal
 
+_PI = np.pi
 
 def generate_terrain_map_from_file(
     config: parameters_lib.SwirlLMParameters,
@@ -83,6 +84,103 @@ def generate_terrain_map_from_file(
   return tf.image.resize(
       tf.expand_dims(raw_map, axis=-1), [config.fx, config.fy],
       method='bicubic')[:, :, 0]
+
+
+def generate_custom_terrain_profile(
+    xx: tf.Tensor,
+    yy: tf.Tensor,
+    profile: tf.Tensor,
+) -> tf.Tensor:
+  """Generate a fluid/solid interface function"""
+  if profile == 'sine':
+    res = 0.2 + 0.1 * tf.math.sin(2. * _PI * xx)
+  elif profile == 'ramp':
+    res = 0.2 + xx * tf.math.tan(3. * _PI / 180.)
+  elif profile == 'witch_of_agnesi':
+    h_p = 100.0  # peak height in meters
+    a = 100.0  # half-width in meters
+    offset = 297.5
+    res = h_p / (1.0 + ((xx - offset) / a)**2.0)
+  elif profile == 'witch_of_agnesi_2d':
+    h_p = 350.0
+    a = 800.0
+    b = 800.0
+    offset = 3000.0
+    z0_offset = 0.
+    res = h_p / (
+        1.0 + ((xx - offset) / a)**2.0 + ((yy - offset) / b)**2.0
+    ) + z0_offset
+
+  return res
+
+
+def compute_custom_terrain_gradients(
+    x,
+    y,
+    z,
+    surface_type,
+    x0,
+    y0,
+    z0,
+):
+    if surface_type == 'sine':
+      d_dx = -2 * x0 + tf.math.cos(2 * _PI * x) * (
+          -2 * _PI * 0.2 * z0 + 2 * _PI * 0.1 * 0.2 * tf.math.sin(2 * _PI * x) +
+          2 * (2 * _PI * 0.1 * 0.2)
+      ) + 2 * x
+      d_dy = tf.zeros_like(y)
+      d_dz = tf.zeros_like(z)
+    elif surface_type == 'ramp':
+      d_dx = 2 * (
+          -x0 + tf.math.tan(3. * np.pi / 180.) *
+          (z0 + 0.2 + x * tf.math.tan(3. * np.pi / 180.)) + x
+      )
+      d_dy = tf.zeros_like(y)
+      d_dz = tf.zeros_like(z)
+    elif surface_type == 'witch_of_agnesi':
+      h_p = 100.0
+      a = 100.0
+      offset = 297.5
+      d_dx = (
+          -4 * offset * z0 * h_p / (a**2 * (((x - offset)**2) / a**2 + 1)**2) +
+          4 * z0 * h_p * x / (a**2 * (((x - offset)**2) / a**2 + 1)**2) +
+          4 * offset * (h_p**2) / (a**2 * (((x - offset)**2) / a**2 + 1)**3) -
+          4 * (h_p**2) * x / (a**2 * (((x - offset)**2) / a**2 + 1)**3) -
+          2 * x0 + 2 * x
+      )
+      d_dy = tf.zeros_like(y)
+      d_dz = tf.zeros_like(z)
+    elif surface_type == 'witch_of_agnesi_2d':
+      h_p = 350.0
+      a = 800.0
+      b = 800.0
+      # Offset peak such that it is located in x>0, y>0.
+      # Note that the physical domain origin is at (0,0,0), thus without
+      # any offset, the peak would be at (0,0,0) as well.
+      offset = 3000.0
+      # Offset in vertical dimension to ensure that the IB never coincides with
+      # the physical domain boundary at z = 0 m.
+      z1 = 0.0
+      d_dx = (
+          (
+              4 * a**2 * b**4 * h_p * (offset - x) * (
+                  a**2 * (
+                      b**2 * (z1 - z0 + h_p) + (z1 - z0) *
+                      (-2 * offset * y + offset**2 + y**2)
+                  ) + b**2 * (z1 - z0) * (-2 * offset * x + offset**2 + x**2)
+              )
+          )
+      ) / (
+          a**2 * (b**2 - 2 * offset * y + offset**2 + y**2) + b**2 *
+          (-2 * offset * x + offset**2 + x**2)
+      )**3 - 2 * x0 + 2 * x
+      d_dy = 2 * (y - y0) - (
+          4 * h_p * (y - offset) *
+          (h_p / (1 + ((x - offset) / a)**2 + ((y - offset) / b)**2) + z1 - z0)
+      ) / (b**2 * (1 + ((x - offset) / a)**2 + ((y - offset) / b)**2)**2)
+      d_dz = tf.zeros_like(z)
+
+    return d_dx, d_dy, d_dz 
 
 
 class TerrainUtils(object):

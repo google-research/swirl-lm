@@ -30,8 +30,23 @@ sgs_model {
     pr_t: 1.0
   }
 }
-periodic {
-  dim_0: true dim_1: true dim_2: false
+grid_params {
+  computation_shape {
+    dim_0: 2 dim_1: 2 dim_2: 2
+  }
+  length {
+    dim_0: 6000.0 dim_1: 6000.0 dim_2: 4500.0
+  }
+  grid_size {
+    dim_0: 64 dim_1: 64 dim_2: 64
+  }
+  periodic {
+    dim_0: true dim_1: true dim_2: false
+  }
+  halo_width: 2
+  dt: 0.01
+  kernel_size: 16
+  num_boundary_points: 0
 }
 gravity_direction {
   dim_0: 0.0 dim_1: 0.0 dim_2: -1.0
@@ -79,8 +94,8 @@ boundary_models {
       variables { name: "rho_u" value: 0.0 bc: DIRICHLET override: false }
       variables { name: "rho_v" value: 0.0 bc: DIRICHLET override: false }
       variables { name: "rho_w" value: 0.0 bc: DIRICHLET override: false }
-      variables { name: "rho_T" value: 283.0 bc: DIRICHLET override: false }
-      variables { name: "rho_Y_O" value: 0.21 bc: DIRICHLET override: false }
+      variables { name: "rho_T" value: 283.0 bc: NEUMANN override: false }
+      variables { name: "rho_Y_O" value: 0.21 bc: NEUMANN override: false }
     }
   }
   # sponge {
@@ -113,7 +128,7 @@ additional_state_keys: "ib_boundary"
 additional_state_keys: "gp_mask"
 additional_state_keys: "ib_norm_dist"
 helper_var_keys: "ib_interp_weights"
-helper_var_keys: "summed_weights"
+helper_var_keys: "ib_interp_weights_neumann"
 helper_var_keys: "idx_p"
 helper_var_keys: "idx_q"
 helper_var_keys: "idx_s"

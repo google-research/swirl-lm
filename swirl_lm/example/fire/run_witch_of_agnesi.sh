@@ -5,7 +5,7 @@ TERRAIN_FILE=None # swirl-lm/swirl_lm/example/fire/tubbs_1k_20kmx20km.ser
 
 python3 ./fire_main.py \
   --simulation_debug=true \
-  --c_d=0.01 --dt=0.01 \
+  --c_d=0.01 \
   --flat_surface_ignite=False --flat_surface_include_fire=False \
   --flat_surface_init_bl=True \
   --flat_surface_blasius_bl_distance=100000000.0 \
@@ -14,13 +14,8 @@ python3 ./fire_main.py \
   --flat_surface_include_coriolis_force=True \
   --flat_surface_use_dynamic_igniter=False \
   --fuel_bed_height=0.0 --fuel_density=0.0 \
-  --kernel_size=16 \
   --loading_step=0 \
-  --lx=6000.0 --ly=6000.0 --lz=4500.0 \
   --moisture_density=0.0 \
-  --num_boundary_points=0 \
-  --nx=64 --ny=64 --nz=64 \
-  --cx=2 --cy=2 --cz=2 \
   --opt_filter_fuel_density=False \
   --start_step=0 \
   --terrain_filepath=${TERRAIN_FILE} \

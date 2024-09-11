@@ -17,7 +17,7 @@
 import functools
 import os
 import time
-from typing import Any, Dict, Optional, Sequence, Tuple, TypeAlias, TypeVar, Union
+from typing import Any, Optional, Sequence, TypeAlias, TypeVar, Union
 
 from absl import flags
 from absl import logging
@@ -96,8 +96,7 @@ COMPLETION_FILE = 'DONE'
 _MAX_UVW_CFL = 'max_uvw_cfl'
 
 Array: TypeAlias = Any
-PerReplica: TypeAlias = Any
-Structure: TypeAlias = Any
+PerReplica: TypeAlias = tf.types.experimental.distributed.PerReplica
 FlowFieldVal: TypeAlias = types.FlowFieldVal
 T = TypeVar('T')
 S = TypeVar('S')
@@ -110,18 +109,25 @@ class _NonRecoverableError(Exception):
 
 
 def _stateless_update_if_present(
-    mapping: Dict[T, S], updates: Dict[T, S]
-) -> Dict[T, S]:
+    mapping: dict[T, S], updates: dict[T, S]
+) -> dict[T, S]:
   """Returns a copy of `mapping` with only existing keys updated."""
   mapping = mapping.copy()
   mapping.update({key: val for key, val in updates.items() if key in mapping})
   return mapping
 
 
-def _local_state(
+def _local_state_dict(
     strategy: tf.distribute.Strategy,
-    distributed_state: Dict[str, tf.distribute.DistributedValues],
-) -> Tuple[Structure]:
+    distributed_state: dict[str, PerReplica],
+) -> tuple[dict[str, tf.Tensor], ...]:
+  return strategy.experimental_local_results(distributed_state)
+
+
+def _local_state_value(
+    strategy: tf.distribute.Strategy,
+    distributed_state: PerReplica,
+) -> tuple[PerReplica, ...]:
   return strategy.experimental_local_results(distributed_state)
 
 
@@ -354,7 +360,7 @@ def _update_additional_states(
   return updated_additional_states
 
 
-def _state_has_nan_inf(state: PerReplica, replicas: Array) -> bool:
+def _state_has_nan_inf(state: dict[str, PerReplica], replicas: Array) -> bool:
   """Checks whether any field in the `state` contains `nan` or `inf`."""
   has_nan_inf = False
   for _, v in state.items():
@@ -374,7 +380,7 @@ def _state_has_nan_inf(state: PerReplica, replicas: Array) -> bool:
 
 
 def _compute_max_uvw_and_cfl(
-    state: PerReplica,
+    state: dict[str, PerReplica],
     grid_spacings: tuple[FlowFieldVal, FlowFieldVal, FlowFieldVal],
     replicas: Array,
 ) -> tf.Tensor:
@@ -426,12 +432,12 @@ def _compute_max_uvw_and_cfl(
 @tf.function
 def _one_cycle(
     strategy: tf.distribute.Strategy,
-    init_state: PerReplica,
+    init_state: dict[str, PerReplica],
     init_step_id: Array,
     num_steps: Array,
     params: Union[parameters_lib.SwirlLMParameters, Any],
     model: Any,
-) -> Tuple[PerReplica, PerReplica]:
+) -> tuple[dict[str, PerReplica], dict[str, PerReplica]]:
   """Runs one cycle of the Navier-Stokes solver.
 
   Args:
@@ -447,7 +453,7 @@ def _one_cycle(
 
   Returns:
     A 2-tuple of the final state at the end of the cycle and the completed
-    number of steps, both will be in the PerReplica format.
+    number of steps, both will be in the dict[str, PerReplica] format.
   """
   logging.info(
       'Tracing and compiling of _one_cycle starts. This can take up to 30 min.'
@@ -628,7 +634,7 @@ def get_init_state(
     strategy: tf.distribute.TPUStrategy,
     params: parameters_lib.SwirlLMParameters,
     logical_coordinates: Array,
-) -> driver_tpu.PerReplica:
+) -> dict[str, PerReplica]:
   """Creates the initial state using `customized_init_fn`."""
   t_start = time.time()
 
@@ -782,7 +788,7 @@ def solver(
 def solver_loop(
     strategy: tf.distribute.TPUStrategy,
     logical_coordinates: Array,
-    init_state: driver_tpu.PerReplica,
+    init_state: dict[str, PerReplica],
     params: Union[parameters_lib.SwirlLMParameters, Any],
 ):
   """Runs the solver on an initialized TPU system starting with `init_state`."""
@@ -857,19 +863,21 @@ def solver_loop(
     return tf.constant(step_id.numpy(), tf.int32)
 
   def write_state_and_sync(
-      state: Dict[str, tf.distribute.DistributedValues],
+      state: dict[str, PerReplica],
       step_id: Array,
       data_dump_filter: Optional[Sequence[str]] = None,
   ):
-    write_state = dict(state) | debug_output.get_vars(strategy, state.keys())
+    debug_vars = debug_output.get_vars(strategy, state.keys())
+    write_state = dict(state) | debug_vars
     write_status = driver_tpu.distributed_write_state(
         strategy,
-        _local_state(strategy, write_state),
+        _local_state_dict(strategy, write_state),
         logical_coordinates=logical_coordinates,
         output_dir=output_dir,
         filename_prefix=filename_prefix,
         step_id=step_id,
         data_dump_filter=data_dump_filter,
+        fields_allowing_non_finite_values=list(debug_vars.keys()),
     )
 
     # This will block until all replicas are done writing.
@@ -905,7 +913,7 @@ def solver_loop(
       )
     ckpt_manager.restore_or_initialize()
     state = read_state(
-        state=_local_state(strategy, state), step_id=step_id_value()
+        state=_local_state_dict(strategy, state), step_id=step_id_value()
     )
     # This is to sync the client code to the worker execution.
     replica_id_values = state['replica_id'].values
@@ -924,7 +932,7 @@ def solver_loop(
         params.loading_step,
     )
     state = read_state_from_input_dir(
-        state=_local_state(strategy, state),
+        state=_local_state_dict(strategy, state),
         step_id=tf.constant(params.loading_step),
     )
     write_initial_state = True
@@ -1011,7 +1019,8 @@ def solver_loop(
 
     # Completed number steps are guaranteed to be identical for all replicas, so
     # we are just taking replica 0 value.
-    completed_steps = _local_state(strategy, num_steps_completed)[0].numpy()
+    completed_steps = _local_state_value(
+        strategy, num_steps_completed)[0].numpy()
     step_id.assign_add(completed_steps)
 
     if SAVE_MAX_UVW_AND_CFL.value:
@@ -1019,7 +1028,7 @@ def solver_loop(
       # replica 0 value.
       cfl_values = (
           params.dt
-          * _local_state(strategy, state[_MAX_UVW_CFL])[0].numpy()[:, 3]
+          * _local_state_value(strategy, state[_MAX_UVW_CFL])[0].numpy()[:, 3]
       )
       max_cfl_number_from_cycle = tf.reduce_max(cfl_values)
       cfl_number_from_last_step = cfl_values[completed_steps - 1]
@@ -1064,7 +1073,7 @@ def solver_loop(
       )
 
     replica_id_values = []
-    replica_id_values.extend(_local_state(strategy, state['replica_id']))
+    replica_id_values.extend(_local_state_value(strategy, state['replica_id']))
     logging.info(
         'One cycle computation is done. Replicas are: %s',
         str([v.numpy() for v in replica_id_values]),

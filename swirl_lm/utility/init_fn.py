@@ -169,17 +169,23 @@ def blasius_boundary_layer(
     if len(elevation.shape) == 3:
       elevation = tf.squeeze(elevation[..., 0])
 
-    dh_dx_0 = kernel_op.apply_kernel_op_x([elevation], 'kdx+')[0] / dx
-    dh_dx_c = kernel_op.apply_kernel_op_x([elevation], 'kDx')[0] / (2.0 * dx)
-    dh_dx_e = kernel_op.apply_kernel_op_x([elevation], 'kdx')[0] / dx
-    dh_dx = tf.concat([dh_dx_0[0:1, :], dh_dx_c[1:-1, :], dh_dx_e[-2:-1, :]],
-                      axis=0)
+    dh_dx_0 = kernel_op.apply_kernel_op_x(tf.expand_dims(elevation, 0),
+                                          'kdx+') / dx
+    dh_dx_c = kernel_op.apply_kernel_op_x(tf.expand_dims(elevation, 0),
+                                          'kDx') / (2.0 * dx)
+    dh_dx_e = kernel_op.apply_kernel_op_x(tf.expand_dims(elevation, 0),
+                                          'kdx') / dx
+    dh_dx = tf.concat(
+        [dh_dx_0[0, 0:1, :], dh_dx_c[0, 1:-1, :], dh_dx_e[0, -2:-1, :]], axis=0)
 
-    dh_dy_0 = kernel_op.apply_kernel_op_y([elevation], 'kdy+')[0] / dy
-    dh_dy_c = kernel_op.apply_kernel_op_y([elevation], 'kDy')[0] / (2.0 * dy)
-    dh_dy_e = kernel_op.apply_kernel_op_y([elevation], 'kdy')[0] / dy
-    dh_dy = tf.concat([dh_dy_0[:, 0:1], dh_dy_c[:, 1:-1], dh_dy_e[:, -2:-1]],
-                      axis=1)
+    dh_dy_0 = kernel_op.apply_kernel_op_y(tf.expand_dims(elevation, 0),
+                                          'kdy+') / dy
+    dh_dy_c = kernel_op.apply_kernel_op_y(tf.expand_dims(elevation, 0),
+                                          'kDy') / (2.0 * dy)
+    dh_dy_e = kernel_op.apply_kernel_op_y(tf.expand_dims(elevation, 0),
+                                          'kdy') / dy
+    dh_dy = tf.concat(
+        [dh_dy_0[0, :, 0:1], dh_dy_c[0, :, 1:-1], dh_dy_e[0, :, -2:-1]], axis=1)
 
     theta = tf.math.asin((u_inf * dh_dx + v_inf * dh_dy) / tf.math.sqrt(
         (1.0 + dh_dx**2 + dh_dy**2)) / u_mag)

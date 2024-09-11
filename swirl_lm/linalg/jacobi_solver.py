@@ -84,33 +84,23 @@ def halo_update_for_compatibility_fn(
     dtype = p[0].dtype
     new_rhs_mean = tf.cast(rhs_mean, dtype)
 
-    bc_p_x_low = [
-        -new_rhs_mean / 6.0 * dx * lx * tf.ones((1, ny), dtype=dtype)
-    ] * nz
-    bc_p_x_high = [
-        new_rhs_mean / 6.0 * dx * lx * tf.ones((1, ny), dtype=dtype)
-    ] * nz
-    bc_p_y_low = [
-        -new_rhs_mean / 6.0 * dy * ly * tf.ones((nx, 1), dtype=dtype)
-    ] * nz
-    bc_p_y_high = [
-        new_rhs_mean / 6.0 * dy * ly * tf.ones((nx, 1), dtype=dtype)
-    ] * nz
-    bc_p_z = new_rhs_mean / 6.0 * dz * lz * tf.ones((nx, ny), dtype=dtype)
+    bc_p_x = new_rhs_mean / 6.0 * dx * lx * tf.ones((nz, 1, ny), dtype=dtype)
+    bc_p_y = new_rhs_mean / 6.0 * dy * ly * tf.ones((nz, nx, 1), dtype=dtype)
+    bc_p_z = new_rhs_mean / 6.0 * dz * lz * tf.ones((1, nx, ny), dtype=dtype)
 
     bc_p = [
         [
             (
                 halo_exchange.BCType.NEUMANN,
                 [
-                    bc_p_x_low,
+                    -bc_p_x,
                 ]
                 * halo_width,
             ),
             (
                 halo_exchange.BCType.NEUMANN,
                 [
-                    bc_p_x_high,
+                    bc_p_x,
                 ]
                 * halo_width,
             ),
@@ -119,14 +109,14 @@ def halo_update_for_compatibility_fn(
             (
                 halo_exchange.BCType.NEUMANN,
                 [
-                    bc_p_y_low,
+                    -bc_p_y,
                 ]
                 * halo_width,
             ),
             (
                 halo_exchange.BCType.NEUMANN,
                 [
-                    bc_p_y_high,
+                    bc_p_y,
                 ]
                 * halo_width,
             ),
@@ -149,7 +139,7 @@ def halo_update_for_compatibility_fn(
         ],
     ]
     return halo_exchange.inplace_halo_exchange(
-        [p_i for p_i in p],
+        p,
         dims=(0, 1, 2),
         replica_id=replica_id,
         replicas=replicas,
@@ -425,7 +415,7 @@ class ThreeWeightForPressure(base_poisson_solver.PoissonSolver):
         *h,
     )
 
-    # For the anelastic case, all the weighting coefficients are multipled by
+    # For the anelastic case, all the weighting coefficients are multiplied by
     # the reference density.
     multiply = lambda a, b: tf.nest.map_structure(tf.math.multiply, a, b)
     if solver_mode == thermodynamics_pb2.Thermodynamics.ANELASTIC:

@@ -46,7 +46,7 @@ FlowFieldMap: TypeAlias = types.FlowFieldMap
 
 # The threshold of the difference between the absolute value of the
 # gravitational vector along a dimension and one. Below this threshold the
-# cooresponding dimension is the gravity (vertical) dimension.
+# corresponding dimension is the gravity (vertical) dimension.
 _G_THRESHOLD = 1e-6
 
 flags.DEFINE_string(
@@ -875,29 +875,22 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
       direction is specified, returns zeros that has the same structure as the
       flow field.
     """
-    if self.g_dim == 0:
-      grid_vertical = self.x_local_ext(replica_id, replicas)
-      return (
-          grid_vertical[tf.newaxis, :, tf.newaxis]
-          if self.use_3d_tf_tensor
-          else [grid_vertical[:, tf.newaxis]] * self.nz
-      )
-    elif self.g_dim == 1:
-      grid_vertical = self.y_local_ext(replica_id, replicas)
-      return (
-          grid_vertical[tf.newaxis, tf.newaxis, :]
-          if self.use_3d_tf_tensor
-          else [grid_vertical[tf.newaxis, :]] * self.nz
-      )
-    elif self.g_dim == 2:
-      grid_vertical = self.z_local_ext(replica_id, replicas)
-      return (
-          grid_vertical[:, tf.newaxis, tf.newaxis]
-          if self.use_3d_tf_tensor
-          else tf.unstack(grid_vertical, num=self.nz)
-      )
+    if self.g_dim is not None:
+      if self.g_dim == 0:
+        grid_vertical = self.x_local_ext(replica_id, replicas)
+        return grid_vertical[tf.newaxis, :, tf.newaxis]
+      elif self.g_dim == 1:
+        grid_vertical = self.y_local_ext(replica_id, replicas)
+        return grid_vertical[tf.newaxis, tf.newaxis, :]
+      elif self.g_dim == 2:
+        grid_vertical = self.z_local_ext(replica_id, replicas)
+        return grid_vertical[:, tf.newaxis, tf.newaxis]
+      else:
+        raise ValueError(
+            f'If set, g_dim should be 0, 1, or 2 but is {self.g_dim}.')
     else:
-      return [tf.zeros((1, 1), dtype=types.TF_DTYPE)] * self.nz
+      logging.info('Gravity direction is not set, grid vertical will be 0.')
+      return tf.zeros((self.nz, 1, 1), dtype=types.TF_DTYPE)
 
   def diffusivity(self, scalar_name: str) -> float:
     """Retrieves the diffusivity of a scalar.

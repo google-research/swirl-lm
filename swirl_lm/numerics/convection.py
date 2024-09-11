@@ -145,8 +145,7 @@ def central4(kernel_op: get_kernel_fn.ApplyKernelOp, f: FlowFieldVal,
       lambda f: kernel_op.apply_kernel_op_y(f, 'kD4y'),
       lambda f: kernel_op.apply_kernel_op_z(f, 'kD4z', 'kD4zsh'),
   ]
-
-  return [d_f / (12.0 * grid_spacing) for d_f in grad_fn[dim](f)]
+  return grad_fn[dim](f) / (12.0 * grid_spacing)
 
 
 def face_interpolation(

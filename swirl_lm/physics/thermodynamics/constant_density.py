@@ -36,9 +36,9 @@ class ConstantDensity(thermodynamics_generic.ThermodynamicModel):
           (params.nz, params.nx, params.ny), dtype=TF_DTYPE
       )
     else:
-      self.rho = [
-          params.rho * tf.ones((params.nx, params.ny), dtype=TF_DTYPE)
-      ] * params.nz
+      self.rho = params.rho * tf.ones(
+          (params.nz, params.nx, params.ny), dtype=TF_DTYPE
+      )
 
   def update_density(
       self,

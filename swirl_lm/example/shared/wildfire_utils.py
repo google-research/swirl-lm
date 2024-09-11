@@ -561,8 +561,27 @@ class WildfireUtils:
         parameters_lib.params_from_config_file_flag())
     # pylint: enable=g-long-ternary
 
-    if (self.config.combustion is None or
-        not self.config.combustion.HasField('wood')):
+    if self.config.combustion is None:
+      raise ValueError('Combustion model is not defined.')
+
+    has_wood = self.config.combustion.HasField('wood')
+    has_biofuel_multistep = self.config.combustion.HasField('biofuel_multistep')
+
+    if has_biofuel_multistep and has_wood:
+      raise ValueError(
+          'Defining both multistep biofuel and wood models is ambiguous for'
+          ' wildfire simulations.'
+      )
+
+    if has_wood:
+      self.combustion_model_type = 'wood'
+      self.wood = self.config.combustion.wood
+    elif has_biofuel_multistep:
+      self.combustion_model_type = 'biofuel_multistep'
+      self.wood = (
+          self.config.combustion.biofuel_multistep.pyrolysis_char_oxidation.wood
+      )
+    else:
       raise ValueError('Wood model is not defined as a combustion model.')
 
     # The update function for reactive variables and their source terms.
@@ -633,7 +652,7 @@ class WildfireUtils:
 
     # Parameters for the drag force.
     self.drag_force_fn = self.vegetation_drag_update_fn(
-        _C_D.value, self.config.combustion.wood.a_v
+        _C_D.value, self.wood.a_v
     )
 
     # Parameters for the inflow.

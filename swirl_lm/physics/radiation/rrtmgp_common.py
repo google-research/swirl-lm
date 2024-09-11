@@ -27,16 +27,24 @@ KEY_APPLIED_RADIATION = 'rad_heat_src_applied'
 # radiative heating rate and is nonzero for every step, even if supercycling.
 KEY_STORED_RADIATION = 'rad_heat_src'
 
-# Key for the longwave radiative fluxes in the upper atmosphere, in W/m^2.
+# Key for the longwave radiative fluxes, in W/m^2.
 KEY_RADIATIVE_FLUX_LW = 'rad_flux_lw'
-# Key for the shortwave radiative fluxes in the upper atmosphere, in W/m^2.
+# Key for the longwave radiative fluxes in the extended grid, in W/m^2.
+KEY_EXT_RADIATIVE_FLUX_LW = 'extended_rad_flux_lw'
+# Key for the shortwave radiative fluxes, in W/m^2.
 KEY_RADIATIVE_FLUX_SW = 'rad_flux_sw'
-# Key for the longwave radiative fluxes in the upper atmosphere with cloud
-# effects removed, in W/m^2.
+# Key for the shortwave radiative fluxes in the extended grid, in W/m^2.
+KEY_EXT_RADIATIVE_FLUX_SW = 'extended_rad_flux_sw'
+# Key for the longwave radiative fluxes with cloud effects removed, in W/m^2.
 KEY_RADIATIVE_FLUX_LW_CLEAR = 'rad_flux_lw_clear'
-# Key for the shortave radiative fluxes in the upper atmosphere with cloud
-# effects removed, in W/m^2.
+# Key for the longwave radiative fluxes in the extended grid with cloud effects
+# removed, in W/m^2.
+KEY_EXT_RADIATIVE_FLUX_LW_CLEAR = 'extended_rad_flux_lw_clear'
+# Key for the shortave radiative fluxes with cloud effects removed, in W/m^2.
 KEY_RADIATIVE_FLUX_SW_CLEAR = 'rad_flux_sw_clear'
+# Key for the shortave radiative fluxes in the extended grid with cloud effects
+# removed, in W/m^2.
+KEY_EXT_RADIATIVE_FLUX_SW_CLEAR = 'extended_rad_flux_sw_clear'
 
 
 def required_keys(
@@ -63,6 +71,7 @@ def additional_keys(
         KEY_RADIATIVE_FLUX_LW_CLEAR,
         KEY_RADIATIVE_FLUX_SW_CLEAR,
     ]
+    diagnostic_keys += [f'extended_{k}' for k in diagnostic_keys]
     # Include diagnostic keys only if present in `additional_state_keys`.
     diagnostic_keys = [k for k in diagnostic_keys if k in additional_state_keys]
     return required_keys(radiative_transfer_config) + diagnostic_keys

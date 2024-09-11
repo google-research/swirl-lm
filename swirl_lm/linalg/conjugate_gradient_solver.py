@@ -180,8 +180,10 @@ def conjugate_gradient_solver(
   else:
     input_dtype = None
 
-  b = common_ops.tf_cast(b, internal_dtype)
-  x0 = common_ops.tf_cast(x0, internal_dtype)
+  b = tf.nest.map_structure(
+      lambda b_i: common_ops.tf_cast(b_i, internal_dtype), b)
+  x0 = tf.nest.map_structure(
+      lambda x0_i: common_ops.tf_cast(x0_i, internal_dtype), x0)
 
   if reprojection:
     x = reprojection(x0)
@@ -189,15 +191,19 @@ def conjugate_gradient_solver(
     x = x0
 
   # Computes the residual, r.
-  r = tf.nest.map_structure(tf.math.subtract, b, linear_operator(x))
+
+  r = tf.nest.map_structure(tf.math.subtract, b,
+                            tf.unstack(linear_operator(tf.stack(x))))
   if reprojection:
     r = reprojection(r)
 
   def get_cg_vars(r, is_initial_step, d_previous=None, gamma_previous=None):
     """CG vars useful in iterations."""
     # Computes the search direction, d.
-    q = r if preconditioner is None else preconditioner(r)
-    gamma = dot(r, q)
+
+    q = r if preconditioner is None else tf.unstack(preconditioner(tf.stack(r)))
+
+    gamma = dot(tf.stack(r), tf.stack(q))
 
     if is_initial_step:
       d = q
@@ -206,13 +212,14 @@ def conjugate_gradient_solver(
       d = tf.nest.map_structure(lambda q_, d_: q_ + beta * d_, q, d_previous)
 
     # Computes the squared norm of the residual.
-    rho = gamma if preconditioner is None else dot(r, r)
+    #
+    rho = gamma if preconditioner is None else dot(tf.stack(r), tf.stack(r))
 
     component_wise_distance = (
         _UNUSED_VALUE  # pylint: disable=g-long-ternary
         if component_wise_distance_fn is None
         else component_wise_distance_fn(
-            tf.nest.map_structure(tf.math.subtract, r, b)
+            tf.nest.map_structure(tf.math.subtract, tf.stack(r), tf.stack(b))
         )
     )
 
@@ -252,8 +259,9 @@ def conjugate_gradient_solver(
     x = state.solution
     gamma = state.gamma
 
-    a_d = linear_operator(d)
-    alpha = tf.math.divide(gamma, dot(d, a_d))
+    a_d = tf.unstack(linear_operator(tf.stack(d)))
+
+    alpha = tf.math.divide(gamma, dot(tf.stack(d), tf.stack(a_d)))
 
     x_next = tf.nest.map_structure(lambda x_, d_: x_ + alpha * d_, x, d)
     r_next = tf.nest.map_structure(lambda r_, a_d_: r_ - alpha * a_d_, r, a_d)
@@ -278,7 +286,7 @@ def conjugate_gradient_solver(
     tol_sq = tf.cast(tol_sq, internal_dtype)
 
   if l2_norm_reduction:
-    tol_sq *= dot(b, b)
+    tol_sq *= dot(tf.stack(b), tf.stack(b))
 
   def condition(i, state):
     cond = tf.math.logical_and(i < max_iterations,

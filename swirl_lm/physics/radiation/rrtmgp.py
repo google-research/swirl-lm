@@ -204,7 +204,8 @@ class RRTMGP:
         from a single column of a global circulation model (GCM) in equilibrium.
 
     Returns:
-      A dictionary containing the following entries:
+      A dictionary containing any subset of the following entries, as long as
+      the corresponding keys are present in `additional_states`:
       'rad_heat_src' -> The heating rate due to radiative transfer, in K/s.
       'rad_flux_lw' -> The net longwave radiative flux in the upper atmosphere,
         in W/m².
@@ -255,15 +256,17 @@ class RRTMGP:
     output = {
         rrtmgp_common.KEY_STORED_RADIATION: heating_rate
     }
-    flux_keys = [
-        rrtmgp_common.KEY_RADIATIVE_FLUX_LW,
-        rrtmgp_common.KEY_RADIATIVE_FLUX_SW,
-        rrtmgp_common.KEY_RADIATIVE_FLUX_LW_CLEAR,
-        rrtmgp_common.KEY_RADIATIVE_FLUX_SW_CLEAR,
+    rrtmgp_keys = rrtmgp_common.additional_keys(
+        self._config.radiative_transfer, self._config.additional_state_keys
+    )
+    # Select only the diagnostic flux keys.
+    diagnostic_flux_keys = [
+        k
+        for k in rrtmgp_keys
+        if k not in rrtmgp_common.required_keys(self._config.radiative_transfer)
     ]
-    required_flux_keys = [k for k in flux_keys if k in additional_states]
 
-    if not required_flux_keys:
+    if not diagnostic_flux_keys:
       return output
 
     # Construct input states with cloud properties removed in case clear sky
@@ -273,21 +276,30 @@ class RRTMGP:
     if upper_atmosphere_states is not None:
       extended_grid_states_clr = self._clear_sky_states(extended_grid_states)
 
-    # Get net fluxes (upwelling - downwelling) from the upper atmosphere. If an
-    # extended grid is present, that is where the net fluxes should come from.
-    flux_net_key = (
-        f'{EXTENDED_GRID_KEY}_flux_net'
-        if upper_atmosphere_states is not None
-        else 'flux_net'
-    )
-    for k in required_flux_keys:
-      if k == rrtmgp_common.KEY_RADIATIVE_FLUX_LW:
+    # Get net fluxes (upwelling - downwelling), including those from the
+    # extended grid, if requested.
+    for k in diagnostic_flux_keys:
+      flux_net_key = (
+          f'{EXTENDED_GRID_KEY}_flux_net'
+          if k.startswith(EXTENDED_GRID_KEY)
+          else 'flux_net'
+      )
+      if k in (
+          rrtmgp_common.KEY_RADIATIVE_FLUX_LW,
+          rrtmgp_common.KEY_EXT_RADIATIVE_FLUX_LW,
+      ):
         output[k] = lw_fluxes[flux_net_key]
-      elif k == rrtmgp_common.KEY_RADIATIVE_FLUX_SW:
+      elif k in (
+          rrtmgp_common.KEY_RADIATIVE_FLUX_SW,
+          rrtmgp_common.KEY_EXT_RADIATIVE_FLUX_SW,
+      ):
         output[k] = sw_fluxes[flux_net_key]
       # Compute clear sky fluxes by removing all cloud water and executing a
       # second pass of the two-stream solver.
-      elif k == rrtmgp_common.KEY_RADIATIVE_FLUX_LW_CLEAR:
+      elif k in (
+          rrtmgp_common.KEY_RADIATIVE_FLUX_LW_CLEAR,
+          rrtmgp_common.KEY_EXT_RADIATIVE_FLUX_LW_CLEAR,
+      ):
         lw_fluxes_clear = self._two_stream_solver.solve_lw(
             replica_id,
             replicas,
@@ -296,7 +308,10 @@ class RRTMGP:
             extended_grid_states=extended_grid_states_clr,
         )
         output[k] = lw_fluxes_clear[flux_net_key]
-      elif k == rrtmgp_common.KEY_RADIATIVE_FLUX_SW_CLEAR:
+      elif k in (
+          rrtmgp_common.KEY_RADIATIVE_FLUX_SW_CLEAR,
+          rrtmgp_common.KEY_EXT_RADIATIVE_FLUX_SW_CLEAR,
+      ):
         sw_fluxes_clear = self._two_stream_solver.solve_sw(
             replica_id,
             replicas,

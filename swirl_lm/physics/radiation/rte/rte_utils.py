@@ -134,7 +134,7 @@ class RTEUtils:
      [[[2, 4], [3, 5]],
      [[[4, 6], [5, 7]]].
 
-    If `forward` is `False`, the pairs for each inteface are reversed:
+    If `forward` is `False`, the pairs for each interface are reversed:
 
     [[2, 0], [3, 1]],
      [[4, 2], [5, 3]],
@@ -487,7 +487,7 @@ class RTEUtils:
       outputs.reverse()
 
     outputs = self._exchange_halos_with_ext_grid(
-        replica_id, replicas, *outputs, x0, dim, x0_face,
+        replica_id, replicas, outputs[0], outputs[1], x0, dim, x0_face,
     )
     return {
         PRIMARY_GRID_KEY: outputs[0],

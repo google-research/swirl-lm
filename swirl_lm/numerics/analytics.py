@@ -188,25 +188,18 @@ def pair_distance_with_tol(
     raise ValueError('Invalid input of (atol, rtol) = (%g, %g) < 0.' %
                      (atol, rtol))
 
-  if isinstance(lhs, tf.Tensor):
-    lhs = [lhs]
-  if isinstance(rhs, tf.Tensor):
-    rhs = [rhs]
-
   lhs = halo_exchange.clear_halos(lhs, halo_width)
   rhs = halo_exchange.clear_halos(rhs, halo_width)
 
-  diff = [lhs_i - rhs_i for lhs_i, rhs_i in zip(lhs, rhs)]
+  diff = lhs - rhs
 
   num_replicas = np.prod(replicas.shape)
   group_assignment = np.array([range(num_replicas)], dtype=np.int32)
 
   def pair_distance_fn(d: FlowFieldVal, raw: FlowFieldVal) -> tf.Tensor:
     """Max distance from absolute diff and raw vector."""
-    tol = [atol + rtol * tf.math.abs(raw_i) for raw_i in raw]
-    distance = [tf.math.abs(d_i) - tol_i for (d_i, tol_i) in zip(d, tol)]
-    distance = tf.convert_to_tensor(distance)
-
+    tol = atol + rtol * tf.math.abs(raw)
+    distance = tf.math.abs(d) - tol
     return common_ops.global_reduce(distance, tf.math.reduce_max,
                                     group_assignment)
 

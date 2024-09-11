@@ -57,10 +57,7 @@ class ThermodynamicModel(object):
       The reference density in the simulation.
     """
     del zz, additional_states
-    if self._params.use_3d_tf_tensor:
-      return tf.constant(self._rho, dtype=TF_DTYPE)
-    else:
-      return [tf.constant(self._rho, dtype=TF_DTYPE),] * self._params.nz
+    return tf.constant(self._rho, dtype=TF_DTYPE)
 
   def p_ref(
       self,

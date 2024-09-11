@@ -362,7 +362,7 @@ message SwirlLMParameters {
   optional Probe probe = 29;
   // If True, all field variables are 3D tf.Tensor. Otherwise, they are
   // Sequence[tf.Tensor].
-  optional bool use_3d_tf_tensor = 36 [default = false];
+  optional bool use_3d_tf_tensor = 36 [default = true];
   // The radiation model that solves a two-stream radiative transfer equation
   // taking into account the full atmospheric state.
   optional RadiativeTransfer radiative_transfer = 37;

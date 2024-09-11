@@ -17,7 +17,7 @@ syntax = "proto2";
 package research.simulation;
 
 // Stores information required by the simulated turbulent inflow library.
-// Next id: 7
+// Next id: 8
 message SimulatedTurbulentInflow {
   // Stores information required to generate the inflow.
   // Next id: 2
@@ -70,4 +70,7 @@ message SimulatedTurbulentInflow {
   // Specifies the interval of time between 2 consecutive inflow snapshots to be
   // collected/imposed as boundary condition in the inflow data.
   optional float delta_t = 6;
+
+  // Specifies the names of scalars for which the inflow is collected/enforced.
+  repeated string scalar = 7;
 }

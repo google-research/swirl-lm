@@ -190,7 +190,7 @@ def newton_method_multi_dim(
           common_ops.compute_norm(f_i, (norm_type,), replicas)[norm_type.name]
           for f_i in f
       ]
-      residual = common_ops.compute_norm(residuals, (norm_type,),
+      residual = common_ops.compute_norm(tf.stack(residuals), (norm_type,),
                                          replicas)[norm_type.name]
 
       best_residual, best_x = tf.cond(

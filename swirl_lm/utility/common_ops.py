@@ -397,7 +397,7 @@ def reshape_to_broadcastable(
     f_1d: tf.Tensor,
     dim: Literal[0, 1, 2],
     use_3d_tf_tensor: bool,
-) -> tf.Tensor | Sequence[tf.Tensor]:
+) -> tf.Tensor:
   """Reshapes a rank-1 tensor to a form broadcastable against 3D fields.
 
   Here, `dim` is 0, 1, or 2, corresponding to dimension x, y, or z respectively.
@@ -439,7 +439,9 @@ def reshape_to_broadcastable(
   if use_3d_tf_tensor:
     return _reshape_to_broadcastable_3d_tensor(f_1d, dim)
   else:
-    return _reshape_to_broadcastable_no_3d_tensor(f_1d, dim)
+    raise NotImplementedError(
+        'use_3d_tf_tensor == False is no longer supported.'
+    )
 
 
 def get_local_slice_of_1d_array(
@@ -971,13 +973,7 @@ def local_dot(
   Returns:
     The dot product of the two input vectors.
   """
-  if isinstance(vec1, tf.Tensor):
-    vec1 = [vec1]
-  if isinstance(vec2, tf.Tensor):
-    vec2 = [vec2]
-
-  buf = [tf.math.multiply(vec1_, vec2_) for vec1_, vec2_ in zip(vec1, vec2)]
-  return tf.math.reduce_sum([tf.math.reduce_sum(buf_) for buf_ in buf])
+  return tf.math.reduce_sum(vec1 * vec2)
 
 
 def local_vdot(
@@ -994,11 +990,7 @@ def local_vdot(
   Returns:
     The dot product of the two input vectors.
   """
-  if isinstance(vec1, tf.Tensor):
-    vec1 = [vec1]
-  if isinstance(vec2, tf.Tensor):
-    vec2 = [vec2]
-  return local_dot([tf.math.conj(x) for x in vec1], vec2)
+  return local_dot(tf.math.conj(vec1), vec2)
 
 
 def global_dot(
@@ -1327,7 +1319,7 @@ def get_spectral_index_grid(
   core has the correct corresponding portion of the indices). It also
   generates the `conjugate index`, i.e. the index corresponding to the complex
   conjugate component (note in 2n case, n's conjugate will still be n. The
-  reults are 3 sets of grid, for x, y, and z. Each set includes the original
+  results are 3 sets of grid, for x, y, and z. Each set includes the original
   and the conjugate.
 
   Args:
@@ -1717,8 +1709,8 @@ def scatter(
     dtype: The data type of the returned 3D tensor.
 
   Returns:
-    A 3D tensor with values in `x` scattered to locations specifed by `indices`,
-    with everywhere else being 0. If `indices` is empty, a 3D tensor with all
+    A 3D tensor with values in `x` scattered to locations specified by `indices`
+    , with everywhere else being 0. If `indices` is empty, a 3D tensor with all
     zeros will be returned.
   """
   if tf.shape(indices)[0] == 0:
@@ -1745,7 +1737,7 @@ def scatter_to_mask(
     dtype: The data type of the returned 3D tensor.
 
   Returns:
-    A 3D tensor with values in `x` scattered to locations specifed by ones in
+    A 3D tensor with values in `x` scattered to locations specified by ones in
     `mask`, with everywhere else being 0. If `mask` has all zeros, a 3D tensor
     with all zeros will be returned.
   """

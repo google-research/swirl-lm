@@ -89,7 +89,7 @@ def _halo_update_homogeneous_neumann(
   def halo_update_fn(p: FlowFieldVal) -> FlowFieldVal:
     """Updates the halos with homogeneous Neumann boundary condition."""
     return halo_exchange.inplace_halo_exchange(
-        [p_i for p_i in p],
+        p,
         dims=(0, 1, 2),
         replica_id=replica_id,
         replicas=replicas,

@@ -133,24 +133,24 @@ def one_step_reaction_source(
         tf.maximum(value, minval * tf.ones_like(value)),
         maxval * tf.ones_like(value))
 
-  c_f = [
-      _concentration(bound_scalar(y_f_i, 0.0, 1.0), w_f, rho_i)
-      for y_f_i, rho_i in zip(y_f, rho)
-  ]
-  c_o = [
-      _concentration(bound_scalar(y_o_i, 0.0, 1.0), w_o, rho_i)
-      for y_o_i, rho_i in zip(y_o, rho)
-  ]
+  c_f = _concentration(bound_scalar(y_f, 0.0, 1.0), w_f, rho)
+  c_o = _concentration(bound_scalar(y_o, 0.0, 1.0), w_o, rho)
 
-  omega = [
-      _arrhenius_law(c_f_i, c_o_i, bound_scalar(t_i, T_MIN, T_MAX), a_cst,
-                     coeff_f, coeff_o, e_a)
-      for c_f_i, c_o_i, t_i in zip(c_f, c_o, temperature)
-  ]
+  omega = _arrhenius_law(
+      c_f,
+      c_o,
+      bound_scalar(temperature, T_MIN, T_MAX),
+      a_cst,
+      coeff_f,
+      coeff_o,
+      e_a,
+  )
 
-  return [[-nu_f * w_f * omega_i / rho for omega_i, rho in zip(omega, rho)],
-          [-nu_o * w_o * omega_i / rho for omega_i, rho in zip(omega, rho)],
-          [q * omega_i / cp / rho for omega_i, rho in zip(omega, rho)]]
+  return [
+      -nu_f * w_f * omega / rho,
+      -nu_o * w_o * omega / rho,
+      q * omega / cp / rho,
+  ]
 
 
 def one_step_reaction_integration(
@@ -323,24 +323,15 @@ def integrated_reaction_source_update_fn(
     for varname, value in additional_states.items():
       if varname == 'src_Y_F':
         updated_additional_states.update({
-            varname: [
-                (y_f - y_f_old) / dt
-                for y_f, y_f_old in zip(updated_states[0], states['Y_F'])
-            ]
+            varname: (updated_states[0] - states['Y_F']) / dt,
         })
       elif varname == 'src_Y_O':
         updated_additional_states.update({
-            varname: [
-                (y_o - y_o_old) / dt
-                for y_o, y_o_old in zip(updated_states[1], states['Y_O'])
-            ]
+            varname: (updated_states[1] - states['Y_O']) / dt,
         })
       elif varname == 'src_T':
         updated_additional_states.update({
-            varname: [
-                (temp - temp_old) / dt
-                for temp, temp_old in zip(updated_states[2], states['T'])
-            ]
+            varname: (updated_states[2] - states['T']) / dt,
         })
       else:
         updated_additional_states.update({varname: value})

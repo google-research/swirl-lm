@@ -420,20 +420,18 @@ class ConjugateGradient(PoissonSolver):
 
           terms = []
           if 0 in indices:
-            terms.append([
-                x_i * self._params.dx**2
-                for x_i in kernel_op.apply_kernel_op_x(f, 'filterx')
-            ])
+            terms.append(self._params.dx**2 *
+                         kernel_op.apply_kernel_op_x(tf.stack(f), 'filterx'))
+
           if 1 in indices:
-            terms.append([
-                y_i * self._params.dy**2
-                for y_i in kernel_op.apply_kernel_op_y(f, 'filtery')
-            ])
+            terms.append(self._params.dy**2 *
+                         kernel_op.apply_kernel_op_y(tf.stack(f), 'filtery'))
+
           if 2 in indices:
-            terms.append([
-                z_i * self._params.dz**2 for z_i in kernel_op.apply_kernel_op_z(
-                    f, 'filterz', 'filterzsh')
-            ])
+            terms.append(self._params.dz**2 *
+                         kernel_op.apply_kernel_op_z(
+                             tf.stack(f), 'filterz', 'filterzsh'))
+
           return tuple(terms)
 
         values = (self._params.dx, self._params.dy, self._params.dz)
@@ -470,9 +468,7 @@ class ConjugateGradient(PoissonSolver):
         # Optional taylor expansion, up to order 6 now.
         max_taylor_order = 6
         taylor_order = band_config.taylor_expansion_order
-        terms_to_o_n = [[
-            tf.zeros_like(nested_rhs_i) for nested_rhs_i in nested_rhs
-        ]] * max_taylor_order
+        terms_to_o_n = [tf.zeros_like(nested_rhs)] * max_taylor_order
 
         for count in range(max_taylor_order):
           if taylor_order < count:
@@ -524,7 +520,7 @@ class ConjugateGradient(PoissonSolver):
         preconditioner=preconditioner,
         internal_dtype=internal_dtype)  # pytype: disable=wrong-arg-types
 
-    cg_solution[X] = halo_update(cg_solution[X])
+    cg_solution[X] = halo_update(tf.stack(cg_solution[X]))
 
     return cg_solution
 
@@ -629,7 +625,7 @@ class Multigrid(PoissonSolver):
 
     if self.extra_halo_width > 0:
       if isinstance(x, tf.Tensor):
-        paddings = [[self.extra_halo_width,] * 3,] * 3
+        paddings = [[self.extra_halo_width,] * 2,] * 3
         x = tf.pad(x, paddings, 'CONSTANT')
       else:  # x is a list of 2D tensor.
         paddings = [[self.extra_halo_width,] * 2,] * 2

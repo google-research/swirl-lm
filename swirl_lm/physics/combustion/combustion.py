@@ -20,7 +20,9 @@ from typing import Callable
 from absl import logging
 import numpy as np
 from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.physics.combustion import biofuel_multistep
 from swirl_lm.physics.combustion import turbulent_kinetic_energy
+from swirl_lm.physics.combustion import turbulent_kinetic_energy_pb2
 from swirl_lm.physics.combustion import wood
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.utility import get_kernel_fn
@@ -54,6 +56,32 @@ class IgnitionWithHeatSource():
   t_1: float = 300.0
   t_2: float = 2100.0
   t_3: float = 2400.0
+
+
+def _compute_tke(
+    kernel_op: get_kernel_fn.ApplyKernelOp,
+    replica_id: tf.Tensor,
+    replicas: np.ndarray,
+    states: types.FlowFieldMap,
+    additional_states: types.FlowFieldMap,
+    params: parameters_lib.SwirlLMParameters,
+    tke_params: turbulent_kinetic_energy_pb2.TKE,
+) -> types.FlowFieldVal:
+  """Computes the turbulent kinetic energy."""
+  tke_update_fn = turbulent_kinetic_energy.tke_update_fn_manager(
+      tke_params
+  )
+
+  # Determines the turbulent kinetic energy that is required to compute the
+  # reaction source term due to combustion.
+  additional_states_tke = dict(additional_states)
+  additional_states_tke['tke'] = additional_states.get(
+      'tke', tf.nest.map_structure(tf.zeros_like, states['u'])
+  )
+  additional_states_tke = tke_update_fn(
+      kernel_op, replica_id, replicas, states, additional_states_tke, params
+  )
+  return additional_states_tke['tke']
 
 
 def combustion_step(
@@ -112,24 +140,20 @@ def combustion_step(
         and params.combustion.HasField('wood')
         and params.combustion.wood.HasField('tke')
     ):
-      tke_update_fn = turbulent_kinetic_energy.tke_update_fn_manager(
-          params.combustion.wood.tke
+      tke = _compute_tke(
+          kernel_op,
+          replica_id,
+          replicas,
+          states,
+          additional_states,
+          params,
+          params.combustion.wood.tke,
       )
     else:
       raise ValueError(
           'A TKE model is required for wood combustion, but is undefined in the'
           ' config.'
       )
-
-    # Determines the turbulent kinetic energy that is required to compute the
-    # reaction source term due to wood combustion.
-    additional_states_tke = dict(additional_states)
-    additional_states_tke['tke'] = additional_states.get(
-        'tke', tf.nest.map_structure(tf.zeros_like, states['u'])
-    )
-    additional_states_tke = tke_update_fn(
-        kernel_op, replica_id, replicas, states, additional_states_tke, params
-    )
 
     # Computes the reaction source term. Note that only related additional
     # states are passed as inputs to reduce overhead and ambiguity. Source terms
@@ -142,7 +166,7 @@ def combustion_step(
             if key in required_additional_states
         }
     )
-    additional_states_combustion['tke'] = additional_states_tke['tke']
+    additional_states_combustion['tke'] = tke
     # Add extra additional states that may be used for density computation.
     if 'p_ref' in additional_states:
       additional_states_combustion['p_ref'] = additional_states['p_ref']
@@ -159,6 +183,70 @@ def combustion_step(
         )
     )
 
+  if params.combustion.HasField('biofuel_multistep'):
+    model = biofuel_multistep.BiofuelMultistep(params)
+
+    required_additional_states = list(
+        model.required_additional_states_keys(states)
+    )
+    # Removes `tke` from the list of required additional states because it will
+    # always be provided by this function.
+    required_additional_states.remove('tke')
+    assert set(required_additional_states).issubset(additional_states.keys()), (
+        'Required additional states missing for the biofuel combustion model.'
+        f' Required: {required_additional_states}. Missing:'
+        f' {set(required_additional_states) - set(additional_states.keys())}.'
+    )
+
+    combustion_model = (
+        params.combustion.biofuel_multistep.pyrolysis_char_oxidation.wood
+    )
+    if combustion_model.HasField('tke'):
+      tke = _compute_tke(
+          kernel_op,
+          replica_id,
+          replicas,
+          states,
+          additional_states,
+          params,
+          params.combustion.biofuel_multistep.pyrolysis_char_oxidation.wood.tke,
+      )
+    else:
+      raise ValueError(
+          'A TKE model is required for wood combustion, but is undefined in the'
+          ' config.'
+      )
+
+    # Computes the reaction source term. Note that only related additional
+    # states are passed as inputs to reduce overhead and ambiguity. Source terms
+    # in the original `additional_states` will be overridden by the newly
+    # computed reaction source terms.
+    additional_states_combustion.update({
+        key: val
+        for key, val in additional_states.items()
+        if key in required_additional_states
+    })
+    additional_states_combustion['tke'] = tke
+    if 'rho_f_init' in additional_states:
+      additional_states_combustion['rho_f_init'] = additional_states[
+          'rho_f_init'
+      ]
+
+    # Add extra additional states that may be used for density computation.
+    if 'p_ref' in additional_states:
+      additional_states_combustion['p_ref'] = additional_states['p_ref']
+    if 'theta_ref' in additional_states:
+      additional_states_combustion['theta_ref'] = additional_states['theta_ref']
+    additional_states_combustion.update(
+        model.additional_states_update_fn(
+            kernel_op,
+            replica_id,
+            replicas,
+            states,
+            additional_states_combustion,
+            params,
+        )
+    )
   return additional_states_combustion
 
 
@@ -239,7 +327,9 @@ def ignition_with_hot_kernel(
     if params.combustion is None:
       return output
 
-    if params.combustion.HasField('wood'):
+    if params.combustion.HasField('wood') or params.combustion.HasField(
+        'biofuel_multistep'
+    ):
       logging.info('Igniting the flow field with the wood combustion model.')
 
       assert energy_varname in ('T', 'theta', 'theta_li'), (

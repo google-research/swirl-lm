@@ -14,6 +14,7 @@
 
 """A library generates/enforces inflow BC from an independent simulation."""
 
+import re
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -32,6 +33,16 @@ INFLOW_DATA_NAMES = ('INFLOW_U', 'INFLOW_V', 'INFLOW_W')
 
 _INFLOW_DATA_FILE_FORMAT = (
     '{prefix}-field-{{}}-xyz-{rx}-{ry}-{rz}-step-{step}.ser')
+
+
+def _required_inflow_data_names(
+    inflow_params: simulated_turbulent_inflow_pb2.SimulatedTurbulentInflow,
+) -> List[str]:
+  """Generates a list of names for all inflow variables."""
+  inflow_scalars = []
+  for sc_name in inflow_params.scalar:
+    inflow_scalars.append(f'INFLOW_{sc_name.upper()}')
+  return list(INFLOW_DATA_NAMES) + inflow_scalars
 
 
 def _required_bc_names(
@@ -117,21 +128,25 @@ class SimulatedTurbulentInflow():
     self._key_manager = (
         physical_variable_keys_manager.BoundaryConditionKeysHelper())
 
+    # Get the names of inflow variables.
+    self.inflow_data_names = _required_inflow_data_names(self._model_params)
+
+  @property
+  def inflow_dim(self):
+    """The dimension along which the inflow is imposed."""
+    return self._inflow_dim
+
   def _inflow_data_to_bc(
       self,
       inflow_data: tf.Tensor,
       index: int,
-      use_3d_tf_tensor: bool = False,
-  ) -> List[tf.Tensor]:
+  ) -> types.FlowFieldVal:
     """Extracts the inflow plane at `index`.
 
     Args:
       inflow_data: The 3D tensor storing the partitioned inflow data.
       index: The local index where the plane is extracted. It has to be within
         the range of the last dimension of `inflow_data`.
-      use_3d_tf_tensor: Returns the inflow plane as a 3D tf.Tensor if `True`,
-        otherwise unstack the inflow plane along the z dimension, i.e. the 0th
-        dimension following a z-x-y orientation.
 
     Returns:
       A list of 2D tensors representing a 3D structure, which will be used as
@@ -154,7 +169,7 @@ class SimulatedTurbulentInflow():
       tiles = [1, 1, 1]
       tiles[self._inflow_axis] = self._params.halo_width + 1
       inflow_bc = tf.tile(tf.expand_dims(plane, self._inflow_axis), tiles)
-      return inflow_bc if use_3d_tf_tensor else tf.unstack(inflow_bc)
+      return inflow_bc
 
   def _get_source_data(
       self,
@@ -200,7 +215,7 @@ class SimulatedTurbulentInflow():
     """Initializes the inflow data."""
     inflow_data = {
         key: tf.zeros(self._inflow_data_shape, dtype=types.TF_DTYPE)
-        for key in INFLOW_DATA_NAMES
+        for key in self.inflow_data_names
     }
 
     if self._model_params.WhichOneof('operation') == 'enforcement':
@@ -208,7 +223,7 @@ class SimulatedTurbulentInflow():
       required_bc_names = _required_bc_names(self._model_params)
       inflow_data.update({
           bc_key: tf.stack(self._inflow_data_to_bc(inflow_data[data_key], 0))
-          for bc_key, data_key in zip(required_bc_names, INFLOW_DATA_NAMES)
+          for bc_key, data_key in zip(required_bc_names, self.inflow_data_names)
       })
 
     return inflow_data
@@ -218,7 +233,7 @@ class SimulatedTurbulentInflow():
       self,
       strategy: tf.distribute.TPUStrategy,
       coordinates: List[Tuple[int, int, int]],
-  ) -> tf.distribute.DistributedValues:
+  ) -> dict[str, driver_tpu.PerReplica]:
     """Loads inflow data from files for BC enforcement."""
     if self._model_params.WhichOneof('operation') != 'enforcement':
       raise ValueError(
@@ -227,7 +242,7 @@ class SimulatedTurbulentInflow():
     states = tuple([
         {
             key: tf.constant(0, dtype=types.TF_DTYPE)
-            for key in INFLOW_DATA_NAMES
+            for key in self.inflow_data_names
         },
     ] * len(coordinates))
     return driver_tpu.distributed_read_state(
@@ -286,7 +301,13 @@ class SimulatedTurbulentInflow():
           lambda: inflow_original)
 
     inflow_data = {}
-    for varname, inflow_name in zip(common.KEYS_VELOCITY, INFLOW_DATA_NAMES):
+    for inflow_name in self.inflow_data_names:
+      m = re.match(r'INFLOW_(\w+)', inflow_name)
+      assert m is not None, (
+          f'Invalid inflow name {inflow_name}. Inflow data should start with'
+          ' prefix "INFLOW_".'
+      )
+      varname = m.group(1).lower()
       inflow_plane = self._get_source_data(
           get_inflow_plane(varname), replicas, self._sender_core_id)
       updated_inflow_data_dim = tf.tensor_scatter_nd_update(
@@ -336,14 +357,19 @@ class SimulatedTurbulentInflow():
           (sender_core_id + 1, 0))
 
       inflow_bc = {}
-      for varname, inflow_name in zip(common.KEYS_VELOCITY, INFLOW_DATA_NAMES):
+      for inflow_name in self.inflow_data_names:
+        m = re.match(r'INFLOW_(\w+)', inflow_name)
+        assert m is not None, (
+            f'Invalid inflow name {inflow_name}. Inflow data should start with'
+            ' prefix "INFLOW_".'
+        )
+        varname = m.group(1).lower()
         bc_key = self._key_manager.generate_bc_key(
             varname, self._inflow_dim, self._model_params.enforcement.face)
         bc_val_0 = self._get_source_data(
             self._inflow_data_to_bc(
                 additional_states[inflow_name],
                 local_inflow_time_index,
-                use_3d_tf_tensor,
             ),
             replicas,
             sender_core_id,
@@ -352,7 +378,6 @@ class SimulatedTurbulentInflow():
             self._inflow_data_to_bc(
                 additional_states[inflow_name],
                 next_time_index,
-                use_3d_tf_tensor,
             ),
             replicas,
             next_core_id,
@@ -420,13 +445,16 @@ def simulated_turbulent_inflow_factory(
       'simulated_inflow'):
     return None
 
-  for required_varname in list(INFLOW_DATA_NAMES) + _required_bc_names(
-      params.boundary_models.simulated_inflow):
-    if (required_varname not in list(params.helper_var_keys) +
-        list(params.additional_state_keys)):
+  inflow_params = params.boundary_models.simulated_inflow
+  for required_varname in _required_inflow_data_names(
+      inflow_params
+  ) + _required_bc_names(inflow_params):
+    if required_varname not in list(params.helper_var_keys) + list(
+        params.additional_state_keys
+    ):
       raise ValueError(
           f'Simulated turbulent inflow is requested by {required_varname} is '
-          f'not provided as a `helper_var`.'
+          'not provided as a `helper_var`.'
       )
 
   return SimulatedTurbulentInflow(params)

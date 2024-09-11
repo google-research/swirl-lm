@@ -16,11 +16,15 @@ syntax = "proto2";
 
 package research.simulation;
 
+import "swirl_lm/physics/combustion/biofuel_multistep.proto";
 import "swirl_lm/physics/combustion/wood.proto";
 
 // A library for combustion models. Each model is represented as a separate
 // field to allow using a combination of models in one simulation.
+// Next id: 3
 message Combustion {
   // The wood combustion model.
   optional Wood wood = 1;
+  // The biofuel combustion model.
+  optional BiofuelMultistep biofuel_multistep = 2;
 }

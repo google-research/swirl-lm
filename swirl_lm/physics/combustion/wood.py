@@ -59,11 +59,12 @@ References:
 """
 
 import functools
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 import numpy as np
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.numerics import time_integration
+from swirl_lm.physics.combustion import wood_pb2
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.turbulent_combustion import turbulent_combustion_generic
 from swirl_lm.utility import composite_types
@@ -237,7 +238,7 @@ def _evaporation(
     rho_m: tf.Tensor,
     dt: float,
     c_w: float,
-) -> FlowFieldVal:
+) -> tuple[FlowFieldVal, FlowFieldVal]:
   """Computes the evaporation rate and update the moisture CDF in fuel.
 
   Args:
@@ -359,14 +360,18 @@ def _compute_mid_state(
 class Wood(object):
   """A library of wood combustion."""
 
-  def __init__(self, config: parameters_lib.SwirlLMParameters):
+  def __init__(
+      self,
+      model_params: wood_pb2.Wood,
+      thermodynamics_model: thermodynamics_manager.ThermodynamicsManager,
+  ):
     """Initializes the wood combustion library.
 
     Args:
-      config: The context that provides parameterized information for the
-        simulation.
+      model_params: The parameters for the wood combustion model.
+      thermodynamics_model: The thermodynamics model.
     """
-    self.model_params = config.combustion.wood
+    self.model_params = model_params
     params = self.model_params
 
     self.s_b = params.s_b
@@ -383,9 +388,7 @@ class Wood(object):
     self.reaction_integration_scheme = (
         params.reaction_integration_scheme)
 
-    self.thermodynamics_model = thermodynamics_manager.thermodynamics_factory(
-        config)
-
+    self.thermodynamics_model = thermodynamics_model
     self.reaction_rate = functools.partial(
         _reaction_rate, s_b=self.s_b, s_x=self.s_x, c_f=self.c_f,
         t_0_ivf=params.t_0_ivf, t_1_ivf=params.t_1_ivf)
@@ -539,7 +542,7 @@ class Wood(object):
       raise ValueError('Temperature (`theta` or `T`) needs to be included for '
                        'fire simulations.')
 
-  def _get_temperature_source_key(self, states):
+  def get_temperature_source_key(self, states):
     """Generates the key for temperature source term from a library of states.
 
     Args:
@@ -577,7 +580,7 @@ class Wood(object):
   ) -> Sequence[str]:
     """Provides keys of required additional states for the combustion model."""
     required_keys = ['rho_f', 'T_s', 'src_rho', 'src_Y_O', 'tke']
-    required_keys.append(self._get_temperature_source_key(states))
+    required_keys.append(self.get_temperature_source_key(states))
 
     if self.combustion_model_option == 'moist_wood':
       required_keys += ['rho_m', 'phi_w']
@@ -754,7 +757,7 @@ class Wood(object):
         )
       src_y_o = tf.nest.map_structure(_src_oxidizer, f_f_mid)
 
-      src_t_key = self._get_temperature_source_key(states)
+      src_t_key = self.get_temperature_source_key(states)
       updated_additional_states = dict(additional_states)
       for key in additional_states.keys():
         new_value = None
@@ -779,6 +782,8 @@ class Wood(object):
   def moist_wood_update_fn(
       self,
       rho_f_init: Optional[FlowFieldVal] = None,
+      evaporation_fn: Optional[Callable[..., types.FlowFieldVal]] = None,
+      add_evap_to_air_mass: bool = True,
   ) -> StatesUpdateFn:
     """Generates an update function for states in wood combustion with moisture.
 
@@ -796,6 +801,11 @@ class Wood(object):
 
     Args:
       rho_f_init: The initial state of the fuel density.
+      evaporation_fn: The function that computes the rate of evaporation of the
+        fuel moisture. The default evaporation model will be used if it is not
+        provided.
+      add_evap_to_air_mass: The option for adding the mass of the evaporated
+        fuel moisture to the total mass of the air.
 
     Returns:
       A function that updates the `additional_states` with the following keys:
@@ -812,9 +822,6 @@ class Wood(object):
     ) -> FlowFieldMap:
       """Updates wood combustion associated states."""
       del kernel_op, replica_id, replicas
-
-      evaporation = functools.partial(
-          _evaporation, dt=params.dt, c_w=self.model_params.moist_wood.c_w)
 
       t_far_field = self._get_far_field_temperature(additional_states)
       combustion_states = dict(states)
@@ -838,11 +845,24 @@ class Wood(object):
         f_f = tf.nest.map_structure(
             self.reaction_rate, rho_f, rho, y_o, tke, t_s
         )
-        evap_buf = tf.nest.map_structure(evaporation, t_s, phi_w, rho_m)
-        if isinstance(t_s, Sequence):
-          f_w, phi_w_new = map(list, zip(*evap_buf))
+        if evaporation_fn is None:
+          evap_buf = tf.nest.map_structure(
+              functools.partial(
+                  _evaporation,
+                  dt=params.dt,
+                  c_w=self.model_params.moist_wood.c_w,
+              ),
+              t_s,
+              phi_w,
+              rho_m,
+          )
+          if isinstance(t_s, Sequence):
+            f_w, phi_w_new = map(list, zip(*evap_buf))
+          else:
+            f_w, phi_w_new = evap_buf
         else:
-          f_w, phi_w_new = evap_buf
+          f_w = evaporation_fn(t_s=t_s, rho_m=rho_m)
+          phi_w_new = phi_w
 
         theta_val = _theta(rho_f, rho_f_init)
 
@@ -918,10 +938,17 @@ class Wood(object):
 
       tke = additional_states['tke']
       t_gas = self._get_temperature_from_states(states)
+      phi_w = additional_states.get(
+          'phi_w',
+          tf.nest.map_structure(tf.zeros_like, additional_states['rho_m']),
+      )
       scalars_0 = [
-          additional_states['rho_f'], additional_states['rho_m'],
-          additional_states['T_s'], t_gas, states['Y_O'],
-          additional_states['phi_w']
+          additional_states['rho_f'],
+          additional_states['rho_m'],
+          additional_states['T_s'],
+          t_gas,
+          states['Y_O'],
+          phi_w,
       ]
       _, scalars_new = tf.while_loop(
           cond=loop_condition,
@@ -961,9 +988,13 @@ class Wood(object):
 
       theta_mid = _theta(rho_f_mid, rho_f_init)
 
-      src_rho = tf.nest.map_structure(
-          lambda f_f_i, f_w_i: _N_F * f_f_i + f_w_i, f_f_mid, f_w_mid
-      )
+      if add_evap_to_air_mass:
+        src_rho = tf.nest.map_structure(
+            lambda f_f_i, f_w_i: _N_F * f_f_i + f_w_i, f_f_mid, f_w_mid
+        )
+      else:
+        src_rho = tf.nest.map_structure(lambda f_f_i: _N_F * f_f_i, f_f_mid)
+
       if isinstance(t_far_field, tf.Tensor) or t_far_field is None:
         src_t = tf.nest.map_structure(
             functools.partial(self._src_t_g, t_far_field=t_far_field),
@@ -985,7 +1016,7 @@ class Wood(object):
         )
       src_y_o = tf.nest.map_structure(_src_oxidizer, f_f_mid)
 
-      src_t_key = self._get_temperature_source_key(states)
+      src_t_key = self.get_temperature_source_key(states)
       updated_additional_states = dict(additional_states)
       for key in additional_states.keys():
         new_value = None
@@ -1003,6 +1034,8 @@ class Wood(object):
           new_value = _localize_by_fuel(rho_f_mid, src_y_o)
         elif key == 'phi_w':
           new_value = scalars_new[5]
+        elif key == 'src_q_t':
+          new_value = f_w_mid
 
         if new_value is not None:
           updated_additional_states.update({key: new_value})
@@ -1027,4 +1060,7 @@ def wood_combustion_factory(config: parameters_lib.SwirlLMParameters) -> Wood:
   if config.combustion is None or not config.combustion.HasField('wood'):
     raise ValueError('Wood model is not defined as a combustion model.')
 
-  return Wood(config)
+  thermodynamics_model = thermodynamics_manager.thermodynamics_factory(
+      config)
+
+  return Wood(config.combustion.wood, thermodynamics_model)

@@ -61,6 +61,10 @@ The debug values are saved once at the end of each cycle. It is fine to update
 the same variable multiple times during a cycle or even a step (e.g., inside a
 function called from a tf.while loop), but only the last value will be saved to
 disk.
+
+Unlike normal simulation output, debug output can contain non-finite values. For
+example, if an intermediate value has NaNs in the halo, is output as debug,
+and the halo later gets overwritten, the debug output will contain these NaNs.
 """
 import collections
 from collections.abc import Iterable

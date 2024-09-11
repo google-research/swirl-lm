@@ -273,12 +273,12 @@ class SyntheticTurbulentInflow(object):
   def compute_inflow_velocity(
       self,
       r: List[tf.Tensor],
-      velocity_mean: FlowFieldVal,
-      velocity_rms: FlowFieldVal,
+      velocity_mean: list[tf.Tensor],
+      velocity_rms: list[tf.Tensor],
       replica_id: tf.Tensor,
       replicas: np.ndarray,
       seed: Optional[Tuple[int, int]] = None,
-  ) -> FlowFieldMap:
+  ) -> dict[str, list[tf.Tensor]]:
     """Computes the inflow velocity with synthetic turbulence.
 
     Args:

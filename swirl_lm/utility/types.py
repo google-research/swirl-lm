@@ -27,7 +27,7 @@
 # limitations under the License.
 """Commonly used types in the simulation framework."""
 
-from typing import Callable, List, Mapping, MutableMapping, NamedTuple, Optional, Sequence, Text, Tuple, Union
+from typing import Callable, List, Mapping, MutableMapping, NamedTuple, Optional, Sequence, Text, Tuple, TypeAlias, Union
 
 import numpy as np
 import tensorflow as tf
@@ -40,8 +40,9 @@ TF_COMPLEX_DTYPE = tf.complex64
 NP_DTYPE = np.float32
 NP_COMPLEX_DTYPE = np.complex64
 
-FlowFieldVal = Union[tf.Tensor, Sequence[tf.Tensor]]
-FlowFieldMap = Mapping[Text, FlowFieldVal]
+FlowFieldVal: TypeAlias = tf.Tensor
+FlowFieldMap: TypeAlias = Mapping[str, tf.Tensor]
+
 VectorField = Tuple[FlowFieldVal, FlowFieldVal, FlowFieldVal]
 ReplicaCoordinates = Tuple[int, int, int]
 

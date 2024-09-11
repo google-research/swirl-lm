@@ -1,0 +1,28 @@
+syntax = "proto2";
+
+package research.simulation;
+
+import "swirl_lm/physics/combustion/wood.proto";
+
+// Parameters that are required to compute the dehydration source term.
+// Next id: 3
+message Dehydration {
+  // The activation temperature of the dehydration process.
+  optional float activation_temperature = 1;
+  // The Arrhenius constant for the dehydration rate.
+  optional float arrhenius_factor = 2;
+}
+
+// Parameters that are required to compute the source terms due to pyrolysis and
+// char oxidation.
+// Next id: 2
+message PyrolysisAndCharOxidation {
+  optional Wood wood = 1;
+}
+
+// Parameters for the multistep biofuel combustion model.
+// Next id: 3
+message BiofuelMultistep {
+  optional Dehydration dehydration = 1;
+  optional PyrolysisAndCharOxidation pyrolysis_char_oxidation = 2;
+}

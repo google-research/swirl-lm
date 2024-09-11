@@ -29,7 +29,8 @@
 
 import collections
 import os
-from typing import Any, Callable, List, Optional, Sequence, Tuple
+import typing
+from typing import Any, Callable, List, Optional, Sequence, Tuple, TypeAlias
 
 from absl import flags
 from absl import logging
@@ -51,12 +52,9 @@ FLAGS = flags.FLAGS
 FILENAME_FORMAT = '{}-field-{}-xyz-{}-{}-{}-step-{}.ser'
 
 Array = Any  # An array convertible to TF tensors or numpy arrays.
-# A structure with atoms convertible to tf.Tensors.
-# (See https://www.tensorflow.org/api_docs/python/tf/nest?version=nightly)
-Structure = Any
-PerReplica = Any  # A tf.distribute PerReplica (not part of the public API yet.)
-# A Callable mapping (replica_id, coordinates) to a Structure.
-ValueFn = Callable[[Array, Array], Structure]
+PerReplica: TypeAlias = tf.types.experimental.distributed.PerReplica
+# A Callable mapping (replica_id, coordinates) to a tf.Tensor.
+ValueFn = Callable[[Array, Array], dict[str, tf.Tensor]]
 
 
 def replica_groups_by_host(strategy: tf.distribute.TPUStrategy):
@@ -78,7 +76,7 @@ def replica_groups_by_host(strategy: tf.distribute.TPUStrategy):
 # to also enforce the assignment ops are done on the corresponding host device.
 def _distribute_values(
     strategy: tf.distribute.TPUStrategy,
-    per_replica_states: List[Structure]):
+    per_replica_states: List[dict[str, tf.Tensor]]):
   """Distributes values to the corresponding devices."""
   def distribute(ctx):
     replica_id = ctx.replica_id_in_sync_group
@@ -124,7 +122,7 @@ def initialize_tpu(
 def _inner_wrapped_value_fn(
     replica_ids: Array,
     value_fn: ValueFn,
-    logical_coordinates: Array):
+    logical_coordinates: Array) -> List[dict[str, tf.Tensor]]:
   """Calculates the initial values for all devices with the same host."""
   logging.info('_inner_wrapped_value_fn tracing starts.')
   result = []
@@ -138,20 +136,22 @@ def distribute_values(
     strategy: tf.distribute.TPUStrategy,
     value_fn: ValueFn,
     logical_coordinates: Array,
-) -> PerReplica:
+) -> dict[str, PerReplica]:
   """Populates a PerReplica object containing values specified by `value_fn`.
 
   Args:
     strategy: The TPUStrategy used to run the distributed computations.
     value_fn: A function accepting `replica_id` and `logical_coordinates` which
-      should return the Structure corresponding to the device at `replica_id`.
+      should return a dictionary mapping field names to tensors corresponding
+      to the device at `replica_id`.
     logical_coordinates: The `logical_coordinates` is a 2D array whose `i`th
       slice along the first dimension contains the 3 logical mesh coordinates of
       the `i`th replica of the TPU cluster. This is passed as the second
       argument of `value_fn`.
 
   Returns:
-    A PerReplica object containing the Structure created on each device.
+    A dictionary from field names to PerReplica objects containing the
+    values created on each device.
   """
   logging.info('Entering `distribute_values`')
 
@@ -178,12 +178,17 @@ def distribute_values(
     _wrapped_value_fn(host_device, replica_ids)
 
   logging.info('Exiting `distribute_values`.')
-  return _distribute_values(strategy, per_replica_states)
+  # Because `per_replica_states` is initialized with Nones and then filled with
+  # actual values, pytype infers that it contains tf.Tensor | None instead of
+  # just tf.Tensor, so we explicitly cast the type back to tf.Tensors. This
+  # has no runtime effect and is only a hint to pytype.
+  return _distribute_values(
+      strategy, typing.cast(list[dict[str, tf.Tensor]], per_replica_states))
 
 
 @tf.function
 def _read_input_at_step(
-    state: Structure,
+    state: dict[str, tf.Tensor],
     rx: Array,
     ry: Array,
     rz: Array,
@@ -191,7 +196,7 @@ def _read_input_at_step(
     filename_prefix: str,
     step_id: Array,
     states_from_file: Optional[Sequence[str]] = None,
-) -> Structure:
+) -> dict[str, tf.Tensor]:
   """Reads files for a single device."""
   logging.info('_read_input_at_step tracing starts.')
   read_state = {}
@@ -214,13 +219,13 @@ def _read_input_at_step(
 
 @tf.function
 def _inner_read_step_fn(
-    state: Tuple[Structure],
+    state: tuple[dict[str, tf.Tensor], ...],
     logical_coordinates: Array,
     output_dir: str,
     filename_prefix: str,
     step_id: Array,
     states_from_file: Optional[Sequence[str]] = None,
-) -> List[Structure]:
+) -> List[dict[str, tf.Tensor]]:
   """Reads files for all devices with the same host."""
   logging.info('_inner_read_step_fn tracing starts.')
   result = []
@@ -244,20 +249,20 @@ def _inner_read_step_fn(
 
 def distributed_read_state(
     strategy: tf.distribute.TPUStrategy,
-    state: Tuple[Structure],
+    state: tuple[dict[str, tf.Tensor], ...],
     logical_coordinates: List[Tuple[int, int, int]],
     output_dir: str,
     filename_prefix: str,
     step_id: Array,
     states_from_file: Optional[Sequence[str]] = None,
-) -> PerReplica:
-  """Read a DistributedValues structure from the filesystem.
+) -> dict[str, PerReplica]:
+  """Read simulator state from the filesystem.
 
   Args:
     strategy: The strategy from which to obtain the `state`.
-    state: A Tuple where each Structure within the Tuple represents the local
-      state for each device. Only the keys and dtypes are used from this to
-      parse the read state.
+    state: A tuple where each element represents the local state for each
+      device. Only the keys and dtypes are used from this to parse the read
+      state.
     logical_coordinates: The `logical_coordinates` is 2D Tensor whose `i`th
       row contains the 3D logical mesh coordinates of the `i`th replica of the
       TPU cluster. These coordinates are added to the filenames.
@@ -315,12 +320,14 @@ def distributed_read_state(
     _read_step_fn(state, host_device, replica_ids, step_id)
 
   logging.info('Exiting `distributed_read_state`')
-  return _distribute_values(strategy, per_replica_states)
+  # See note elsewhere in this file about the type cast of `per_replica_states`.
+  return _distribute_values(
+      strategy, typing.cast(list[dict[str, tf.Tensor]], per_replica_states))
 
 
 @tf.function
 def _write_output_at_step(
-    state: Structure,
+    state: dict[str, tf.Tensor],
     rx: Array,
     ry: Array,
     rz: Array,
@@ -328,7 +335,8 @@ def _write_output_at_step(
     filename_prefix: str,
     step_id: Array,
     data_dump_filter: Optional[Sequence[str]] = None,
-) -> Structure:
+    fields_allowing_non_finite_values: Optional[Sequence[str]] = None,
+) -> dict[str, bool]:
   """Writes output for one single device."""
   logging.info('_write_output_at_step tracing starts.')
   write_status = {}
@@ -337,11 +345,13 @@ def _write_output_at_step(
       # We still want to fill the return status for all the fields.
       write_status[fieldname] = True
       continue
-    if tensor.dtype.is_floating:
+    if (not tensor.dtype.is_floating or
+        (fields_allowing_non_finite_values and
+         fieldname in fields_allowing_non_finite_values)):
+      any_nan_inf = False
+    else:
       any_nan_inf = tf.math.logical_or(tf.reduce_any(tf.math.is_nan(tensor)),
                                        tf.reduce_any(tf.math.is_inf(tensor)))
-    else:
-      any_nan_inf = False
 
     filepath_template = FILENAME_FORMAT.format(
         filename_prefix, fieldname, '{}', '{}', '{}', '{}')
@@ -361,16 +371,17 @@ def _write_output_at_step(
 
 @tf.function
 def _inner_write_step_fn(
-    state: Tuple[Structure],
+    state: tuple[dict[str, tf.Tensor], ...],
     logical_coordinates: Array,
     output_dir: str,
     filename_prefix: str,
     step_id: Array,
     data_dump_filter: Optional[Sequence[str]] = None,
-) -> List[Structure]:
+    fields_allowing_non_finite_values: Optional[Sequence[str]] = None,
+) -> list[dict[str, tf.Tensor]]:
   """Writes output for all devices with the same host."""
   logging.info('_inner_write_step_fn tracing starts.')
-  output = []
+  output: list[dict[str, tf.Tensor]] = []
   for i, coordinate in enumerate(logical_coordinates):
     replica_state = state[i]
     output.append(_write_output_at_step(
@@ -378,29 +389,31 @@ def _inner_write_step_fn(
         coordinate[1],
         coordinate[2],
         output_dir, filename_prefix, step_id,
-        data_dump_filter))
+        data_dump_filter,
+        fields_allowing_non_finite_values))
   logging.info('_inner_write_step_fn traced.')
   return output
 
 
 def distributed_write_state(
     strategy: tf.distribute.TPUStrategy,
-    state: Tuple[Structure],
+    state: tuple[dict[str, tf.Tensor], ...],
     logical_coordinates: List[Tuple[int, int, int]],
     output_dir: str,
     filename_prefix: str,
     step_id: Array,
     data_dump_filter: Optional[Sequence[str]] = None,
-) -> List[Structure]:
-  """Write a PerReplica structure to the filesystem.
+    fields_allowing_non_finite_values: Optional[Sequence[str]] = None,
+) -> list[dict[str, tf.Tensor]]:
+  """Write simulator state to the filesystem.
 
   This also verifies that the content written is all valid and does not contain
   `nan` or `infinity`.
 
   Args:
     strategy: The strategy from which to obtain the `state`.
-    state: A Tuple where each Structure within the Tuple represents the local
-      state for each device.
+    state: A tuple where each element represents the local state for each
+      device.
     logical_coordinates: The `logical_coordinates` is a 2D Tensor whose `i`th
       row contains the 3D logical mesh coordinates of the `i`th replica of the
       TPU cluster. These coordinates are added to the filenames.
@@ -411,6 +424,8 @@ def distributed_write_state(
       added to the filename.
     data_dump_filter: List of fields that should be written to files when set.
       If this is not provided (None), then all fields will be written.
+    fields_allowing_non_finite_values: List of fields that are allowed to
+      contain non-finite values. This is normally used for debug variables.
 
   Returns:
     A distributed status_state with one boolean per field per replica. This is
@@ -440,9 +455,9 @@ def distributed_write_state(
       # retracing will happen for different devices.
       partial_coordinates = [
           tf.constant(logical_coordinates[i], tf.int32) for i in replica_ids]
-      write_status = _inner_write_step_fn(
+      write_status: list[dict[str, tf.Tensor]] = _inner_write_step_fn(
           partial_state, partial_coordinates, output_dir, filename_prefix,
-          step_id, data_dump_filter)
+          step_id, data_dump_filter, fields_allowing_non_finite_values)
       for i, replica_id in enumerate(replica_ids):
         per_replica_status[replica_id] = write_status[i]
 
@@ -453,4 +468,5 @@ def distributed_write_state(
     _write_step_fn(state, step_id, host_device, replica_ids)
 
   logging.info('Exiting `distributed_write_state`')
-  return per_replica_status
+  # See note elsewhere in this file about the type cast of `per_replica_status`.
+  return typing.cast(list[dict[str, tf.Tensor]], per_replica_status)

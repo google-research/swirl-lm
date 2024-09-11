@@ -106,7 +106,7 @@ class BoundaryLayer():
       rho: The density.
       height: The distance from the wall to the first grid point. If not
         provided, it will be set according to the grid spacing in the
-        simulation configuration provided in the contructor.
+        simulation configuration provided in the constructor.
 
 
     Returns:
@@ -117,7 +117,14 @@ class BoundaryLayer():
     z = self.most.height if height is None else height
 
     return self.return_fn(
-        self.most._surface_shear_stress_and_heat_flux(theta, u1, u2, rho, z))  # pylint: disable=protected-access
+        self.most._surface_shear_stress_and_heat_flux(  # pylint: disable=protected-access
+            tf.convert_to_tensor(theta, dtype=_TF_DTYPE),
+            tf.convert_to_tensor(u1, dtype=_TF_DTYPE),
+            tf.convert_to_tensor(u2, dtype=_TF_DTYPE),
+            tf.convert_to_tensor(rho, dtype=_TF_DTYPE),
+            z,
+        )
+    )
 
   def obukhov_length_scale(
       self,
@@ -136,7 +143,7 @@ class BoundaryLayer():
         to the vertical direction).
       height: The distance from the wall to the first grid point. If not
         provided, it will be set according to the grid spacing in the
-        simulation configuration provided in the contructor.
+        simulation configuration provided in the constructor.
 
     Returns:
       The Obukhov length scale.

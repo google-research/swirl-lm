@@ -14,8 +14,8 @@
 
 """Implementations of `OpticsScheme`s and a factory method."""
 
+import typing
 from typing import Any, Callable, Dict, Optional, Sequence
-
 from absl import logging
 import numpy as np
 from swirl_lm.physics.radiation.config import radiative_transfer_pb2
@@ -300,7 +300,7 @@ class RRTMOptics(optics_base.OpticsScheme):
       self,
       fn: Callable[..., tf.Tensor],
       *args: FlowFieldVal | Dict[Any, FlowFieldVal],
-  ) -> FlowFieldVal | FlowFieldMap:
+  ) -> FlowFieldVal | FlowFieldMap | list[tf.Tensor]:
     """Mimics `tf.nest.map_structure` with support for dictionary arguments.
 
     This assumes that the fields, including those in dictionary values, are
@@ -314,7 +314,7 @@ class RRTMOptics(optics_base.OpticsScheme):
     Returns:
       A `FlowFieldVal` that is the result of applying `fn` to the argument list
       as is, if the fields are represented by `tf.Tensor`s; or to each level of
-      the inputs if the the fields are represented by `Sequence[tf.Tensor]`.
+      the inputs if the fields are represented by `Sequence[tf.Tensor]`.
     """
     # Extract a single argument variable and determine its type.
     single_input = [arg for arg in args if arg is not None][0]
@@ -480,6 +480,8 @@ class RRTMOptics(optics_base.OpticsScheme):
         pressure,
         vmr_fields,
     )
+    optical_depth_lw = typing.cast(FlowFieldVal, optical_depth_lw)
+
     zeros = tf.nest.map_structure(tf.zeros_like, optical_depth_lw)
     optical_props = {
         'optical_depth': optical_depth_lw,

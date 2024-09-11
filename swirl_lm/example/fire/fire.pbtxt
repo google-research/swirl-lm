@@ -12,9 +12,6 @@ sgs_model {
     pr_t: 1.0
   }
 }
-periodic {
-  dim_0: false dim_1: false dim_2: false
-}
 gravity_direction {
   dim_0: 0.0 dim_1: 0.0 dim_2: -1.0
 }

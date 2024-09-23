@@ -16,8 +16,10 @@
 
 import enum
 import functools
+import itertools
 from typing import Sequence, Tuple, TypeAlias
 
+from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import types
 import tensorflow as tf
@@ -440,3 +442,64 @@ def flux_limiter(
       diff1,
   )
   return v_neg, v_pos
+
+
+def trilinear_interpolation(
+    field_data: tf.Tensor,
+    points: tf.Tensor,
+    grid_spacing: tf.Tensor,
+    domain_min_pt: tuple[float, float, float] = (0.0, 0.0, 0.0),
+) -> tf.Tensor:
+  """Linear interpolation on a 3-D orthogonal, uniform grid.
+
+  Performs trilinear interpolation by calculating the local point coordinate
+  indices and then interpolating the surrounding field data at the point.
+  Points provided outside of the core domain give invalid solutions.
+
+  Note that coordinates in this function follow the order of the dimensions of
+  `field_data` as a 3D tensor instead of the physical-coordinates orientation in
+  Swirl-LM. For instance, the first element in `grid_spacing` and
+  `domain_min_pt`, as well as the first column in `points`, are associated with
+  the 0th dimensions of `field_data`, instead of the 'x' axis in Swirl-LM.
+
+  Args:
+    field_data: A 3D tensor of field scalars without halos.
+    points: An 2D tensor (n, 3) of n coordinate points in 3D space to
+      interpolate at. Points must fall within the range of coordinates
+      associated with the core. If points are outside of this domain, the
+      function will return invalid results.
+    grid_spacing: A three element tensor defining the grid spacing along the
+      three dimensions.
+    domain_min_pt: A three element tuple defining the minimum coordinate
+      location within the entire physical domain encompassing all cores, default
+      is (0, 0, 0).
+
+  Returns:
+    An n element tensor containing interpolated data values at the n supplied
+      points.
+  """
+  core_spacing = grid_spacing * (
+      tf.cast(field_data.shape, dtype=tf.float32) - 1
+  )
+
+  # Normalizes points to be within the range (0, 0, 0,) to (nx, ny, nz) for nx,
+  # ny, and nz nodes in the core.
+  points_norm = (
+      (points - tf.constant(domain_min_pt)) % core_spacing
+  ) / grid_spacing
+  ijk = tf.floor(points_norm)
+  points_norm -= ijk
+  ijk = tf.cast(ijk, dtype=tf.int32)
+  i, j, k = ijk[:, 0], ijk[:, 1], ijk[:, 2]
+  x0, x1, x2 = points_norm[:, 0], points_norm[:, 1], points_norm[:, 2]
+
+  values = tf.zeros(points.shape[0], dtype=field_data.dtype)
+  for p, q, l in itertools.product(range(2), range(2), range(2)):
+    v = common_ops.gather(field_data, tf.stack([i + p, j + q, k + l], axis=-1))
+    values += v * (
+        ((1 - p) + (2 * p - 1) * x0)
+        * ((1 - q) + (2 * q - 1) * x1)
+        * ((1 - l) + (2 * l - 1) * x2)
+    )
+
+  return values

@@ -126,7 +126,7 @@ message TotalEnergy {
 }
 
 // Defines configurations for total humidity.
-// Next id: 6
+// Next id: 7
 message Humidity {
   // An option of whether the effect of subsidence velocity is included in the
   // total humidity equation.
@@ -137,6 +137,8 @@ message Humidity {
   // An option of whether condensation is included in the equations for
   // humidity.
   optional bool include_condensation = 3;
+  // An option for including sedimentation in the convective flux.
+  optional bool include_sedimentation = 6;
   // Specifies the option of microphysics, which will be used if
   // `include_precipitation` is true.
   oneof microphysics {

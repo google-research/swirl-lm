@@ -227,9 +227,11 @@ def _radiative_emission(
       emissivity (< 1).
 
   Returns:
-    The radiation source term due to emission.
+    The radiation source term due to emission. If `t` is less than `t_ambient`,
+    the radiation term is 0, i.e., radiation energy can only be lost to
+    ambient conditions.
   """
-  return _SIGMA * k / l * (t**4 - t_ambient**4)
+  return tf.maximum(_SIGMA * k / l * (t**4 - t_ambient**4), 0.0)
 
 
 def _evaporation(

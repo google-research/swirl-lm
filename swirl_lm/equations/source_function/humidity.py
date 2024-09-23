@@ -70,6 +70,10 @@ class Humidity(scalar_generic.ScalarGeneric):
         self._scalar_params.HasField('humidity') and
         self._scalar_params.humidity.include_condensation)
 
+    self._include_sedimentation = (
+        self._scalar_params.HasField('humidity') and
+        self._scalar_params.humidity.include_sedimentation)
+
     if scalar_name in ('q_r', 'q_s'):
       assert self._include_precipitation, (
           'Calculating q_r without setting include_precipitation to True is not'
@@ -80,6 +84,7 @@ class Humidity(scalar_generic.ScalarGeneric):
     if (
         self._include_precipitation
         or self._include_condensation
+        or (self._include_sedimentation and scalar_name == 'q_t')
         or scalar_name in ('q_r', 'q_s')
     ):
       assert self._scalar_params.humidity.HasField('microphysics'), (
@@ -332,18 +337,82 @@ class Humidity(scalar_generic.ScalarGeneric):
       )
 
     # Compute source terms
-    if self._scalar_name == 'q_t' and self._include_subsidence:
-      subsidence_source = eq_utils.source_by_subsidence_velocity(
-          self._deriv_lib,
-          states[common.KEY_RHO],
-          thermo_states['zz'],
-          thermo_states['q_c'],
-          self._g_dim,
-          additional_states,
-      )
+    if self._scalar_name == 'q_t':
+      if self._include_subsidence:
+        subsidence_source = eq_utils.source_by_subsidence_velocity(
+            self._deriv_lib,
+            states[common.KEY_RHO],
+            thermo_states['zz'],
+            thermo_states['q_c'],
+            self._g_dim,
+            additional_states,
+        )
+        source = tf.nest.map_structure(tf.math.add, source, subsidence_source)
 
-      # Add external source, e.g. sponge forcing and subsidence.
-      source = tf.nest.map_structure(tf.math.add, source, subsidence_source)
+      if self._include_sedimentation:
+        assert self._microphysics is not None, (
+            'Terminal velocity for q_t requires a microphysics model but is'
+            ' undefined.'
+        )
+        w_l = self._microphysics.terminal_velocity(
+            'q_r',
+            {'rho_thermal': states['rho_thermal'], 'q_r': thermo_states['q_l']},
+            additional_states,
+        )
+        if 'q_r' in states:
+          # The sedimentation velocity of liquid-phase cloud cannot be larger
+          # than that of rain.
+          w_r = self._microphysics.terminal_velocity(
+              'q_r',
+              {
+                  'rho_thermal': states['rho_thermal'],
+                  'q_r': states['q_r'],
+              },
+              additional_states,
+          )
+          w_l = tf.nest.map_structure(
+              lambda w_l, w_r: tf.where(tf.greater(w_l, w_r), w_r, w_l),
+              w_l,
+              w_r,
+          )
+        w_i = self._microphysics.terminal_velocity(
+            'q_s',
+            {'rho_thermal': states['rho_thermal'], 'q_s': thermo_states['q_i']},
+            additional_states,
+        )
+        if 'q_s' in states:
+          # The sedimentation velocity of ice-phase cloud cannot be larger than
+          # that of snow.
+          w_s = self._microphysics.terminal_velocity(
+              'q_s',
+              {
+                  'rho_thermal': states['rho_thermal'],
+                  'q_s': states['q_s'],
+              },
+              additional_states,
+          )
+          w_i = tf.nest.map_structure(
+              lambda w_i, w_s: tf.where(tf.greater(w_i, w_s), w_s, w_i),
+              w_i,
+              w_s,
+          )
+        sedimentation_flux_fn = lambda rho, q_l, q_i, w_l, w_i: rho * (
+            q_l * w_l + q_i * w_i
+        )
+        sedimentation_flux = tf.nest.map_structure(
+            sedimentation_flux_fn,
+            states['rho'],
+            thermo_states['q_l'],
+            thermo_states['q_i'],
+            w_l,
+            w_i,
+        )
+        sedimentation_source = self._deriv_lib.deriv_centered(
+            sedimentation_flux, self._g_dim, additional_states
+        )
+        source = tf.nest.map_structure(
+            tf.math.add, source, sedimentation_source
+        )
 
     if self._include_condensation:
       assert isinstance(self._thermodynamics.model, water.Water), (

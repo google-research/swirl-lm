@@ -261,7 +261,11 @@ class Scalars(object):
         rho_sc_name = 'rho_{}'.format(scalar_name)
         rhs_name = self._ib.ib_rhs_name(rho_sc_name)
         helper_states = {rhs_name: rhs}
-        for helper_var_name in ('ib_interior_mask', 'ib_boundary'):
+        for helper_var_name in (
+            'ib_interior_mask', 'ib_boundary', 'ib_norm_dist', 'ijk_gp',
+            'gp_mask_T', 'ib_interp_weights', 'idx_p', 'idx_q', 'idx_s',
+            'ib_interp_weights_neumann'
+        ):
           if helper_var_name in additional_states:
             helper_states[helper_var_name] = additional_states[
                 helper_var_name

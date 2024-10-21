@@ -85,6 +85,34 @@ def generate_terrain_map_from_file(
       method='bicubic')[:, :, 0]
 
 
+def generate_custom_terrain_profile(
+    xx: tf.Tensor,
+    yy: tf.Tensor,
+    profile: str,
+) -> tf.Tensor:
+  """Generate a fluid/solid interface function"""
+  if profile == 'sine':
+    res = 0.2 + 0.1 * tf.math.sin(2. * _PI * xx)
+  elif profile == 'ramp':
+    res = 0.2 + xx * tf.math.tan(3. * _PI / 180.)
+  elif profile == 'witch_of_agnesi':
+    h_p = 100.0  # peak height in meters
+    a = 100.0  # half-width in meters
+    offset = 297.5
+    res = h_p / (1.0 + ((xx - offset) / a)**2.0)
+  elif profile == 'witch_of_agnesi_2d':
+    h_p = 350.0
+    a = 800.0
+    b = 800.0
+    offset = 3000.0
+    z0_offset = 0.
+    res = h_p / (
+        1.0 + ((xx - offset) / a)**2.0 + ((yy - offset) / b)**2.0
+    ) + z0_offset
+
+  return res
+
+
 class TerrainUtils(object):
   """A library for terrain processing in wildfire simulations."""
 

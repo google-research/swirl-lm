@@ -17,7 +17,6 @@ syntax = "proto2";
 package research.simulation;
 
 import "swirl_lm/numerics/numerics.proto";
-import "swirl_lm/physics/atmosphere/microphysics.proto";
 
 // Defines the properties of a scalar to be included in the flow field.
 // Next id: 16
@@ -114,15 +113,6 @@ message TotalEnergy {
   // An option of whether the effect of subsidence velocity is included in the
   // total energy equation.
   optional bool include_subsidence = 2;
-  // An option of whether the effects of precipitation is included in the
-  // total energy equation.
-  optional bool include_precipitation = 3;
-  // Specifies the option of microphysics, which will be used if
-  // `include_precipitation` is true.
-  oneof microphysics {
-    Kessler kessler = 4;
-    OneMoment one_moment = 5;
-  }
 }
 
 // Defines configurations for total humidity.
@@ -131,20 +121,6 @@ message Humidity {
   // An option of whether the effect of subsidence velocity is included in the
   // total humidity equation.
   optional bool include_subsidence = 1;
-  // An option of whether the effects of precipitation is included in the
-  // equations for total humidity and rain water.
-  optional bool include_precipitation = 2;
-  // An option of whether condensation is included in the equations for
-  // humidity.
-  optional bool include_condensation = 3;
-  // An option for including sedimentation in the convective flux.
-  optional bool include_sedimentation = 6;
-  // Specifies the option of microphysics, which will be used if
-  // `include_precipitation` is true.
-  oneof microphysics {
-    Kessler kessler = 4;
-    OneMoment one_moment = 5;
-  }
 }
 
 // Defines configurations for the liquid-ice potential temperature.
@@ -156,16 +132,4 @@ message PotentialTemperature {
   // An option of whether the effect of subsidence velocity is included in the
   // liquid-ice potential temperature equation.
   optional bool include_subsidence = 2;
-  // An option of whether condensation is included in the potential temperature
-  // equation.
-  optional bool include_condensation = 3;
-  // An option of whether precipitation is included in the potential temperature
-  // equation.
-  optional bool include_precipitation = 4;
-  // Specifies the option of microphysics, which will be used if
-  // `include_precipitation` or `include_condensation` is true.
-  oneof microphysics {
-    Kessler kessler = 5;
-    OneMoment one_moment = 6;
-  }
 }

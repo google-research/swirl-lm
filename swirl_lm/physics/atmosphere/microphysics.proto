@@ -26,4 +26,132 @@ message OneMoment {
   // Humidity source is clipped such that
   //     q + source * dt >= humidity_source_term_limiter_k * q.
   optional float humidity_source_term_limiter_k = 1 [default = 0.5];
+
+  // Constants for rain related quantities.
+  message Rain {
+    // The density of a rain drop [kg/m^3].
+    optional float rho = 1 [default = 1e3];
+    // The drag coefficient of a rain drop.
+    optional float c_d = 2 [default = 0.55];
+    // Typical rain drop radius [m].
+    optional float r_0 = 3 [default = 1e-3];
+    // Exponent to the radius ratio in the mass equation.
+    optional float m_e = 4 [default = 3.0];
+    // The calibration coefficients in the mass equation.
+    optional float chi_m = 5 [default = 1.0];
+    optional float del_m = 6 [default = 0.0];
+    // Exponent to the radius ratio in the cross section area equation.
+    optional float a_e = 7 [default = 2.0];
+    // The calibration coefficients in the cross section area equation.
+    optional float chi_a = 8 [default = 1.0];
+    optional float del_a = 9 [default = 0.0];
+    optional float v_e = 10 [default = 0.5];
+    // The calibration coefficients in the terminal velocity equation.
+    optional float chi_v = 11 [default = 1.0];
+    optional float del_v = 12 [default = 0.0];
+    // The ventilation factor coefficients.
+    optional float a_vent = 13 [default = 1.5];
+    optional float b_vent = 14 [default = 0.53];
+    // The `n_0` parameter in the Marshall-Palmer distribution.
+    optional float n_0 = 15 [default = 1.6e7];
+  }
+
+  // Constants for snow related quantities.
+  message Snow {
+    // The apparent density of a falling snow crystal for calculating the
+    // terminal velocity [kg/m^3]. This is defined as the mass of the snow
+    // particle divided by the volume of circumscribing spheroid, and its value
+    // can range from 50 to 900 kg/m^3. In the atmosphere a typical value is
+    // around 100 kg/m^3.
+    optional float rho = 1 [default = 100.0];
+    // Typical snow crystal radius [m].
+    optional float r_0 = 2 [default = 1e-3];
+    // Exponent to the radius ratio in the mass equation.
+    optional float m_e = 3 [default = 2.0];
+    // The calibration coefficients in the mass equation.
+    optional float chi_m = 4 [default = 1.0];
+    optional float del_m = 5 [default = 0.0];
+    // Exponent to the radius ratio in the cross section area equation.
+    optional float a_e = 6 [default = 2.0];
+    // The calibration coefficients in the cross section area equation.
+    optional float chi_a = 7 [default = 1.0];
+    optional float del_a = 8 [default = 0.0];
+    // Exponent to the radius ratio in the terminal velocity equation.
+    optional float v_e = 9 [default = 0.25];
+    // The calibration coefficients in the terminal velocity equation.
+    optional float chi_v = 10 [default = 1.0];
+    optional float del_v = 11 [default = 0.0];
+    // The snow size distribution parameter exponent.
+    optional float nu = 12 [default = 0.63];
+    // The ventilation factor coefficients.
+    optional float a_vent = 13 [default = 0.65];
+    optional float b_vent = 14 [default = 0.44];
+  }
+
+  // Constants for ice related quantities.
+  message Ice {
+    // The density of an ice crystal [kg/m^3].
+    optional float rho = 1 [default = 0.917e3];
+    // Typical ice crystal radius [m].
+    optional float r_0 = 2 [default = 1e-5];
+    // Exponent to the radius ratio in the mass equation.
+    optional float m_e = 3 [default = 3.0];
+    // The calibration coefficients in the mass equation.
+    optional float chi_m = 4 [default = 1.0];
+    optional float del_m = 5 [default = 0.0];
+    // The `n_0` parameter in the Marshall-Palmer distribution.
+    optional float n_0 = 6 [default = 2e7];
+  }
+
+  // Constant coefficients in autoconversion.
+  message Autoconversion {
+    // Timescale for cloud liquid to rain water autoconversion [s].
+    optional float tau_lr = 1 [default = 1e3];
+    // Timescale for cloud ice to snow autoconversion [s].
+    optional float tau_is = 2 [default = 1e2];
+    // Threshold for cloud liquid to rain water autoconversion [kg/kg].
+    optional float q_l_threshold = 3 [default = 5e-4];
+    // Threshold for cloud ice to snow autoconversion [kg/kg].
+    optional float q_i_threshold = 4 [default = 1e-6];
+    // Threshold particle radius between ice and snow [m].
+    optional float r_is = 5 [default = 6.25e-5];
+  }
+
+  // Constant coefficients in accretion.
+  message Accretion {
+    // Collision efficiency between rain drops and cloud droplets.
+    optional float e_lr = 1 [default = 0.8];
+    // Collision efficiency between snow and cloud droplets.
+    optional float e_ls = 2 [default = 0.1];
+    // Collision efficiency between rain drops and cloud ice.
+    optional float e_ir = 3 [default = 1.0];
+    // Collision efficiency between snow and cloud ice.
+    optional float e_is = 4 [default = 0.1];
+    // Collision efficiency between rain drops and cloud ice.
+    optional float e_rs = 5 [default = 1.0];
+  }
+
+  // Rain related parameters and calibration coefficients.
+  optional Rain rain = 2;
+  // Snow related parameters and calibration coefficients.
+  optional Snow snow = 3;
+  // Ice related parameters.
+  optional Ice ice = 4;
+  // Autoconversion related parameters.
+  optional Autoconversion autoconversion = 5;
+  // Accretion related parameters.
+  optional Accretion accretion = 6;
+  // Defines the type of terminal velocity parameterization.
+  enum TerminalVelocityModelType {
+    // An unimplemented terminal velocity.
+    TERMINAL_VELOCITY_UNKNOWN = 0;
+    // Terminal velocity parameterization using power-law distribution.
+    TERMINAL_VELOCITY_POWER_LAW = 1;
+    // Terminal velocity parameterization using gamma function distribution per
+    // Chen et al. (2022).
+    TERMINAL_VELOCITY_GAMMA_TYPE = 2;
+  }
+  // Terminal velocity parameterization options.
+  optional TerminalVelocityModelType terminal_velocity_model_type = 7
+      [default = TERMINAL_VELOCITY_POWER_LAW];
 }

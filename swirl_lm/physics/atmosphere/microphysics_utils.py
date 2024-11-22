@@ -42,17 +42,17 @@ ModelParamsType: TypeAlias = (microphysics_pb2.Kessler |
                               microphysics_pb2.OneMoment)
 
 
-def get_model_params_from_proto(msg: message.Message) -> ModelParamsType:
+def _get_model_params_from_proto(msg: message.Message) -> ModelParamsType:
   """Returns the proto that has been set in the microphysics 'oneof'."""
-  return getattr(msg, msg.WhichOneof('microphysics'))
+  return getattr(msg, msg.WhichOneof('model_type'))
 
 
 def select_microphysics(
-    model_params: ModelParamsType,
     params: parameters_lib.SwirlLMParameters,
     thermodynamics: thermodynamics_manager.ThermodynamicsManager,
 ) -> microphysics_generic.MicrophysicsAdapter:
   """Selects the microphysics model by `model_name`."""
+  model_params = _get_model_params_from_proto(params.microphysics)
   assert isinstance(thermodynamics.model, water.Water), (
       '`water` is required as the thermodynamics model to use'
       f' microphysics models, but {thermodynamics.model} is provided.'
@@ -60,8 +60,7 @@ def select_microphysics(
   if isinstance(model_params, microphysics_pb2.Kessler):
     return microphysics_kw1978.Adapter(params, thermodynamics.model)
   elif isinstance(model_params, microphysics_pb2.OneMoment):
-    return microphysics_one_moment.Adapter(params, thermodynamics.model,
-                                           model_params)
+    return microphysics_one_moment.Adapter(params, thermodynamics.model)
   else:
     raise NotImplementedError(
         f'{model_params} is not a known params type for microphysics model.'

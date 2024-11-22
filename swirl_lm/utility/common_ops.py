@@ -445,7 +445,7 @@ def reshape_to_broadcastable(
 
 
 def get_local_slice_of_1d_array(
-    v: tf.Tensor, core_id: int, core_n: int, n: int
+    v: tf.Tensor, core_id: int | tf.Tensor, core_n: int, n: int
 ) -> tf.Tensor:
   """Retrieves the values local to `core_id` from a global 1D array `v`.
 
@@ -1660,9 +1660,6 @@ def gather(x: tf.Tensor, indices: tf.Tensor) -> tf.Tensor:
     matching the first dimension of `indices`.  If `indices` is empty, return
     a vector with length 0.
   """
-  if  tf.shape(indices)[0] == 0:
-    return tf.constant([])
-
   i, j, k = [
       tf.cast(tf.one_hot(indices[:, l], depth=tf.shape(x)[l]), dtype=x.dtype)
       for l in range(3)

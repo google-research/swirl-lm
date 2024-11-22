@@ -360,6 +360,63 @@ class ThreeWeight(BaseJacobiSolver):
     p_jacobi = multiply(numerator, reciprocal_diagonal_factor)
     return self._apply_underrelaxation(p_jacobi, p)
 
+  def residual(
+      self,
+      p: tf.Tensor,
+      w0: tf.Tensor,
+      w1: tf.Tensor,
+      w2: tf.Tensor,
+      rhs: tf.Tensor,
+  ) -> tf.Tensor:
+    """Computes the residual (LHS - RHS) of the three-weight Poisson equation.
+
+    Given approximate solution `p` to the Poisson equation, compute the
+    residual.  The approximate solution `p` might be obtained, for example, from
+    a finite number of Jacobi iterations that are not necessarily fully
+    converged.  The residual can be used as a diagnostic to check how well
+    converged the solution is.
+
+    The residual calculation very closely follows the computation of the next
+    Jacobi iteration, so the computations look very similar.
+
+    Args:
+      p: The approximate solution to the Poisson equation.
+      w0: The first weighting coefficient.
+      w1: The second weighting coefficient.
+      w2: The third weighting coefficient.
+      rhs: The right hand side of the Poisson equation.
+
+    Returns:
+      The residual (LHS - RHS) of the Poisson equation.
+    """
+    reciprocal_diagonal_factor = self._precompute_reciprocal_diagonal_factor(
+        w0, w1, w2
+    )
+    diagonal_factor = 1 / reciprocal_diagonal_factor
+
+    # Compute factors for the off-diagonal terms.
+    sum_op = (
+        lambda f: (0.5 * self._delta2_inv[0])
+        * self._kernel_op.apply_kernel_op_x(f, 'kSx'),
+        lambda f: (0.5 * self._delta2_inv[1])
+        * self._kernel_op.apply_kernel_op_y(f, 'kSy'),
+        lambda f: (0.5 * self._delta2_inv[2])
+        * self._kernel_op.apply_kernel_op_z(f, 'kSz', 'kSzsh'),
+    )
+
+    w = (w0, w1, w2)
+    s_p = [sum_op[dim](p) for dim in (0, 1, 2)]
+    w_s_p = [w[dim] * s_p[dim] for dim in (0, 1, 2)]
+    w_p = [w[dim] * p for dim in (0, 1, 2)]
+    s_w_p = [sum_op[dim](w_p[dim]) for dim in (0, 1, 2)]
+
+    return (
+        -diagonal_factor * p
+        + (w_s_p[0] + w_s_p[1] + w_s_p[2])
+        + (s_w_p[0] + s_w_p[1] + s_w_p[2])
+        - rhs
+    )
+
   def solve(
       self,
       w0: FlowFieldVal,
@@ -383,8 +440,8 @@ class ThreeWeight(BaseJacobiSolver):
     Returns:
       A dictionary containing the solution and the number of iterations.
     """
-    reciprocal_diagonal_factor = (
-        self._precompute_reciprocal_diagonal_factor(w0, w1, w2)
+    reciprocal_diagonal_factor = self._precompute_reciprocal_diagonal_factor(
+        w0, w1, w2
     )
     p_next_fn = functools.partial(
         self._three_weight_poisson_step,

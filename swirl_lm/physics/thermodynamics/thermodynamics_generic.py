@@ -88,7 +88,7 @@ class ThermodynamicModel(object):
       self,
       states: FlowFieldMap,
       additional_states: FlowFieldMap,
-  ) -> FlowFieldVal:
+  ) -> tf.Tensor:
     """Defines a pure virtual interface for the density update function."""
     raise NotImplementedError(
         'A thermodynamic model needs to provide a definition for the density '

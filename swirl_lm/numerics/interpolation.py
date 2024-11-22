@@ -19,7 +19,6 @@ import functools
 import itertools
 from typing import Sequence, Tuple, TypeAlias
 
-from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import types
 import tensorflow as tf
@@ -29,6 +28,7 @@ FlowFieldVal: TypeAlias = types.FlowFieldVal
 
 class FluxLimiterType(enum.Enum):
   """Defines types of flux limiters."""
+
   VAN_LEER = 'van_leer'
   MUSCL = 'muscl'
 
@@ -69,7 +69,7 @@ def centered_node_to_face(
 
 def _get_weno_kernel_op(
     k: int = 3,
-)-> get_kernel_fn.ApplyKernelConvOp:
+) -> get_kernel_fn.ApplyKernelConvOp:
   """Initializes a convolutional kernel operator with WENO related weights.
 
   Args:
@@ -80,28 +80,20 @@ def _get_weno_kernel_op(
   """
   # Coefficients for the interpolation and stencil selection.
   c = {
-      2: {
-          -1: [1.5, -0.5,],
-          0: [0.5, 0.5,],
-          1: [-0.5, 1.5,],
-          },
+      2: {-1: [1.5, -0.5], 0: [0.5, 0.5], 1: [-0.5, 1.5]},
       3: {
-          -1: [11.0 / 6.0, -7.0 / 6.0, 1.0 / 3.0,],
+          -1: [11.0 / 6.0, -7.0 / 6.0, 1.0 / 3.0],
           0: [1.0 / 3.0, 5.0 / 6.0, -1.0 / 6.0],
           1: [-1.0 / 6.0, 5.0 / 6.0, 1.0 / 3.0],
           2: [1.0 / 3.0, -7.0 / 6.0, 11.0 / 6.0],
-          }
+      },
   }
 
   # Define the kernel operator with WENO customized weights.
   # Weights for the i + 1/2 face interpolation. Values are saved at i.
-  kernel_lib = {
-      f'c{r}': (c[k][r], r) for r in range(k)
-  }
+  kernel_lib = {f'c{r}': (c[k][r], r) for r in range(k)}
   # Weights for the i - 1/2 face interpolation. Values are saved at i.
-  kernel_lib.update({
-      f'cr{r}': (c[k][r - 1], r) for r in range(k)
-  })
+  kernel_lib.update({f'cr{r}': (c[k][r - 1], r) for r in range(k)})
   # Weights for the smoothness measurement.
   if k == 2:  # WENO-3
     kernel_lib.update({
@@ -152,13 +144,11 @@ def _calculate_weno_weights(
   }
 
   kernel_fn = {
-      'x':
-          lambda u, name: kernel_op.apply_kernel_op_x(u, f'{name}x'),
-      'y':
-          lambda u, name: kernel_op.apply_kernel_op_y(u, f'{name}y'),
-      'z':
-          lambda u, name: kernel_op.apply_kernel_op_z(u, f'{name}z',  # pylint: disable=g-long-lambda
-                                                      f'{name}zsh')
+      'x': lambda u, name: kernel_op.apply_kernel_op_x(u, f'{name}x'),
+      'y': lambda u, name: kernel_op.apply_kernel_op_y(u, f'{name}y'),
+      'z': lambda u, name: kernel_op.apply_kernel_op_z(
+          u, f'{name}z', f'{name}zsh'  # pylint: disable=g-long-lambda
+      ),
   }[dim]
 
   # Compute the smoothness measurement.
@@ -189,7 +179,8 @@ def _calculate_weno_weights(
   w_pos = [
       tf.nest.map_structure(
           functools.partial(alpha_fn, dr=d[k][k - 1 - r]), beta[r]
-      ) for r in range(k)
+      )
+      for r in range(k)
   ]
   for r in range(k):
     w_neg_sum = tf.nest.map_structure(tf.math.add, w_neg_sum, w_neg[r])
@@ -222,13 +213,11 @@ def _reconstruct_weno_face_values(
     weights at face i + 1/2, respectively.
   """
   kernel_fn = {
-      'x':
-          lambda u, name: kernel_op.apply_kernel_op_x(u, f'{name}x'),
-      'y':
-          lambda u, name: kernel_op.apply_kernel_op_y(u, f'{name}y'),
-      'z':
-          lambda u, name: kernel_op.apply_kernel_op_z(u, f'{name}z',  # pylint: disable=g-long-lambda
-                                                      f'{name}zsh')
+      'x': lambda u, name: kernel_op.apply_kernel_op_x(u, f'{name}x'),
+      'y': lambda u, name: kernel_op.apply_kernel_op_y(u, f'{name}y'),
+      'z': lambda u, name: kernel_op.apply_kernel_op_z(
+          u, f'{name}z', f'{name}zsh'  # pylint: disable=g-long-lambda
+      ),
   }[dim]
 
   # Compute the reconstructed values on faces.
@@ -284,6 +273,7 @@ def _interpolate_with_weno_weights(
     if isinstance(v, tf.Tensor):
       v_neg = tf.concat([v[:, :1, :], v_neg[:, :-1, :]], 1)
     else:  # v and v_neg are lists.
+
       def update_x0(v_n, v_0):
         res = tf.roll(v_n, 1, axis=0)
         return tf.tensor_scatter_nd_update(res, [[0]], [v_0[0, :]])
@@ -293,6 +283,7 @@ def _interpolate_with_weno_weights(
     if isinstance(v, tf.Tensor):
       v_neg = tf.concat([v[:, :, :1], v_neg[:, :, :-1]], 2)
     else:  # v and v_neg are lists.
+
       def update_y0(v_n, v_0):
         res = tf.roll(v_n, 1, axis=1)
         res_t = tf.tensor_scatter_nd_update(
@@ -330,8 +321,9 @@ def weno(
   kernel_op = _get_weno_kernel_op(k)
   w_neg, w_pos = _calculate_weno_weights(v, kernel_op, dim, k)
   vr_neg, vr_pos = _reconstruct_weno_face_values(v, kernel_op, dim, k)
-  v_neg, v_pos = _interpolate_with_weno_weights(v, w_neg, w_pos, vr_neg, vr_pos,
-                                                dim, k)
+  v_neg, v_pos = _interpolate_with_weno_weights(
+      v, w_neg, w_pos, vr_neg, vr_pos, dim, k
+  )
 
   return v_neg, v_pos
 
@@ -395,7 +387,10 @@ def flux_limiter(
     )
 
   kernel_op = get_kernel_fn.ApplyKernelConvOp(
-      4, {'shift': ([1.0, 0.0, 0.0], 1),}
+      4,
+      {
+          'shift': ([1.0, 0.0, 0.0], 1),
+      },
   )
 
   if dim == 'x':
@@ -448,58 +443,100 @@ def trilinear_interpolation(
     field_data: tf.Tensor,
     points: tf.Tensor,
     grid_spacing: tf.Tensor,
-    domain_min_pt: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    local_grid_min_pt: tf.Tensor,
+    fill_value: float = 0.0,
 ) -> tf.Tensor:
-  """Linear interpolation on a 3-D orthogonal, uniform grid.
+  """Linear interpolation on a 3-D orthogonal, uniform grid with halos.
 
-  Performs trilinear interpolation by calculating the local point coordinate
-  indices and then interpolating the surrounding field data at the point.
-  Points provided outside of the core domain give invalid solutions.
+  Performs trilinear interpolation by determining the nearest surrounding field
+  data to the points and interpolating between them. The locations of the
+  field data are determined using `grid_spacing` and the shape of `field_data`.
+  Points provided outside of the domain return `fill_value`, which is `0.0` by
+  default. `field_data` should include either halos with size either 1 or 2.
 
   Note that coordinates in this function follow the order of the dimensions of
-  `field_data` as a 3D tensor instead of the physical-coordinates orientation in
+  `field_data` as a tensor instead of the physical-coordinates orientation in
   Swirl-LM. For instance, the first element in `grid_spacing` and
   `domain_min_pt`, as well as the first column in `points`, are associated with
-  the 0th dimensions of `field_data`, instead of the 'x' axis in Swirl-LM.
+  the 0th dimensions of `field_data`, instead of the `x` axis in Swirl-LM.
 
   Args:
-    field_data: A 3D tensor of field scalars without halos.
+    field_data: A 3D or 4D tensor of field data including halos. The field data
+      can be a scalar or a vector of size `m` corresponding to its last
+      dimension.
     points: An 2D tensor (n, 3) of n coordinate points in 3D space to
-      interpolate at. Points must fall within the range of coordinates
-      associated with the core. If points are outside of this domain, the
-      function will return invalid results.
+      interpolate at.
     grid_spacing: A three element tensor defining the grid spacing along the
-      three dimensions.
-    domain_min_pt: A three element tuple defining the minimum coordinate
-      location within the entire physical domain encompassing all cores, default
-      is (0, 0, 0).
+      three dimensions. The ordering should follow the `field_data` shape. If
+      `field_data` indexing is in order z, x, y, then `grid_spacing` should be
+      in order z, x, y.
+    local_grid_min_pt: A three element tensor defining the location of the  `0,
+      0, 0` coordinate in the `field_data` tensor. The dimension ordering should
+      follow that of `grid_spacing`.
+    fill_value: A scalar value to fill the points outside of the domain.
 
   Returns:
-    An n element tensor containing interpolated data values at the n supplied
-      points.
+    A tensor containing interpolated data values at the `n` supplied points.
+    The output shape is a vector of length `n` for a 3-D `field_data` and tensor
+    of shape `(n, m)` for 4-D `field_data`, respectively.
   """
-  core_spacing = grid_spacing * (
-      tf.cast(field_data.shape, dtype=tf.float32) - 1
-  )
+  with tf.name_scope('preparing_trilinear_interpolation'):
+    points_norm = (points - local_grid_min_pt) / grid_spacing
+    ijk_unclipped = tf.floor(points_norm)
+    with tf.name_scope('preventing_error_for_out_of_bounds_indexing'):
+      ijk = tf.clip_by_value(
+          ijk_unclipped,
+          0.0,
+          # The -2 is appropriate and prevents out of bounds indexing in the
+          # gather_nd operation below.
+          tf.cast(tf.shape(field_data)[:3] - 2, tf.float32),
+      )
+    points_norm -= ijk
+    ijk = tf.cast(ijk, dtype=tf.int32)
 
-  # Normalizes points to be within the range (0, 0, 0,) to (nx, ny, nz) for nx,
-  # ny, and nz nodes in the core.
-  points_norm = (
-      (points - tf.constant(domain_min_pt)) % core_spacing
-  ) / grid_spacing
-  ijk = tf.floor(points_norm)
-  points_norm -= ijk
-  ijk = tf.cast(ijk, dtype=tf.int32)
-  i, j, k = ijk[:, 0], ijk[:, 1], ijk[:, 2]
-  x0, x1, x2 = points_norm[:, 0], points_norm[:, 1], points_norm[:, 2]
+    i, j, k = ijk[:, 0], ijk[:, 1], ijk[:, 2]
+    x0, x1, x2 = points_norm[:, 0], points_norm[:, 1], points_norm[:, 2]
 
-  values = tf.zeros(points.shape[0], dtype=field_data.dtype)
-  for p, q, l in itertools.product(range(2), range(2), range(2)):
-    v = common_ops.gather(field_data, tf.stack([i + p, j + q, k + l], axis=-1))
-    values += v * (
-        ((1 - p) + (2 * p - 1) * x0)
-        * ((1 - q) + (2 * q - 1) * x1)
-        * ((1 - l) + (2 * l - 1) * x2)
+  with tf.name_scope('indexing_field_data_for_interpolation'):
+    v = tf.stack(
+        [
+            tf.gather_nd(field_data, tf.stack([i + p, j + q, k + l], axis=-1))
+            for p, q, l in itertools.product(range(2), range(2), range(2))
+        ],
+        axis=-1,
     )
 
-  return values
+  with tf.name_scope('calculating_interpolation_weights'):
+    w = tf.stack(
+        [
+            ((1 - p) + (2 * p - 1) * x0)
+            * ((1 - q) + (2 * q - 1) * x1)
+            * ((1 - l) + (2 * l - 1) * x2)
+            for p, q, l in itertools.product(range(2), range(2), range(2))
+        ],
+        axis=-1,
+    )
+
+  with tf.name_scope('applying_interpolation_weights'):
+    vals = tf.einsum('i...k,ik->i...', v, w)
+
+  with tf.name_scope('filling_extrapolating_values'):
+    out_of_bounds_locs = tf.math.reduce_any(
+        tf.math.logical_or(
+            tf.math.less(ijk_unclipped, 0),
+            tf.math.greater_equal(
+                ijk_unclipped,
+                tf.cast(tf.shape(field_data)[:3], tf.float32) - 1,
+            ),
+        ),
+        axis=1,
+    )
+    vals = tf.where(
+        tf.tile(out_of_bounds_locs[:, tf.newaxis], (1, tf.shape(vals)[1]))
+        if len(tf.shape(vals)) > 1
+        else out_of_bounds_locs,
+        tf.fill(tf.shape(vals), tf.constant(fill_value, dtype=vals.dtype)),
+        vals,
+    )
+
+  return vals

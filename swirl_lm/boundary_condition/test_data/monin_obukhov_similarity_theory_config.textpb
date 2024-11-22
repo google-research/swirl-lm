@@ -6,6 +6,20 @@ convection_scheme: CONVECTION_SCHEME_QUICK
 time_integration_scheme: TIME_SCHEME_CN_EXPLICIT_ITERATION
 diffusion_scheme: DIFFUSION_SCHEME_CENTRAL_3
 kinematic_viscosity: 1e-5
+grid_params {
+  length {
+    dim_0: 6
+    dim_1: 6
+    dim_2: 6
+  }
+  grid_size {
+    dim_0: 8
+    dim_1: 8
+    dim_2: 8
+  }
+  halo_width: 2
+  dt: 0.01
+}
 boundary_models {
   most {
     u_star: 0.25

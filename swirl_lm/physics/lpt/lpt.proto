@@ -1,0 +1,119 @@
+syntax = "proto2";
+
+package research.simulation;
+
+option java_multiple_files = true;
+
+// A library for Lagrangian Particle Tracking (LPT) simulations.
+// Next id: 9
+message LagrangianParticleTracking {
+  // The particle drag coefficient.
+  optional float c_d = 1;
+  // The particle relaxation time.
+  optional float tau_p = 2;
+  // The threshold mass below which the particle is considered to be vanished.
+  optional float mass_threshold = 3;
+  // The maximum number of particles that a replica can have.
+  optional int32 n_max = 4;
+
+  // A three dimensional method to inject particles into the field.
+  message LptInjector {
+    message LptVector {
+      optional float x = 1;
+      optional float y = 2;
+      optional float z = 3;
+    }
+
+    // A box where particles are injected.
+    message Box {
+      // The minimum point of the box.
+      optional LptVector min_pt = 1;
+      // The maximum point of the box.
+      optional LptVector max_pt = 2;
+    }
+
+    message InjectionSchedule {
+      // The time step to first inject particles (e.g., 0 for the first step).
+      optional int32 initial_injection_step = 1;
+      // An optional periodic injection schedule to begin after the first
+      // injection. If this is undefined, the injector is only called once at
+      // `initial_injection_step`. If this is defined, the injector is called
+      // every `period` steps after the `initial_injection_step`.
+      optional int32 period = 2;
+    }
+
+    // The injected particle attributes. Here, you can either define particles
+    // completely randomly, or using prescribed velocities.
+    message ParticleAttributes {
+      // Number of particles to initialize in total upon each call to the
+      // injector.
+      optional int32 n_particles = 1;
+      // An optional field of u, v, w components for the velocities of the
+      // particles. If undefined, the particle directions, polar and azimuthal,
+      // are initialized randomly across the unit sphere and velocity magnitudes
+      // are uniformly distributed between 0 and `speed_max`.
+      optional LptVector velocity = 2;
+      // The mass of each particle. If undefined, the mass is set to an
+      // infinitesimal rigid particle.
+      optional float mass = 3 [default = 1e-30];
+      // The maximum random velocity magnitudes for the particles. Particle
+      // velocity magnitudes are uniformly distributed between 0 and this value.
+      optional float speed_max = 4;
+    }
+
+    // The name of the injector region.
+    optional string name = 1;
+    // Random number generation seed.
+    optional int32 seed = 8;
+    // Parameters that specify what timestep(s) to inject particles.
+    optional InjectionSchedule injection_schedule = 2;
+    // The attributes (e.g., velocities and masses) to assign new particles.
+    optional ParticleAttributes attributes = 3;
+    // The type of injector region used including different shapes or otherwise.
+    oneof injector_type {
+      // A box where particles can be injected.
+      Box box = 4;
+    }
+  }
+
+  // The regions where particles can be injected.
+  repeated LptInjector injector = 7;
+
+  // How the particles are stored in multi-TPU simulations.
+  oneof lpt_parallel_approach {
+    FieldExchange field_exchange = 6;
+  }
+
+  // The approach where particles remain stored on their original TPU,
+  // regardless of where they are located in the domain, and field data is
+  // requested from the TPUs containing the particle locations to solve the
+  // equations of motion of the particles.
+  message FieldExchange {
+    // The approach to communicate fluid data between TPUs. Both approaches
+    // were determined to be approximately equal in performance.
+    enum CommunicationMode {
+      // The communication mode is unspecified. This is an error.
+      UNSPECIFIED = 0;
+      // The approach where each replica is assigned a destination replica, and
+      // the destination replica is assigned the present replica. The present
+      // replica sends the locations of particles located on the destination
+      // replica to the destination replica. The destination replica then
+      // interpolates the relevant fluid data at these locations and sends them
+      // back to the present replica. The present replica, simultaneously, does
+      // the same for the destination replica. This process is repeated `n`
+      // times for `n` total replicas. After `n` iterations, each replica will
+      // have communicated with every other replica, including itself.
+      PAIRWISE = 1;
+      // The approach where the replicas are arranged in a circle, and each
+      // replica sends data to the next replica in the circle and receives data
+      // from the previous replica in the circle. Every iteration, each replica
+      // interpolates the incoming particle locations that are physically
+      // located within that replicas domain, and inserts the data into the
+      // circulating data. After this process is repeated `n` times, the data
+      // will have returned to the original replica, and each replica will
+      // have the fluid data for all of its particle locations.
+      ONE_SHUFFLE = 2;
+    }
+    optional CommunicationMode communication_mode = 5 [default = ONE_SHUFFLE];
+  }
+}

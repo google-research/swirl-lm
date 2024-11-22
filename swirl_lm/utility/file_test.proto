@@ -1,0 +1,16 @@
+syntax = "proto2";
+
+package swirl_lm;
+
+import "swirl_lm/utility/file.proto";
+
+message InnerContainer {
+  optional File single_file = 1;
+  repeated File repeated_files = 2;
+}
+
+message OuterContainer {
+  optional InnerContainer small_container = 1;
+  optional int32 int_field = 2;
+  repeated int32 repeated_int_field = 3;
+}

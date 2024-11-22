@@ -32,7 +32,8 @@ import "swirl_lm/physics/combustion/turbulent_kinetic_energy.proto";
 message Wood {
   // The B scale of the fuel elements, in units of m.
   optional float s_b = 1;
-  // The length scale of the smallest fuel elements, in units of m.
+  // The length scale of the smallest fuel elements, in units of m. As the
+  // length scale decreases, the reaction rate increases.
   optional float s_x = 2;
   // The convective heat transfer coefficient, W/m²/K.
   optional float h_conv = 3;

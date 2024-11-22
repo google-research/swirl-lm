@@ -644,11 +644,8 @@ class MoninObukhovSimilarityTheory(object):
   def neumann_bc_update_fn(
       self,
       kernel_op: get_kernel_fn.ApplyKernelOp,
-      replica_id: tf.Tensor,
-      replicas: np.ndarray,
       states: FlowFieldMap,
       additional_states: FlowFieldMap,
-      params: grid_parametrization.GridParametrization,
   ) -> FlowFieldMap:
     """Computes the Neumann BC for all variables.
 
@@ -661,20 +658,14 @@ class MoninObukhovSimilarityTheory(object):
 
     Args:
       kernel_op: An object holding a library of kernel operations.
-      replica_id: The id of the replica.
-      replicas: The replicas. In particular, a numpy array that maps grid
-        coordinates to replica id numbers.
       states: A keyed dictionary of state variables.
       additional_states: A list of states that are needed by the update fn, but
         will not be updated by the main governing equations.
-      params: An instance of `grid_parametrization.GridParametrization`.
 
     Returns:
       An update function for `additional_states` that updates the boundary
       condition.
     """
-    del replica_id, replicas, params
-
     # Computes the boundary condition for all variables in states except for
     # those listed here.
     excluded_vars = ('p', 'rho', common.KEYS_VELOCITY[self.vertical_dim])

@@ -22,7 +22,9 @@ import "swirl_lm/boundary_condition/rayleigh_damping_layer.proto";
 import "swirl_lm/equations/pressure.proto";
 import "swirl_lm/equations/scalars.proto";
 import "swirl_lm/numerics/numerics.proto";
+import "swirl_lm/physics/atmosphere/microphysics.proto";
 import "swirl_lm/physics/combustion/combustion.proto";
+import "swirl_lm/physics/lpt/lpt.proto";
 import "swirl_lm/physics/radiation/config/radiative_transfer.proto";
 import "swirl_lm/physics/thermodynamics/thermodynamics.proto";
 import "swirl_lm/physics/turbulent_combustion/turbulent_combustion.proto";
@@ -137,6 +139,18 @@ message SubGridScaleModel {
     // turbulent Prandtl number, or from the scalar gradient directly. Default
     // to use the turbulent Prandtl number to match the original behavior.
     optional bool use_pr_t = 3 [default = true];
+
+    enum DeltaFormula {
+      UNKNOWN = 0;
+      // Delta coefficient is sqrt(dx^2 + dy^2 + dz^2).
+      DIAGONAL = 1;
+      // Delta coefficient is (dx * dy * dz) ^ (1/3).
+      GEOMETRIC_MEAN = 2;
+    }
+
+    // Note that the default is DIAGONAL for backward compatibility but
+    // GEOMETRIC_MEAN is preferred especially with high aspect ratio grids.
+    optional DeltaFormula delta_formula = 4 [default = DIAGONAL];
   }
 
   // Parameters required by the dynamic Smagorinsky model.
@@ -195,8 +209,27 @@ message SubGridScaleModel {
   optional float diff_t_min = 7 [default = 0.0];
 }
 
+// Stores parameters for the microphysics model.
+message Microphysics {
+  // An option for including the effects of precipitation in the equations of
+  // humidity and possibly the energy variable.
+  optional bool include_precipitation = 1;
+  // An option for including the effects of condensation in the equations for
+  // humidity. Note that this option is only valid when using q_c, q_v, and
+  // theta as the thermodynamic variables.
+  optional bool include_condensation = 2;
+  // An option for including sedimentation in the convective flux of the
+  // humidity variable.
+  optional bool include_sedimentation = 3;
+  // Specifies the option of microphysics model.
+  oneof model_type {
+    Kessler kessler = 4;
+    OneMoment one_moment = 5;
+  }
+}
+
 // Stores the parameters required by an incompressible Navier-Stokes simulation.
-// Next id: 40
+// Next id: 42
 message SwirlLMParameters {
   // Deprecated/Removed fields.
   reserved 4;
@@ -366,6 +399,9 @@ message SwirlLMParameters {
   // The radiation model that solves a two-stream radiative transfer equation
   // taking into account the full atmospheric state.
   optional RadiativeTransfer radiative_transfer = 37;
+  // The Lagrangian particle tracking model that solves the motion of particles
+  // in a fluid flow.
+  optional LagrangianParticleTracking lpt = 41;
   // Names of debug variables to save at the end of each cycle. When adding code
   // to output a new debug variable, update the list below, which serves as
   // documentation for available debug variables.
@@ -374,4 +410,6 @@ message SwirlLMParameters {
   // -------------------------------------------------------------------------
   //
   repeated string debug_variables = 39;
+  // The cloud microphysics parameterization.
+  optional Microphysics microphysics = 40;
 }

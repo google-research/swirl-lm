@@ -19,7 +19,6 @@ from typing import Any, Dict, Optional
 import numpy as np
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.physics.atmosphere import microphysics_one_moment
-from swirl_lm.physics.atmosphere import microphysics_pb2
 from swirl_lm.physics.radiation import rrtmgp_common
 from swirl_lm.physics.radiation.rte import two_stream
 from swirl_lm.physics.thermodynamics import water
@@ -74,7 +73,7 @@ class RRTMGP:
     self._atmospheric_state = self._two_stream_solver.atmospheric_state
     # Library for 1-moment microphysics.
     self._microphysics_lib = microphysics_one_moment.Adapter(
-        config, self._water, microphysics_pb2.OneMoment()
+        config, self._water
     )
     self._vertical_coord_name = ('xx', 'yy', 'zz')[self._g_dim]
 
@@ -99,6 +98,9 @@ class RRTMGP:
       additional_states: FlowFieldMap,
   ) -> Dict[str, Any]:
     """Prepares the states for the two-stream radiative transfer solver."""
+    assert 'rho' in states, (
+        'RRTMGP requires the density (`rho`) to be present in `states`.'
+    )
     assert 'q_t' in states, (
         'RRTMGP requires the total specific humidity (`q_t`) to be present in'
         ' `states`.'
@@ -120,15 +122,22 @@ class RRTMGP:
         states['q_t'],
         tf.nest.map_structure(tf.zeros_like, states['q_t']),
     )
-    q_liq, q_ice = self._water.equilibrium_phase_partition(
-        additional_states['T'], states['rho'], q_t
-    )
+
+    # Condensed phase specific humidity required for cloud optics.
+    if 'q_c' in additional_states:
+      q_c = additional_states['q_c']
+      liq_frac = self._water.liquid_fraction(additional_states['T'])
+      q_liq = tf.nest.map_structure(tf.math.multiply, liq_frac, q_c)
+      q_ice = tf.nest.map_structure(tf.math.subtract, q_c, q_liq)
+    else:
+      q_liq, q_ice = self._water.equilibrium_phase_partition(
+          additional_states['T'], states['rho'], q_t
+      )
+      q_c = tf.nest.map_structure(tf.math.add, q_liq, q_ice)
+
     pressure = self._water.p_ref(
         additional_states[self._vertical_coord_name], additional_states
     )
-
-    # Condensed phase specific humidity required for cloud optics.
-    q_c = tf.nest.map_structure(tf.math.add, q_liq, q_ice)
 
     # Reconstructs volume mixing ratio (vmr) fields of relevant gas species.
     vmr_lib = self._atmospheric_state.vmr
@@ -193,9 +202,10 @@ class RRTMGP:
       replica_id: The index of the current TPU replica.
       replicas: A numpy array that maps grid coordinates to replica id numbers.
       states: A dictionary that holds all flow field variables and must include
-        the total specific humidity (`q_t`).
+        the total specific humidity (`q_t`) and density (`rho`).
       additional_states: A dictionary that holds all helper variables and must
-        include temperatue (`T`).
+        include temperatue (`T`), and the vertical coordinates (`zz`) if the
+        reference states is height dependent.
       sfc_temperature: The optional surface temperature [K] represented as
         either a 3D field having a single vertical dimension or as a scalar.
       upper_atmosphere_states: An optional dictionary containing all the

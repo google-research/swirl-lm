@@ -793,13 +793,6 @@ class GridParametrization(object):
     return chunk_limits
 
   @property
-  def meshgrid(self):
-    xs = np.linspace(0, self.lx, self.cx * self.core_nx)
-    ys = np.linspace(0, self.ly, self.cy * self.core_ny)
-    zs = np.linspace(0, self.lz, self.cz * self.core_nz)
-    return np.meshgrid(xs, ys, zs, indexing='ij')
-
-  @property
   def num_replicas(self):
     return self.cx * self.cy * self.cz
 

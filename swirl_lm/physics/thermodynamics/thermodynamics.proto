@@ -81,7 +81,7 @@ message IdealGasLaw {
 message ConstantDensity {}
 
 // A library for parameters required by the water thermodynamics.
-// Next id: 28
+// Next id: 29
 message Water {
   // The gas constant of water vapor, in unit of J/kg/K. The default value is
   // computed based on treating the molecular weight of water as 0.018 kg/mol.
@@ -157,6 +157,10 @@ message Water {
 
   // The number of iterations for density computation.
   optional int32 num_density_iterations = 20 [default = 1];
+
+  // Whether to use the fast thermodynamics solver (only applicable when the
+  // prognostic variables are theta_li and q_t; no effect otherwise.)
+  optional bool use_fast_thermodynamics = 28;
 
   // An option of the reference state. This option assumes the hydrostatic
   // temperature follows a tanh profile, as specified in CliMa design doc, p 50,

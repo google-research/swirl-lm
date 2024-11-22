@@ -37,8 +37,7 @@ class BoundaryLayer():
 
   def __init__(self, config_filepath: str, tf1: bool = False):
     """Initializes the boundary layer related libraries in the NS solver."""
-    params = parameters_lib.SwirlLMParameters.config_from_proto(
-        config_filepath, grid_params_from_flags=True)
+    params = parameters_lib.SwirlLMParameters.config_from_proto(config_filepath)
 
     self.most = (
         monin_obukhov_similarity_theory.monin_obukhov_similarity_theory_factory(

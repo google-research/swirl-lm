@@ -16,6 +16,7 @@
 
 import dataclasses
 from typing import Dict, Iterable, Optional, Tuple
+import uuid
 
 import numpy as np
 from swirl_lm.utility.post_processing import data_processing
@@ -164,10 +165,15 @@ def write_target_to_ser(
         core_id['z'],
         target.step_id,
     )
+    tmp_uuid = uuid.uuid4().hex
+    tmp_filename = '{}-{}'.format(filename, tmp_uuid)
+
     val = tf.convert_to_tensor(ds[varname], dtype=TF_DTYPE)
     data_processing.write_serialized_tensor(
-        filename, tf.pad(val, [[halo] * 2 for halo in halos])
+        tmp_filename, tf.pad(val, [[halo] * 2 for halo in halos])
     )
+
+    tf.io.gfile.rename(tmp_filename, filename, overwrite=True)
 
 
 def interpolate(

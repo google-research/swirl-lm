@@ -20,9 +20,16 @@ This library supports the following pairs of prognostic variables:
 2. 'theta_li' (liquid-ice potential temperature) and 'q_t' (total humidity)
 3. 'theta' (potential temperature) and 'q_t' (total humidity)
 4. 'theta_v' (virtual potential temperature) and 'q_t' (total humidity)
+
+Reference: CLIMA Atmosphere Model.
 """
+
+from collections.abc import Callable
 import enum
 from typing import Optional, Sequence, Text, cast
+
+from absl import logging
+import numpy as np
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.numerics import root_finder
 from swirl_lm.physics import constants
@@ -94,6 +101,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     self._cp_v = model_params.water.cp_v
     self._cp_l = model_params.water.cp_l
     self._cp_i = model_params.water.cp_i
+    self._use_fast_thermodynamics = model_params.water.use_fast_thermodynamics
     self._p_thermal = params.p_thermal
 
     self._t_max_iter = model_params.water.max_temperature_iterations
@@ -1608,9 +1616,239 @@ class Water(thermodynamics_generic.ThermodynamicModel):
 
     return theta
 
-  def update_density(self, states: FlowFieldMap,
-                     additional_states: FlowFieldMap) -> FlowFieldVal:
+  def _rho_temperature_newton_solver(
+      self,
+      f2: Callable[[tf.Tensor, tf.Tensor], tf.Tensor],
+      rho_guess: tf.Tensor,
+      t_guess: tf.Tensor,
+      q_t: tf.Tensor,
+      p_ref: tf.Tensor,
+      num_iterations: int,
+  ) -> tuple[tf.Tensor, tf.Tensor]:
+    """Custom Newton solver for rho and temperature given theta_li, q_t.
+
+    The 2 functions to solve f1 = 0 & f2 = 0 are:
+        f1 = Rm * rho * T - p_ref = 0
+        f2 = theta_li - theta_li_eqb(rho, T, p_ref, q_t) = 0
+
+    Args:
+      f2: The function giving the error in the theta_li equation.
+      rho_guess: The initial guess for density.
+      t_guess: The initial guess for temperature.
+      q_t: The total vapor specific humidity.
+      p_ref: The reference pressure.
+      num_iterations: The number of Newton iterations to perform.
+
+    Returns:
+      A tuple of (rho, temperature) where rho is the density and T is the
+      temperature.
+    """
+    dtype = tf.nest.flatten(t_guess)[0].dtype
+    # Compute an eps that is 128 times the machine epsilon (maintaining a clean
+    # binary representation) for use in the finite difference approximation of
+    # derivatives.
+    eps = np.finfo(dtype.as_numpy_dtype).eps * 128
+
+    def body(
+        i: tf.Tensor, rho_t: tuple[tf.Tensor, tf.Tensor]
+    ) -> tuple[tf.Tensor, tuple[tf.Tensor, tf.Tensor]]:
+      """The main function for one Newton iteration."""
+      rho, temperature = rho_t
+
+      # Calculate Rm.
+      rm = self.r_m(temperature, rho, q_t)
+
+      # Compute the Jacobian J = [∂f1/∂ρ, ∂f1/∂T; ∂f2/∂ρ, ∂f2/∂T]
+
+      # Analytic derivatives for f1 with respect to rho and T.
+      # Note: these derivatives are approximate because we neglect the
+      # derivative of Rm with respect to T and rho. However, these derivatives
+      # are very small, and so the approximation is quite good.
+      j11 = rm * temperature  # ∂f1/∂ρ
+      j12 = rm * rho  # ∂f1/∂T
+
+      # Finite difference derivatives for f2 with respect to rho and
+      # T.
+      # ∂f2/∂ρ
+      drho = eps * rho
+      rho_plus = rho + drho / 2
+      rho_minus = rho - drho / 2
+      j21 = (f2(rho_plus, temperature) - f2(rho_minus, temperature)) / drho
+
+      # ∂f2/∂T
+      dtemp = eps * temperature
+      temperature_plus = temperature + dtemp / 2
+      temperature_minus = temperature - dtemp / 2
+      j22 = (f2(rho, temperature_plus) - f2(rho, temperature_minus)) / dtemp
+
+      # Invert the Jacobian and proceed with a Newton iteration.
+      determinant = j11 * j22 - j12 * j21
+      jinv_11 = j22 / determinant
+      jinv_12 = -j12 / determinant
+      jinv_21 = -j21 / determinant
+      jinv_22 = j11 / determinant
+
+      f1val = rho * rm * temperature - p_ref
+      f2val = f2(rho, temperature)
+
+      rho_new = rho - (jinv_11 * f1val + jinv_12 * f2val)
+      temperature_new = temperature - (jinv_21 * f1val + jinv_22 * f2val)
+      return (i + 1, (rho_new, temperature_new))
+
+    i0 = tf.constant(0)
+    cond = lambda i, rho_t: tf.less(i, num_iterations)
+
+    _, (rho, temperature) = tf.while_loop(
+        cond=cond,
+        body=body,
+        loop_vars=(i0, (rho_guess, t_guess)),
+        back_prop=False,
+    )
+    return rho, temperature
+
+  def _theta_li_from_temperature_rho_qt(
+      self,
+      temperature: tf.Tensor,
+      rho: tf.Tensor,
+      q_t: tf.Tensor,
+      p_ref: tf.Tensor,
+  ) -> tuple[tf.Tensor, tf.Tensor]:
+    """Compute theta_li from T, rho, q_t, p_ref in equilibrium."""
+    q_l, q_i = self.equilibrium_phase_partition(temperature, rho, q_t)
+    r_m = self.r_m(temperature, rho, q_t)
+    cp_m = self.cp_m(q_t, q_l, q_i)
+    exner_inv = tf.pow(p_ref / self._p00, -r_m / cp_m)
+    lh_v0 = self._lh_v0
+    lh_s0 = self._lh_s0
+
+    theta_li = exner_inv * (temperature - (lh_v0 * q_l + lh_s0 * q_i) / cp_m)
+    return theta_li
+
+  def _rho_and_temperature_from_theta_li_qt_fast(
+      self,
+      theta_li: tf.Tensor,
+      q_t: tf.Tensor,
+      p_ref: tf.Tensor,
+      rho_guess: tf.Tensor,
+  ) -> tuple[tf.Tensor, tf.Tensor]:
+    """Fast solver to determine (rho, T) from (theta_li, q_t, p_ref).
+
+    Solves the 2 simultaneous equations for thermodynamic equilibrium:
+        p_ref = rho * Rm(rho, T, q_t) * T
+        theta_li = theta_li_eqb(rho, T, p_ref, q_t)
+
+    Care must be taken around the freezing point because the thermodynamic
+    equations are not smooth there.
+
+    Args:
+      theta_li: The liquid-ice potential temperature.
+      q_t: The total vapor specific humidity.
+      p_ref: The reference pressure.
+      rho_guess: The initial guess for density.
+
+    Returns:
+      A tuple of (rho, T) where rho is the density and T is the temperature.
+    """
+    # Case 1: temperature at unsaturated condition.
+    # Compute the temperature assuming the air is unsaturated.  This T will be
+    # the initial guess for the Newton iterations.
+    r_m_unsat = (1 - q_t) * _R_D + q_t * self._r_v
+    cp_m_unsat = (1 - q_t) * constants.CP + q_t * self._cp_v
+    exner = (p_ref / self._p00) ** (r_m_unsat / cp_m_unsat)
+    t1 = exner * theta_li
+    t1 = tf.maximum(self._t_min, t1)  # Apply a cutoff for numerical reasons.
+    t_guess = t1
+
+    def potential_temperature_error_fn(
+        rho: tf.Tensor, temperature: tf.Tensor
+    ) -> tf.Tensor:
+      """Computes the error of potential temperature for Newton iterations."""
+      theta_sat = self._theta_li_from_temperature_rho_qt(
+          temperature, rho, q_t, p_ref
+      )
+      return theta_sat - theta_li
+
+    num_iterations = self._t_max_iter
+    rho, temperature_saturation = self._rho_temperature_newton_solver(
+        potential_temperature_error_fn,
+        rho_guess,
+        t_guess,
+        q_t,
+        p_ref,
+        num_iterations,
+    )
+
+    # Handle the freezing case.
+    # Compute theta_li at the freezing point for unsaturated (assuming q_c=0)
+    theta_li_freeze = self._t_freeze / exner
+    # If at the freezing point, use the freezing point temperature and density.
+    temperature_eqb = tf.where(
+        tf.abs(theta_li_freeze - theta_li) < _EPS_E_INT,
+        self._t_freeze,
+        temperature_saturation,
+    )
+    rho_eqb = tf.where(
+        tf.abs(theta_li_freeze - theta_li) < _EPS_E_INT,
+        p_ref / (r_m_unsat * temperature_eqb),
+        rho,
+    )
+    return rho_eqb, temperature_eqb
+
+  def _update_density_and_temperature_fast(
+      self, states: FlowFieldMap, additional_states: FlowFieldMap
+  ) -> tuple[FlowFieldVal, FlowFieldVal]:
+    """Fast version of update_density; returns tuple of (rho, T).
+
+    This function implements a faster solver for determining (rho, T) from
+    (theta_li, q_t, p). It uses only a single Newton iteration loop to update
+    both density and temperature.  This function acts as an interface to
+    `rho_and_temperature_from_thetali_qt_fast`.
+
+    Args:
+      states: Flow field variables, must contain 'rho', 'theta_li', 'q_t'.
+      additional_states: Helper variables that are required to compute potential
+        temperatures.  Must contain 'p_ref'.
+
+    Returns:
+      A tuple of (rho, T) where rho is the density and T is the temperature.
+    """
+    if 'theta_li' not in states or 'q_t' not in states:
+      raise ValueError(
+          'update_density_fast is only implemented when theta_li and q_t are'
+          ' prognostic variables.'
+      )
+    theta_li = states['theta_li']
+    q_t = states['q_t']
+    zz = additional_states.get('zz', None)
+    p_ref = self.p_ref(zz, additional_states)
+    rho_guess = states['rho']
+    return self._rho_and_temperature_from_theta_li_qt_fast(
+        theta_li, q_t, p_ref, rho_guess
+    )
+
+  def update_density(
+      self, states: FlowFieldMap, additional_states: FlowFieldMap
+  ) -> tf.Tensor:
     """Updates the density of the flow field with water thermodynamics."""
+    if (
+        self._use_fast_thermodynamics
+        and 'theta_li' in states
+        and 'q_t' in states
+    ):
+      #  `update_density_fast` is only implemented for determining density
+      # and temperature from theta_li and q_t.
+      density, _ = self._update_density_and_temperature_fast(
+          states, additional_states
+      )
+      return density
+    elif self._use_fast_thermodynamics:
+      logging.warning(
+          '`use_fast_thermodynamics` is set to True, but `theta_li` and `q_t`'
+          ' are not both in `states`. Falling back to the slow solver. Note:'
+          ' If using combustion, this behavior is expected to occur even if'
+          ' `theta_li` and `q_t` are the prognostic variables.'
+      )
+
     zz = additional_states.get('zz', None)
 
     # Get the prognostic variable.
@@ -1679,6 +1917,20 @@ class Water(thermodynamics_generic.ThermodynamicModel):
           f'"{PotentialTemperature.THETA_V.value}" (the virtual potential '
           f'temperature), or "{PotentialTemperature.THETA_LI.value}" (the '
           f'liquid-ice potential temperature).')
+
+    if (
+        self._use_fast_thermodynamics
+        and 'theta_li' in states
+        and 'q_t' in states
+    ):
+      rho_thermal, temperature = self._update_density_and_temperature_fast(
+          states, additional_states
+      )
+      temperatures = {'T': temperature}
+      temperatures |= self.potential_temperatures(
+          temperature, states['q_t'], rho_thermal, zz, additional_states
+      )
+      return temperatures
 
     rho_thermal = (
         self.update_density(states, additional_states) if

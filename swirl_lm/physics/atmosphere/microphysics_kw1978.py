@@ -248,6 +248,10 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
   def __init__(
       self, params: parameters_lib.SwirlLMParameters, water_model: water.Water
   ):
+    assert params.microphysics is not None and params.microphysics.HasField(
+        'kessler'
+    ), 'The microphysics.kessler field needs to be set in SwirlLMParameters.'
+    self._kessler_params = params.microphysics.kessler
     self._kessler = MicrophysicsKW1978(params, water_model)
 
   def terminal_velocity(
@@ -256,7 +260,7 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
       states: water.FlowFieldMap,
       additional_states: water.FlowFieldMap,
   ) -> water.FlowFieldVal:
-    """Computes the terminal velocity for `q_r` or `q_s`.
+    """Computes the terminal velocity for `q_r`, `q_s`, `q_l`, or `q_i`.
 
     Args:
       varname: The name of the humidity variable, either `q_r` or `q_s`.
@@ -272,6 +276,8 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
     assert varname in (
         'q_r',
         'q_s',
+        'q_l',
+        'q_i',
     ), (
         f'Terminal velocity is for `q_r` or `q_s` only, but {varname} is'
         ' provided.'

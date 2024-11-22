@@ -286,3 +286,21 @@ class PoissonSolver(object):
       where the last 2 elements might be -1 when it doesn't apply.
     """
     raise NotImplementedError('`PoissonSolver` is an abstract class.')
+
+  def residual(
+      self,
+      p: tf.Tensor,
+      rhs: tf.Tensor,
+      additional_states: dict[str, tf.Tensor] | None = None,
+  ) -> tf.Tensor:
+    """Computes the residual (LHS - RHS) of the Poisson equation.
+
+    Args:
+      p: The approximate solution to the Poisson equation.
+      rhs: The right hand side of the Poisson equation.
+      additional_states: Additional fields needed in the computation.
+
+    Returns:
+      The residual (LHS - RHS) of the Poisson equation.
+    """
+    raise NotImplementedError('`PoissonSolver` is an abstract class.')

@@ -29,10 +29,11 @@
 
 from typing import List, Literal, Optional, Sequence, Tuple, TypeAlias
 
-from absl import flags
 from absl import logging
 import numpy as np
 from swirl_lm.utility import common_ops
+from swirl_lm.utility import file_io
+from swirl_lm.utility import file_pb2
 from swirl_lm.utility import grid_parametrization_pb2
 from swirl_lm.utility import stretched_grid_util
 from swirl_lm.utility import types
@@ -42,65 +43,6 @@ from google.protobuf import text_format
 
 FlowFieldVal: TypeAlias = types.FlowFieldVal
 FlowFieldMap: TypeAlias = types.FlowFieldMap
-
-# Set allow_override=True for these flags, so each simulation can have its own
-# default values.
-flags.DEFINE_integer('cx', 2, 'computation shape x.', allow_override=True)
-flags.DEFINE_integer('cy', 2, 'computation shape y.', allow_override=True)
-flags.DEFINE_integer('cz', 2, 'computation shape z.', allow_override=True)
-flags.DEFINE_float('lx', 8., 'x length.', allow_override=True)
-flags.DEFINE_float('ly', 8., 'y length.', allow_override=True)
-flags.DEFINE_float('lz', 8., 'z length.', allow_override=True)
-flags.DEFINE_integer(
-    'nx', 256, 'x grid size for one core.', allow_override=True)
-flags.DEFINE_integer(
-    'ny', 256, 'y grid size for one core.', allow_override=True)
-flags.DEFINE_integer(
-    'nz', 256, 'z grid size for one core.', allow_override=True)
-flags.DEFINE_integer('halo_width', 2, 'The halo width.', allow_override=True)
-flags.DEFINE_float('dt', 0.00003, 'dt.', allow_override=True)
-flags.DEFINE_integer(
-    'kernel_size', 128, 'The size of the 2D kernel.', allow_override=True)
-flags.DEFINE_integer(
-    'input_chunk_size', 128, 'chunk size for input.', allow_override=True)
-flags.DEFINE_integer(
-    'num_output_splits',
-    1, 'number of splits for processing '
-    'output.',
-    allow_override=True)
-flags.DEFINE_integer('num_boundary_points', 0, 'Deprecated.',
-                     allow_override=True)
-_STRETCHED_GRID_X_PATH = flags.DEFINE_string(
-    'stretched_grid_x_path',
-    '',
-    'Path to stretched grid text file for x dimension.',
-    allow_override=True,
-)
-_STRETCHED_GRID_Y_PATH = flags.DEFINE_string(
-    'stretched_grid_y_path',
-    '',
-    'Path to stretched grid text file for y dimension.',
-    allow_override=True,
-)
-_STRETCHED_GRID_Z_PATH = flags.DEFINE_string(
-    'stretched_grid_z_path',
-    '',
-    'Path to stretched grid text file for z dimension.',
-    allow_override=True,
-)
-
-
-FLAGS = flags.FLAGS
-
-
-def flags_present_at_launch():
-  flags_in_grid_params = [
-      'cx', 'cy', 'cz', 'lx', 'ly', 'lz', 'nx', 'ny', 'nz', 'halo_width', 'dt',
-      'kernel_size', 'input_chunk_size', 'num_output_splits',
-      'num_boundary_points', 'stretched_grid_x_path', 'stretched_grid_y_path',
-      'stretched_grid_z_path',
-  ]
-  return [flag for flag in flags_in_grid_params if FLAGS[flag].present]
 
 
 def _get_core_n(n: int, halo_width: int) -> Optional[int]:
@@ -135,7 +77,7 @@ def _get_full_uniform_grid(n: Optional[int], l: float) -> tf.Tensor:
   return tf.linspace(0.0, l, n_effective)
 
 
-def _get_physical_full_grid_size(
+def get_physical_full_grid_size(
     params: grid_parametrization_pb2.GridParametrization
 ) -> grid_parametrization_pb2.CoordinateInt:
   # Some simulations have a physical grid size mandated externally, and add
@@ -207,6 +149,27 @@ def _get_stretched_grid_aware_grid_spacing_in_dim(
   return grid_spacing
 
 
+def domain_size_from_periodic_stretched_grid(
+    stretched_grid_file: file_pb2.File) -> float:
+  """Returns the domain size of a periodic stretched grid.
+
+  The input format for a periodic stretched grid differs from an unperiodic
+  stretched grid. If there are N total grid points across all cores, excluding
+  halos, then for an unperiodic grid, exactly N points are specified in the
+  stretched grid file. For a periodic grid, N+1 points are specified, where the
+  last point is the same as the first point. This extra point is used to
+  specify the periodic domain length.
+
+  Args:
+    stretched_grid_file: The path to the stretched grid file.
+
+  Returns:
+    The domain size of the periodic stretched grid.
+  """
+  global_coord = _load_array_from_file(stretched_grid_file)
+  return global_coord[-1] - global_coord[0]
+
+
 def _validate_global_coord(
     global_coord: tf.Tensor,
     core_n: int | None,
@@ -245,32 +208,30 @@ def _validate_global_coord(
     )
 
 
-def _load_array_from_file(path: str) -> tf.Tensor:
+def _load_array_from_file(array_file: file_pb2.File) -> tf.Tensor:
   """Loads a 1D array from a text file and returns it as a tensor.
 
   Each element of the array should be on its own line.
 
   Args:
-    path: The path to the file to load.
+    array_file: The file to load.
 
   Returns:
     A 1D tensor of the data from the file.
   """
-  contents: str = None
-  if contents is None:
-    with tf.io.gfile.GFile(path, 'r') as f:
-      contents = f.read()
+  contents = file_io.load_file(array_file)
   return tf.convert_to_tensor(
       np.fromstring(contents, sep='\n'), dtype=tf.float32
   )
 
 
 def _global_xyz_from_config(
-    stretched_grid_paths: grid_parametrization_pb2.CoordinateStr,
+    stretched_grid_files: grid_parametrization_pb2.CoordinateFile,
     full_grid_size: tuple[int, int, int],
     length: tuple[float, float, float],
     core_n: tuple[int | None, int | None, int | None],
     num_core: tuple[int, int, int],
+    periodic: tuple[bool, bool, bool],
 ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
   """Returns global coordinates, excluding halo points.
 
@@ -278,11 +239,12 @@ def _global_xyz_from_config(
   otherwise a uniform grid is used.
 
   Args:
-    stretched_grid_paths: Paths to stretched-grid text files for each dimension.
+    stretched_grid_files: Paths to stretched-grid text files for each dimension.
     full_grid_size: The full grid size excluding halos in each dimension.
     length: The length of the domain in each dimension.
     core_n: The number of non-halo points in each dimension.
     num_core: The number of cores in each dimension.
+    periodic: Whether each dimension is periodic.
 
   Returns:
     A tuple of global coordinates in each dimension.
@@ -290,17 +252,26 @@ def _global_xyz_from_config(
 
   def get_full_grid(dim: Literal[0, 1, 2]) -> tf.Tensor:
     stretched_grid_path = (
-        stretched_grid_paths.dim_0,
-        stretched_grid_paths.dim_1,
-        stretched_grid_paths.dim_2,
+        stretched_grid_files.dim_0,
+        stretched_grid_files.dim_1,
+        stretched_grid_files.dim_2,
     )[dim]
-    if stretched_grid_path:
+    if stretched_grid_files.HasField(f'dim_{dim}'):
       global_coord = _load_array_from_file(stretched_grid_path)
       logging.info(
           'Loaded stretched grid in dim %d from file `%s`.',
           dim,
           stretched_grid_path,
       )
+      # Periodic stretched grids have an extra point at the end of the grid
+      # which is equivalent to the first point. This extra point is used to
+      # specify the periodic domain length but is otherwise not part of the grid
+      # of interior nodes. Here, get rid of this extra point.
+      if periodic[dim]:
+        global_coord = global_coord[:-1]
+        logging.info(
+            'Removing final point from periodic stretched grid in dim %d.', dim
+        )
     else:
       global_coord = _get_full_uniform_grid(full_grid_size[dim], length[dim])
     _validate_global_coord(
@@ -311,7 +282,15 @@ def _global_xyz_from_config(
   return tuple(get_full_grid(dim) for dim in (0, 1, 2))
 
 
-def _extend_grid(grid: tf.Tensor, halo_width: int) -> tf.Tensor:
+# TODO(b/368405442): Adjust definition of a periodic uniform mesh to be
+# consistent with the length defined in the config, and be consistent with the
+# way the stretched mesh is defined.
+def _extend_grid(
+    grid: tf.Tensor,
+    halo_width: int,
+    periodic_and_stretched: bool,
+    domain_size: float,
+) -> tf.Tensor:
   """Extends a 1D grid with extrapolation into halos on the 2 ends.
 
   The grid spacing in the halo repeats its nearest neighbor in grid.
@@ -323,6 +302,10 @@ def _extend_grid(grid: tf.Tensor, halo_width: int) -> tf.Tensor:
     grid: A 1D grid.
     halo_width: The number of points to be extended to the grid on each end of
       the grid.
+    periodic_and_stretched: True if this dimension is both periodic and
+      stretched.
+    domain_size: The size of the domain in this dimension.
+
 
   Returns:
     The grid extended `halo_width` number of points with linear extrapolation on
@@ -341,83 +324,60 @@ def _extend_grid(grid: tf.Tensor, halo_width: int) -> tf.Tensor:
     ext_1 = grid[-1] + d1 * ext
     return tf.concat([ext_0, grid, ext_1], axis=0)
 
+  def stretched_periodic_mesh() -> tf.Tensor:
+    """Generates a mesh with periodic extension into the halos."""
+    assert domain_size > grid[-1] - grid[0], (
+        'Domain size of a stretched periodic dimension must be larger than the'
+        ' distance between the first and last grid point. In one dimension, the'
+        f' domain size is {domain_size} while the distance between the first'
+        f' grid point ({grid[0]}) and the last grid point ({grid[-1]}) is'
+        f' {grid[-1] - grid[0]}.'
+    )
+    ext_left = grid[-halo_width:] - domain_size
+    ext_right = grid[:halo_width] + domain_size
+    return tf.concat([ext_left, grid, ext_right], axis=0)
+
   # Note that we have to use the static shape here. Condition with results from
   # tf.shape() will provide a tf.Tensor, which can only be used in the context
-  # of tf.cond. Because tf.cond will compile both branches regardless of the
+  # of tf.cond. Because tf.cond will compile all branches regardless of the
   # condition, and `grid` is valid in only one of the branches at a time, we
   # have to take advantage of the static shape of the grid.
   if grid.shape[0] < 2:
     return single_point()
+  elif periodic_and_stretched:
+    return stretched_periodic_mesh()
   else:
     return regular_mesh()
-
-
-def params_from_flags() -> grid_parametrization_pb2.GridParametrization:
-  """Returns a GridParametrization protobuf from flags."""
-  params = grid_parametrization_pb2.GridParametrization()
-  params.computation_shape.dim_0 = FLAGS.cx
-  params.computation_shape.dim_1 = FLAGS.cy
-  params.computation_shape.dim_2 = FLAGS.cz
-  params.length.dim_0 = FLAGS.lx
-  params.length.dim_1 = FLAGS.ly
-  params.length.dim_2 = FLAGS.lz
-  params.grid_size.dim_0 = FLAGS.nx
-  params.grid_size.dim_1 = FLAGS.ny
-  params.grid_size.dim_2 = FLAGS.nz
-  params.halo_width = FLAGS.halo_width
-  params.dt = FLAGS.dt
-  params.kernel_size = FLAGS.kernel_size
-  params.input_chunk_size = FLAGS.input_chunk_size
-  params.num_output_splits = FLAGS.num_output_splits
-  if _STRETCHED_GRID_X_PATH.value:
-    params.stretched_grid_paths.dim_0 = _STRETCHED_GRID_X_PATH.value
-  if _STRETCHED_GRID_Y_PATH.value:
-    params.stretched_grid_paths.dim_1 = _STRETCHED_GRID_Y_PATH.value
-  if _STRETCHED_GRID_Z_PATH.value:
-    params.stretched_grid_paths.dim_2 = _STRETCHED_GRID_Z_PATH.value
-  if not params.HasField('physical_full_grid_size'):
-    params.physical_full_grid_size.CopyFrom(
-        _get_physical_full_grid_size(params)
-    )
-  return params
 
 
 def params_from_text_proto(
     text_proto: str) -> grid_parametrization_pb2.GridParametrization:
   """Returns a GridParametrization protobuf from a text-formatted proto."""
-  # Get default values from flags.
-  params = params_from_flags()
-  # Clear physical_full_grid_size, which is a computed field. We'll recompute it
-  # at the end.
-  params.ClearField('physical_full_grid_size')
-  params.MergeFrom(
-      text_format.Parse(text_proto,
-                        grid_parametrization_pb2.GridParametrization()))
+  params = text_format.Parse(text_proto,
+                             grid_parametrization_pb2.GridParametrization())
   # Re-compute physical_full_grid_size if necessary.
   if not params.HasField('physical_full_grid_size'):
-    params.physical_full_grid_size.CopyFrom(
-        _get_physical_full_grid_size(params)
-    )
+    params.physical_full_grid_size.CopyFrom(get_physical_full_grid_size(params))
   return params
 
 
 class GridParametrization(object):
-  """An object to hold configuration parameters (from flags).
+  """Holds configuration parameters.
 
   For computing dx, dy, dz below, we assume the 'box' boundaries coincide with
   the outer most grid points on each end -- the 'halo' grid. Assuming one halo
   point, this means there are total core * c + 2 points, or core * c + 1
   spacings.
-
   """
 
   def __init__(
       self,
-      params: Optional[grid_parametrization_pb2.GridParametrization] = None,
+      params: grid_parametrization_pb2.GridParametrization,
   ):
     """Creates an object from protobuf."""
-    if not params:
-      params = params_from_flags()
+    if not params.HasField('physical_full_grid_size'):
+      params.physical_full_grid_size.CopyFrom(
+          get_physical_full_grid_size(params))
     if params.halo_width <= 0:
       raise ValueError('Halo width must be greater than 0.')
     self.grid_params_proto = params
@@ -435,14 +395,19 @@ class GridParametrization(object):
     self.fz_physical = params.physical_full_grid_size.dim_2
     self.halo_width = params.halo_width
     self.dt = params.dt
+    # "Recover" float64 precision for dt by rounding the 32 bit value to 6
+    # significant digits and then converting back to float. The assumption is
+    # that dt is user specified with 6 or less significant digits.
+    self.dt64 = float(
+        np.format_float_positional(params.dt, 6, fractional=False))
     self.kernel_size = params.kernel_size
     self.input_chunk_size = params.input_chunk_size
     self.num_output_splits = params.num_output_splits
 
     self.use_stretched_grid = (
-        True if params.stretched_grid_paths.dim_0 else False,
-        True if params.stretched_grid_paths.dim_1 else False,
-        True if params.stretched_grid_paths.dim_2 else False,
+        params.stretched_grid_files.HasField('dim_0'),
+        params.stretched_grid_files.HasField('dim_1'),
+        params.stretched_grid_files.HasField('dim_2'),
     )
 
     # Whether the dimensions are periodic or not.
@@ -469,21 +434,70 @@ class GridParametrization(object):
     # Consists of the stretched-grid coordinates (if used), otherwise defaults
     # to uniform grid.
     self.global_xyz = _global_xyz_from_config(
-        params.stretched_grid_paths,
+        params.stretched_grid_files,
         (self.fx, self.fy, self.fz),
         (self.lx, self.ly, self.lz),
         (self.core_nx, self.core_ny, self.core_nz),
         (self.cx, self.cy, self.cz),
+        self.periodic_dims,
     )
+    # Overwrite domain sizes for periodic stretched grid. This step must be done
+    # before `lx`, `ly`, and `lz` are used in the rest of the constructor.
+    if self.use_stretched_grid[0] and self.periodic_dims[0]:
+      if self.lx != 0:
+        raise ValueError(
+            'lx in the grid_parametrization proto must be 0 to use periodic'
+            ' stretched grid in dim 0.'
+        )
+      self.lx = domain_size_from_periodic_stretched_grid(
+          params.stretched_grid_files.dim_0
+      )
+      logging.info(
+          'Overwriting domain size of periodic stretched grid in dim 0 to %f.',
+          self.lx,
+      )
+    if self.use_stretched_grid[1] and self.periodic_dims[1]:
+      if self.ly != 0:
+        raise ValueError(
+            'ly in the grid_parametrization proto must be 0 to use periodic'
+            ' stretched grid in dim 1.'
+        )
+      self.ly = domain_size_from_periodic_stretched_grid(
+          params.stretched_grid_files.dim_1
+      )
+      logging.info(
+          'Overwriting domain size of periodic stretched grid in dim 1 to %f.',
+          self.ly,
+      )
+    if self.use_stretched_grid[2] and self.periodic_dims[2]:
+      if self.lz != 0:
+        raise ValueError(
+            'lz in the grid_parametrization proto must be 0 to use periodic'
+            ' stretched grid in dim 2.'
+        )
+      self.lz = domain_size_from_periodic_stretched_grid(
+          params.stretched_grid_files.dim_2
+      )
+      logging.info(
+          'Overwriting domain size of periodic stretched grid in dim 2 to %f.',
+          self.lz,
+      )
 
-    self.global_xyz_with_halos = [
-        _extend_grid(x, self.halo_width) for x in self.global_xyz
-    ]
-
-  @classmethod
-  def create_from_flags(cls):
-    """Creates an object from flags."""
-    return cls(params_from_flags())
+    global_xyz_with_halos = []
+    for dim in (0, 1, 2):
+      coord = self.global_xyz[dim]
+      domain_size = (self.lx, self.ly, self.lz)[dim]
+      periodic_and_stretched = (
+          self.periodic_dims[dim] and self.use_stretched_grid[dim]
+      )
+      global_xyz_with_halos.append(
+          _extend_grid(
+              coord, self.halo_width, periodic_and_stretched, domain_size
+          )
+      )
+    self.global_xyz_with_halos: tuple[tf.Tensor, tf.Tensor, tf.Tensor] = tuple(
+        global_xyz_with_halos
+    )
 
   @classmethod
   def create_from_grid_lengths_and_etc(
@@ -491,26 +505,22 @@ class GridParametrization(object):
       grid_lengths: Sequence[float],
       computation_shape: Sequence[int],
       subgrid_shape: Optional[Sequence[int]],
-      halo_width: int
+      halo_width: int,
+      kernel_size: int = 128,
   ):
     """Creates grid parametrization from specific arguments (grid lengths, etc).
-
-    The parametrization is initially created from flags, then the input
-    arguments overwrite the corresponding values. This was created for use in
-    applications where `GridParametrization` is only used to encapsulate the
-    input arguments. In those cases no other properties are used.
 
     Args:
       grid_lengths: The full grid lengths in the three dimensions.
       computation_shape: The number of TPU cores assigned to each of three axes.
       subgrid_shape: The subgrid shape in the three dimensions.
       halo_width: The halo width.
+      kernel_size: The kernel size.
 
     Returns:
       The `GridParametrization` encapsulating the input arguments.
     """
-    proto = params_from_flags()
-
+    proto = grid_parametrization_pb2.GridParametrization()
     proto.length.dim_0 = grid_lengths[0]
     proto.length.dim_1 = grid_lengths[1]
     proto.length.dim_2 = grid_lengths[2]
@@ -525,6 +535,7 @@ class GridParametrization(object):
       proto.grid_size.dim_2 = subgrid_shape[2]
 
     proto.halo_width = halo_width
+    proto.kernel_size = kernel_size
 
     return cls(proto)
 
@@ -668,48 +679,18 @@ class GridParametrization(object):
         which case the full grid can not be evenly distributed across all cores
         without halo.
     """
-    coord = common_ops.get_core_coordinate(replicas, replica_id)
-    return self.grid_local_with_coord(coord, dim, include_halo)
-
-  def grid_local_with_coord(
-      self,
-      coord: tuple[tf.Tensor | int, tf.Tensor | int, tf.Tensor | int],
-      dim: int,
-      include_halo: bool = True,
-  ) -> tf.Tensor:
-    """The local grid in `dim`.
-
-    Args:
-      coord: The coordinates of the current core in the partition.
-      dim: The dimension of the grid.
-      include_halo: An option of whether to include coordinates of halos in the
-        returned grid.
-
-    Returns:
-      The grid in dim `dim` local to `replica_id`.
-
-    Raises:
-      AssertionError: If the full grid includes additional boundary points, in
-        which case the full grid can not be evenly distributed across all cores
-        without halo.
-    """
-    n_local = (self.core_nx, self.core_ny, self.core_nz)[dim]
-    i_core = coord[dim]
+    coord = common_ops.get_core_coordinate(replicas, replica_id)[dim]
+    core_n = (self.core_nx, self.core_ny, self.core_nz)[dim]
+    n = (self.nx, self.ny, self.nz)[dim]
 
     if include_halo:
-      grid_full = self.global_xyz_with_halos[dim]
-      halo_multiplier = tf.constant(1, dtype=tf.int32)
+      return common_ops.get_local_slice_of_1d_array(
+          self.global_xyz_with_halos[dim], coord, core_n, n
+      )
     else:
-      grid_full = (self.x, self.y, self.z)[dim]
-      halo_multiplier = tf.constant(0, dtype=tf.int32)
-
-    indices = tf.cast(tf.linspace(
-        i_core * n_local,
-        (i_core + 1) * n_local + 2 * halo_multiplier * self.halo_width - 1,
-        n_local + 2 * halo_multiplier * self.halo_width,
-    ), dtype=tf.int32)
-
-    return tf.gather(grid_full, indices)
+      return common_ops.get_local_slice_of_1d_array(
+          self.global_xyz[dim], coord, core_n, core_n
+      )
 
   def x_local(
       self,

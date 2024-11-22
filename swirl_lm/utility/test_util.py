@@ -27,8 +27,6 @@ from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import grid_parametrization_pb2
 import tensorflow as tf
 
-from google.protobuf import text_format
-
 
 def get_split_inputs(
     u_full,
@@ -295,22 +293,21 @@ def create_swirl_lm_params(
     config: Either a SwirlLMParameters proto message or a string. If a string,
       then the string will be parsed as a text-formatted SwirlLMParameters
       proto.
-    grid_params: A GridParametrization proto message, a string, or None. If a
-      string, then the string will be parsed as a text-formatted
-      GridParametrization proto. If None, GridParametrization will be
-      initialized from flag values.
+    grid_params: A GridParametrization proto message, a string. If a string,
+      then the string will be parsed as a text-formatted GridParametrization
+      proto.
 
   Returns:
     A new SwirlLMParameters initialized from `config` and `grid_params`.
 
   """
   if grid_params is None:
-    grid_params = grid_parametrization.params_from_flags()
+    grid_params = grid_parametrization_pb2.GridParametrization()
   elif isinstance(grid_params, str):
     grid_params = grid_parametrization.params_from_text_proto(grid_params)
 
   if isinstance(config, str):
-    config = text_format.Parse(config, parameters_pb2.SwirlLMParameters())
+    config = parameters.parse_text_proto(config)
 
   assert not config.HasField('grid_params'), (
       'Use one of functions in parameters.py to create a SwirlLMParameters '
@@ -320,3 +317,9 @@ def create_swirl_lm_params(
   new_config.CopyFrom(config)
   new_config.grid_params.CopyFrom(grid_params)
   return parameters.SwirlLMParameters(new_config)
+
+
+def params_from_text_proto(
+    text_proto: str) -> grid_parametrization_pb2.GridParametrization:
+  """Returns a GridParametrization protobuf from a text-formatted proto."""
+  return grid_parametrization.params_from_text_proto(text_proto)

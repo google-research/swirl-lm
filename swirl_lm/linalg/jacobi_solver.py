@@ -491,6 +491,39 @@ class ThreeWeightForPressure(base_poisson_solver.PoissonSolver):
         w0, w1, w2, rhs, p0, halo_update
     )
 
+  @override
+  def residual(
+      self,
+      p: tf.Tensor,
+      rhs: tf.Tensor,
+      additional_states: FlowFieldMap | None = None,
+  ) -> tf.Tensor:
+    """Computes the residual (LHS - RHS) of the Poisson equation.
+
+    Given approximate solution `p` to the Poisson equation, compute the
+    residual.  The approximate solution `p` might be obtained, for example, from
+    a finite number of Jacobi iterations that are not necessarily fully
+    converged.
+
+    Args:
+      p: The approximate solution to the Poisson equation.
+      rhs: The right hand side of the Poisson equation.
+      additional_states: Additional fields needed in the computation.
+
+    Returns:
+      The residual (LHS - RHS) of the Poisson equation.
+    """
+    assert additional_states is not None, '`additional_states` must be given.'
+    w0, w1, w2, rhs = self._generate_weights_and_modified_rhs(
+        rhs,
+        additional_states,
+        self._params.use_3d_tf_tensor,
+        self._params.use_stretched_grid,
+        (self._params.nx, self._params.ny, self._params.nz),
+        self._params.solver_mode,
+    )
+    return self._three_weight_jacobi_solver.residual(p, w0, w1, w2, rhs)
+
 
 def jacobi_solver_factory(
     params: parameters_lib.SwirlLMParameters,

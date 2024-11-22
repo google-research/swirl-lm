@@ -28,6 +28,8 @@ from swirl_lm.base import target_flag  # pylint: disable=unused-import
 from swirl_lm.boundary_condition import nonreflecting_boundary
 from swirl_lm.core import simulation
 from swirl_lm.linalg import poisson_solver
+from swirl_lm.physics.lpt import lpt
+from swirl_lm.physics.lpt import lpt_manager
 from swirl_lm.physics.radiation import rrtmgp_common
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import debug_output
@@ -94,6 +96,7 @@ FLAGS = flags.FLAGS
 CKPT_DIR_FORMAT = '{filename_prefix}-ckpts/'
 COMPLETION_FILE = 'DONE'
 _MAX_UVW_CFL = 'max_uvw_cfl'
+SIMULATION_TIME = 'simulation_time'
 
 Array: TypeAlias = Any
 PerReplica: TypeAlias = tf.types.experimental.distributed.PerReplica
@@ -191,6 +194,9 @@ def _get_state_keys(params: parameters_lib.SwirlLMParameters):
   # Add additional keys required by the radiative transfer library.
   additional_keys += rrtmgp_common.required_keys(params.radiative_transfer)
 
+  # Add additional keys required by the lagrangian particle tracking library.
+  additional_keys += lpt.required_keys(params.lpt)
+
   # Check to make sure we don't have keys duplicating / overwriting each other.
   if len(set(essential_keys)) + len(set(additional_keys)) + len(
       set(helper_var_keys)
@@ -249,6 +255,11 @@ def _init_fn(
       states[_MAX_UVW_CFL] = tf.zeros(
           (params.num_steps, 4), dtype=types.TF_DTYPE
       )
+
+    states[SIMULATION_TIME] = tf.convert_to_tensor(0, dtype=tf.float64)
+
+    if params.lpt is not None:
+      states.update(lpt.init_fn(params))
 
     # Apply the user defined `init_fn` in the end to allow it to override
     # default initializations.
@@ -348,6 +359,20 @@ def _update_additional_states(
         )
     )
 
+  # Update lagrangian particle additional states.
+  with tf.name_scope('lpt_additional_states_update'):
+    lpt_field = lpt_manager.lpt_factory(params)
+    if lpt_field is not None:
+      updated_additional_states.update(
+          lpt_field.step(
+              replica_id=common_kwargs['replica_id'],
+              replicas=common_kwargs['replicas'],
+              states=essential_states,
+              additional_states=additional_states,
+              step_id=step_id,
+          ),
+      )
+
   if params.additional_states_update_fn is not None:
     with tf.name_scope('additional_states_update'):
       updated_additional_states = params.additional_states_update_fn(
@@ -362,21 +387,24 @@ def _update_additional_states(
 
 def _state_has_nan_inf(state: dict[str, PerReplica], replicas: Array) -> bool:
   """Checks whether any field in the `state` contains `nan` or `inf`."""
-  has_nan_inf = False
+  local_has_nan_inf = False
   for _, v in state.items():
-    # We want to make sure every core is seeing the same problem so the
-    # termination of all cores is synchronized, thus a global reduce operation
-    # is needed.
-    if common_ops.global_reduce(
-        tf.math.logical_or(tf.math.is_nan(v), tf.math.is_inf(v)),
-        tf.reduce_any,
-        replicas.reshape([1, -1]),
-    ):
-      has_nan_inf = True
-    # For some reason, the graph tracing in this case doesn't allow early break
-    # of the loop. For now we will just check through all fields without early
-    # break. This should still be very efficient.
-  return has_nan_inf
+    if (v.dtype.is_floating and tf.reduce_any(
+        tf.math.logical_or(tf.math.is_nan(v), tf.math.is_inf(v)))):
+      local_has_nan_inf = True
+      # Graph compilation doesn't allow early break.
+
+  # We want to make sure every core is seeing the same problem so the
+  # termination of all cores is synchronized, thus a global reduce operation
+  # is needed.
+  if common_ops.global_reduce(
+      tf.convert_to_tensor(local_has_nan_inf),
+      tf.reduce_any,
+      replicas.reshape([1, -1]),
+  ):
+    return True
+  else:
+    return False
 
 
 def _compute_max_uvw_and_cfl(
@@ -437,7 +465,8 @@ def _one_cycle(
     num_steps: Array,
     params: Union[parameters_lib.SwirlLMParameters, Any],
     model: Any,
-) -> tuple[dict[str, PerReplica], dict[str, PerReplica]]:
+) -> tuple[dict[str, PerReplica], PerReplica, dict[str, PerReplica],
+           PerReplica]:
   """Runs one cycle of the Navier-Stokes solver.
 
   Args:
@@ -452,8 +481,12 @@ def _one_cycle(
       defined.
 
   Returns:
-    A 2-tuple of the final state at the end of the cycle and the completed
-    number of steps, both will be in the dict[str, PerReplica] format.
+    A (final_state, completed_steps, previous_state, has_non_finite) where
+    final_state is the state at the end of the cycle, completed_steps is the
+    number of steps completed in this cycle, previous_state is the state one
+    step before the final_state (which is useful in blow-ups), and
+    has_non_finite is a boolean indicating whether the final_state contains
+    non-finite values.
   """
   logging.info(
       'Tracing and compiling of _one_cycle starts. This can take up to 30 min.'
@@ -500,6 +533,8 @@ def _one_cycle(
       state[_MAX_UVW_CFL] = tf.zeros_like(state[_MAX_UVW_CFL])
 
     cycle_step_id = 0
+    prev_state = state
+    has_non_finite = False
     for _ in tf.range(num_steps):
       step_id = init_step_id + cycle_step_id
       # Split the state into essential states and additional states. Note that
@@ -596,22 +631,29 @@ def _one_cycle(
             ),
         )
 
-      if SAVE_LAST_VALID_STEP.value:
-        if _state_has_nan_inf(updated_state, logical_replicas):
-          # Detected nan/inf, skip the update of state by early-exiting from the
-          # for loop.
-          break
+      # Simulation time will accumulate precision errors with this approach.
+      # For now, the converter deals with this by rounding off to a fewer
+      # number of significant digits.
+      updated_state[SIMULATION_TIME] = state[SIMULATION_TIME] + params.dt64
+
+      prev_state = state
       # Some state keys such as `replica_id` may not lie in either of the three
       # categories. Just pass them through.
       state = _stateless_update_if_present(state, updated_state)
       cycle_step_id += 1
+      if SAVE_LAST_VALID_STEP.value:
+        if _state_has_nan_inf(state, logical_replicas):
+          # Detected nan/inf, skip the update of state by early-exiting from the
+          # for loop.
+          has_non_finite = True
+          break
 
     if not params.use_3d_tf_tensor:
       # Unsplit the keys that were previously split.
       for key in keys_to_split:
         state[key] = tf.stack(state[key])
 
-    return state, cycle_step_id
+    return state, cycle_step_id, prev_state, has_non_finite
 
   return strategy.run(step_fn, args=(init_state,))
 
@@ -740,10 +782,10 @@ def solver(
     num_steps, 2 * num_steps, ..., num_cycles * num_steps].
 
     If the simulation reaches a state where any variable has a non-finite value
-    (NaN or Inf), then the simulation will stop early and save the state one
-    step before the state that contains non-finite values. As a result, there
-    will be fewer steps saved than `num_cycles + ` and the final saved step
-    number will not necessarily be a multiple of num_steps.
+    (NaN or Inf), then the simulation will stop early and save both the
+    non-finite state and the one before it. As a result, there will most likely
+    be fewer steps saved than `num_cycles + 1` and the final saved step number
+    will not necessarily be a multiple of num_steps.
 
     In both of the these cases (`num_cycles` reached or non-finite value seen),
     the solver will write an empty `DONE` file to the output directory to
@@ -866,9 +908,19 @@ def solver_loop(
       state: dict[str, PerReplica],
       step_id: Array,
       data_dump_filter: Optional[Sequence[str]] = None,
+      allow_non_finite_values: bool = False,
+      use_zeros_for_debug_values: bool = False,
   ):
-    debug_vars = debug_output.get_vars(strategy, state.keys())
+    if use_zeros_for_debug_values:
+      debug_vars = debug_output.zeros_like_vars(strategy, state.keys())
+    else:
+      debug_vars = debug_output.get_vars(strategy, state.keys())
+
     write_state = dict(state) | debug_vars
+    if allow_non_finite_values:
+      fields_allowing_non_finite_values = list(write_state.keys())
+    else:
+      fields_allowing_non_finite_values = list(debug_vars.keys())
     write_status = driver_tpu.distributed_write_state(
         strategy,
         _local_state_dict(strategy, write_state),
@@ -877,7 +929,7 @@ def solver_loop(
         filename_prefix=filename_prefix,
         step_id=step_id,
         data_dump_filter=data_dump_filter,
-        fields_allowing_non_finite_values=list(debug_vars.keys()),
+        fields_allowing_non_finite_values=fields_allowing_non_finite_values,
     )
 
     # This will block until all replicas are done writing.
@@ -957,7 +1009,7 @@ def solver_loop(
     write_status = write_state_and_sync(state=state, step_id=step_id_value())
     logging.info(
         '`restoring-checkpoint-if-necessary` stage '
-        'done with writing initial steps. Write status are: %s',
+        'done with writing initial steps. Write status: %s',
         write_status,
     )
     # Only after the logging, which forces the `write_status` to be
@@ -1008,7 +1060,7 @@ def solver_loop(
     cycle = (step_id_value() - params.start_step) // params.num_steps
     logging.info('Step %d (cycle %d) is starting.', step_id_value(), cycle)
     t0 = time.time()
-    state, num_steps_completed = _one_cycle(
+    state, num_steps_completed, prev_state, has_non_finite = _one_cycle(
         strategy=strategy,
         init_state=state,
         init_step_id=step_id_value(),
@@ -1016,12 +1068,14 @@ def solver_loop(
         params=params,
         model=model,
     )
-
-    # Completed number steps are guaranteed to be identical for all replicas, so
-    # we are just taking replica 0 value.
-    completed_steps = _local_state_value(
+    # num_steps_completed and has_non_finite are guaranteed to be identical for
+    # all replicas, so we are just taking replica 0 value.
+    num_steps_completed = _local_state_value(
         strategy, num_steps_completed)[0].numpy()
-    step_id.assign_add(completed_steps)
+    has_non_finite = _local_state_value(
+        strategy, has_non_finite)[0].numpy()
+
+    step_id.assign_add(num_steps_completed)
 
     if SAVE_MAX_UVW_AND_CFL.value:
       # CFL number is guaranteed to be identical for all replicas, so take
@@ -1031,7 +1085,7 @@ def solver_loop(
           * _local_state_value(strategy, state[_MAX_UVW_CFL])[0].numpy()[:, 3]
       )
       max_cfl_number_from_cycle = tf.reduce_max(cfl_values)
-      cfl_number_from_last_step = cfl_values[completed_steps - 1]
+      cfl_number_from_last_step = cfl_values[num_steps_completed - 1]
       logging.info(
           'max CFL number from last cycle: %.3f.  CFL number from last step:'
           ' %.3f',
@@ -1045,17 +1099,22 @@ def solver_loop(
       debug_output.log_variable_use()
 
     # Check if we did not complete a full cycle.
-    if completed_steps < params.num_steps:
+    if has_non_finite:
       logging.info(
-          'Non-convergence detected. Early exit from cycle %d at step %d.'
-          'Starting dumping the last valid state at step %d',
-          cycle,
-          step_id_value() + 1,
-          step_id_value(),
-      )
-      write_status = write_state_and_sync(state, step_id=step_id_value())
+          'Non-convergence detected. Early exit from cycle %d at step %d.',
+          cycle, step_id_value())
+      if num_steps_completed > 1:
+        write_status = write_state_and_sync(prev_state,
+                                            step_id=step_id_value() - 1,
+                                            use_zeros_for_debug_values=True)
+        logging.info(
+            'Dumping last valid state at step %d done. Write status: %s',
+            step_id_value() - 1, write_status)
+      write_status = write_state_and_sync(state, step_id=step_id_value(),
+                                          allow_non_finite_values=True)
       logging.info(
-          'Dumping full state done. Write status are: %s', write_status
+          'Dumping final non-finite state done. Write status: %s',
+          write_status
       )
       # Save checkpoint to update the completed step.
       # Note: Only after the logging, which forces the `write_status` to be
@@ -1068,9 +1127,12 @@ def solver_loop(
       _write_completion_file(output_dir)
       raise _NonRecoverableError(
           f'Non-convergence detected. Early exit from cycle {cycle} at step '
-          f'{step_id_value() + 1}. The last valid state at step '
-          f'{step_id_value()} has been saved in the specified output path.'
+          f'{step_id_value()}. The last valid state at step '
+          f'{step_id_value() - 1} has been saved in the specified output path.'
       )
+
+    # Consider explicitly deleting prev_state here to free its memory because
+    # after its written to disk it is no longer needed.
 
     replica_id_values = []
     replica_id_values.extend(_local_state_value(strategy, state['replica_id']))
@@ -1079,17 +1141,13 @@ def solver_loop(
         str([v.numpy() for v in replica_id_values]),
     )
     t1 = time.time()
-    # "Recover" float64 precision for dt by rounding the 32 bit value to 6
-    # significant digits and then converting back to float. The assumption is
-    # that dt is user specified with 6 or less significant digits.
-    dt64 = float(np.format_float_positional(params.dt, 6, fractional=False))
     logging.info(
         'Completed total %d steps (%d cycles, %s simulation time) so far. '
         'Took %s for the last cycle (%d steps).',
         step_id_value(),
         cycle + 1,
         text_util.seconds_to_string(
-            int(step_id_value()) * dt64, precision=dt64
+            int(step_id_value()) * params.dt64, precision=params.dt64
         ),
         text_util.seconds_to_string(t1 - t0),
         params.num_steps,
@@ -1101,7 +1159,7 @@ def solver_loop(
     if (step_id_value() - params.start_step) % checkpoint_interval == 0:
       write_status = write_state_and_sync(state=state, step_id=step_id_value())
       logging.info(
-          '`Post cycle writing full state done. Write status are: %s',
+          '`Post cycle writing full state done. Write status: %s',
           write_status,
       )
       # Only after the logging, which forces the `write_status` to be
@@ -1118,7 +1176,7 @@ def solver_loop(
           data_dump_filter=data_dump_filter,
       )
       logging.info(
-          '`Post cycle writing filtered state done. Write status are: %s',
+          '`Post cycle writing filtered state done. Write status: %s',
           write_status,
       )
     t2 = time.time()

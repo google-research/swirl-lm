@@ -33,6 +33,8 @@ from swirl_lm.numerics import derivatives
 from swirl_lm.numerics import numerics_pb2
 from swirl_lm.physics.thermodynamics import thermodynamics_pb2
 from swirl_lm.physics.turbulent_combustion import turbulent_combustion
+from swirl_lm.utility import file_io
+from swirl_lm.utility import file_pb2
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import grid_parametrization
 from swirl_lm.utility import grid_parametrization_pb2
@@ -229,6 +231,9 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
         'thermodynamics') else None
     self.radiative_transfer = config.radiative_transfer if config.HasField(
         'radiative_transfer') else None
+    self.microphysics = config.microphysics if config.HasField(
+        'microphysics') else None
+    self.lpt = config.lpt if config.HasField('lpt') else None
 
     if (self.thermodynamics is not None and
         self.thermodynamics.HasField('solver_mode')):
@@ -293,37 +298,6 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     self.scalars = config.scalars
 
     self.scalar_lib = {scalar.name: scalar for scalar in self.scalars}
-
-    # Check if the microphysics model (if used) is the same for all scalars.
-    microphysics = None
-    for scalar in self.scalars:
-      scalar_config = scalar.WhichOneof('scalar_config')
-      microphysics_current = None
-      if scalar_config == 'total_energy':
-        if scalar.total_energy.HasField('microphysics'):
-          microphysics_current = scalar.total_energy.WhichOneof('microphysics')
-      elif scalar_config == 'humidity':
-        if scalar.humidity.HasField('microphysics'):
-          microphysics_current = scalar.humidity.WhichOneof('microphysics')
-      elif scalar_config == 'potential_temperature':
-        if scalar.potential_temperature.HasField('microphysics'):
-          microphysics_current = scalar.potential_temperature.WhichOneof(
-              'microphysics'
-          )
-      else:
-        continue
-
-      # No microphsyics model is defined for the present scalar, so skip.
-      if microphysics_current is None:
-        continue
-
-      if microphysics is None:
-        microphysics = microphysics_current
-      else:
-        assert microphysics == microphysics_current, (
-            f'{scalar_config} is using a different microphysics model'
-            f' ({microphysics_current}) from others ({microphysics}).'
-        )
 
     self.bc = {'u': None, 'v': None, 'w': None, 'p': None}
     self.bc.update({scalar.name: None for scalar in self.scalars})
@@ -607,22 +581,13 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
   def config_from_text_proto(
       cls,
       text_proto: str,
-      grid_params_from_flags: bool = False,
   ) -> 'SwirlLMParameters':
     """Parses the config proto in text format into SwirlLMParameters."""
-    config = text_format.Parse(text_proto, parameters_pb2.SwirlLMParameters())
-    if not config.HasField('grid_params') and grid_params_from_flags:
-      logging.warning(
-          'Flags to set grid parameters are deprecated. Use the grid_params '
-          'field in SwirlLMParameters instead.')
-      config.grid_params.CopyFrom(grid_parametrization.params_from_flags())
-    else:
-      grid_flags = grid_parametrization.flags_present_at_launch()
-      if grid_flags:
-        raise ValueError(
-            f'Setting grid flags {grid_flags} is not allowed when grid_params '
-            'is specified as part of the config. Remove the grid flags from '
-            'the command line - these flags are deprecated.')
+    config = parse_text_proto(text_proto)
+    if not config.HasField('grid_params'):
+      raise ValueError(
+          'The `grid_params` field is now required and flags to set these '
+          'parameters are no longer available (cl/681027966).')
 
     # Sanity check for the solver procedure.
     if config.solver_procedure not in (SolverProcedure.SEQUENTIAL,
@@ -644,16 +609,10 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
   def config_from_proto(
       cls,
       config_filepath: str,
-      grid_params_from_flags: bool = False,
   ) -> 'SwirlLMParameters':
     """Reads the config text proto file."""
-    text_proto: str = None
-    if text_proto is None:
-      with tf.io.gfile.GFile(config_filepath, 'r') as f:
-        text_proto = f.read()
-      logging.info('Loaded config file `%s` from file.', config_filepath)
-
-    return cls.config_from_text_proto(text_proto, grid_params_from_flags)
+    text_proto = file_io.load_file(file_pb2.File(path=config_filepath))
+    return cls.config_from_text_proto(text_proto)
 
   @property
   def num_cycles(self) -> int:
@@ -976,12 +935,15 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
 
   def save_to_file(self, output_prefix: str) -> None:
     """Saves configuration protos as text to files."""
-    output_dir, _ = os.path.split(output_prefix)
+    output_dir = f'{output_prefix}_config_files'
     tf.io.gfile.makedirs(output_dir)
-    with tf.io.gfile.GFile(f'{output_prefix}_cmdline_args.json', 'w') as f:
+    with tf.io.gfile.GFile(get_cmdline_json_path(output_prefix), 'w') as f:
       f.write(json.dumps(sys.argv))
     with tf.io.gfile.GFile(get_swirl_lm_pbtxt_path(output_prefix), 'w') as f:
       f.write(text_format.MessageToString(self.swirl_lm_parameters_proto))
+    file_io.copy_files(
+        file_io.find_referred_files(self.swirl_lm_parameters_proto),
+        output_dir)
 
 
 def get_swirl_lm_pbtxt_path(output_prefix: str) -> str:
@@ -989,12 +951,21 @@ def get_swirl_lm_pbtxt_path(output_prefix: str) -> str:
   return f'{output_prefix}_swirl_lm.pbtxt'
 
 
+def get_cmdline_json_path(output_prefix: str) -> str:
+  """Returns the path where SwirlLMParams proto is saved."""
+  return f'{output_prefix}_cmdline_args.json'
+
+
 def load_params_from_output_dir(output_prefix: str) -> SwirlLMParameters:
   """Loads configuration proto from location determined by `output_prefix`."""
-  with tf.io.gfile.GFile(get_swirl_lm_pbtxt_path(output_prefix), 'r') as f:
+  swirl_lm_pbtxt_path = get_swirl_lm_pbtxt_path(output_prefix)
+  with tf.io.gfile.GFile(swirl_lm_pbtxt_path, 'r') as f:
     text_proto = f.read()
-  config = text_format.Parse(text_proto, parameters_pb2.SwirlLMParameters())
-  return SwirlLMParameters(config)
+  try:
+    return SwirlLMParameters(parse_text_proto(text_proto))
+  except Exception:
+    logging.error('Exception while parsing "%s".', swirl_lm_pbtxt_path)
+    raise
 
 
 def params_from_config_file_flag() -> SwirlLMParameters:
@@ -1002,8 +973,7 @@ def params_from_config_file_flag() -> SwirlLMParameters:
   if not FLAGS.config_filepath:
     raise ValueError('Flag --config_filepath is not set.')
 
-  return SwirlLMParameters.config_from_proto(FLAGS.config_filepath,
-                                             grid_params_from_flags=True)
+  return SwirlLMParameters.config_from_proto(FLAGS.config_filepath)
 
 
 def _validate_config_for_stretched_grid(
@@ -1041,3 +1011,7 @@ def _validate_config_for_stretched_grid(
         f'Diffusion scheme {config.diffusion_scheme} is not supported with'
         ' stretched grid.'
     )
+
+
+def parse_text_proto(text_proto: str) -> parameters_pb2.SwirlLMParameters:
+  return text_format.Parse(text_proto, parameters_pb2.SwirlLMParameters())

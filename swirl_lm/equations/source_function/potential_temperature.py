@@ -20,7 +20,7 @@ from swirl_lm.equations import common
 from swirl_lm.equations import utils as eq_utils
 from swirl_lm.equations.source_function import scalar_generic
 from swirl_lm.physics.atmosphere import cloud
-from swirl_lm.physics.atmosphere import microphysics_utils
+from swirl_lm.physics.atmosphere import microphysics_generic
 from swirl_lm.physics.radiation import rrtmgp_common
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import water
@@ -40,6 +40,7 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
       params: parameters_lib.SwirlLMParameters,
       scalar_name: str,
       thermodynamics: thermodynamics_manager.ThermodynamicsManager,
+      microphysics: microphysics_generic.MicrophysicsAdapter | None = None,
   ):
     """Retrieves context information for the potential temperature source."""
     super().__init__(kernel_op, params, scalar_name, thermodynamics)
@@ -63,42 +64,30 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
         self._scalar_params.HasField('potential_temperature')
         and self._scalar_params.potential_temperature.include_subsidence
     )
-    if self._include_radiation:
+    if self._include_subsidence:
       assert self._g_dim is not None, (
           'The direction for gravity needs to be defined to include cloud'
           ' subsidence in the potential temperature equation.'
       )
 
-    self._include_condensation = (
-        self._scalar_params.HasField('potential_temperature')
-        and self._scalar_params.potential_temperature.include_condensation
-    )
-
     self._include_precipitation = (
-        self._scalar_params.HasField('potential_temperature')
-        and self._scalar_params.potential_temperature.include_precipitation
-    )
+        params.microphysics is not None and
+        params.microphysics.include_precipitation)
 
-    self._microphysics = None
+    self._include_condensation = (
+        params.microphysics is not None and
+        params.microphysics.include_condensation)
+
+    self._microphysics = microphysics
     self._cloud = None
     if isinstance(self._thermodynamics.model, water.Water):
       self._cloud = cloud.Cloud(self._thermodynamics.model)
 
-      if self._include_precipitation or self._include_condensation:
-        assert self._scalar_params.potential_temperature.HasField(
-            'microphysics'
-        ), (
-            'A microphysics model is required to consider evaporation or '
-            'condensation in the potential temperature equation.'
-        )
-        microphysics_model_params = (
-            microphysics_utils.get_model_params_from_proto(
-                self._scalar_params.potential_temperature
-            )
-        )
-        self._microphysics = microphysics_utils.select_microphysics(
-            microphysics_model_params, self._params, self._thermodynamics
-        )
+    if self._include_precipitation or self._include_condensation:
+      assert self._microphysics is not None, (
+          'A microphysics model is required to consider evaporation or '
+          'condensation in the potential temperature equation.'
+      )
 
   def _get_thermodynamic_variables(
       self,

@@ -30,11 +30,12 @@ the turbulent viscosity.
 
 import functools
 import itertools
-from typing import Optional, Sequence
+from typing import Optional, Sequence, TypeAlias
 
 from absl import logging
 import numpy as np
 from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.base import parameters_pb2
 from swirl_lm.numerics import calculus
 from swirl_lm.numerics import filters
 from swirl_lm.physics import constants
@@ -44,8 +45,10 @@ from swirl_lm.utility import types
 import tensorflow as tf
 
 
-FlowFieldVal = types.FlowFieldVal
-FlowFieldMap = types.FlowFieldMap
+FlowFieldVal: TypeAlias = types.FlowFieldVal
+FlowFieldMap: TypeAlias = types.FlowFieldMap
+DeltaFormula: TypeAlias = (
+    parameters_pb2.SubGridScaleModel.SmagorinskyModel.DeltaFormula)
 
 # The originally proposed value for the Smagorinsky constant (dimensionless)
 # with turbulence being isotropic and homogeneous.
@@ -318,7 +321,8 @@ class SgsModel(object):
       ValueError: If the requested SGS model type is not implemented.
     """
     if not self._params or not self._params.HasField('sgs_model_type'):
-      return self.smagorinsky(field_vars, additional_states)
+      return self.smagorinsky(field_vars, additional_states,
+                              DeltaFormula.DIAGONAL)
 
     if self._params.WhichOneof('sgs_model_type') == 'smagorinsky':
       use_pr_t = self._params.smagorinsky.use_pr_t
@@ -336,11 +340,10 @@ class SgsModel(object):
             * tf.ones_like(var),
             field_vars[0],
         )
-      diff_t = (
-          self.smagorinsky(velocity, additional_states, c_s)
-          if use_pr_t
-          else self.smagorinsky(field_vars, additional_states, c_s)
-      )
+      smagorinsky_vars = velocity if use_pr_t else field_vars
+      diff_t = self.smagorinsky(
+          smagorinsky_vars, additional_states,
+          self._params.smagorinsky.delta_formula, c_s)
     elif self._params.WhichOneof('sgs_model_type') == 'dynamic_smagorinsky':
       if not velocity:
         raise ValueError(
@@ -424,7 +427,8 @@ class SgsModel(object):
       ValueError: If the requested SGS model type is not implemented.
     """
     if not self._params or not self._params.HasField('sgs_model_type'):
-      return self.smagorinsky(field_vars, additional_states)
+      return self.smagorinsky(field_vars, additional_states,
+                              DeltaFormula.DIAGONAL)
 
     if self._params.WhichOneof('sgs_model_type') == 'smagorinsky':
       if 'c_s' in additional_states:
@@ -434,7 +438,8 @@ class SgsModel(object):
             lambda var: self._params.smagorinsky.c_s * tf.ones_like(var),
             field_vars[0],
         )
-      nu_t = self.smagorinsky(field_vars, additional_states, c_s)
+      nu_t = self.smagorinsky(field_vars, additional_states,
+                              self._params.smagorinsky.delta_formula, c_s)
     elif self._params.WhichOneof('sgs_model_type') == 'dynamic_smagorinsky':
       if replicas is None:
         raise ValueError(
@@ -480,6 +485,7 @@ class SgsModel(object):
       self,
       field_vars: Sequence[FlowFieldVal],
       additional_states: FlowFieldMap,
+      delta_formula: DeltaFormula,
       c_s_in: Optional[FlowFieldVal] = None,
   ) -> FlowFieldVal:
     """Computes the turbulent viscosity from the Smagorinsky model [1].
@@ -502,6 +508,7 @@ class SgsModel(object):
         the magnitude of the gradient vector.
       additional_states: A map of variables that might be needed by the SGS
         model requested.
+      delta_formula: Which formulation to use for delta.
       c_s_in: The Smagorinsky constant.
 
     Returns:
@@ -536,9 +543,18 @@ class SgsModel(object):
         for dim in (0, 1, 2)
     )
 
-    delta_square = common_ops.map_structure_3d(
-        lambda a, b, c: a**2 + b**2 + c**2, *dx_dy_dz
-    )
+    match delta_formula:
+      case DeltaFormula.DIAGONAL:
+        delta_square = common_ops.map_structure_3d(
+            lambda a, b, c: a**2 + b**2 + c**2, *dx_dy_dz
+        )
+      case DeltaFormula.GEOMETRIC_MEAN:
+        delta_square = common_ops.map_structure_3d(
+            lambda a, b, c: (a * b * c) ** (2 / 3), *dx_dy_dz
+        )
+      case _:
+        raise ValueError(
+            f'Unhandled DeltaFormua enum {DeltaFormula.Name(delta_formula)}')
 
     return tf.nest.map_structure(
         lambda c_s_i, delta_square_, s_l: c_s_i**2 * delta_square_ * s_l,

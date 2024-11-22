@@ -67,231 +67,64 @@ References:
    and liquid-water content. Q.J.R. Meteorol. Soc., 123: 1789-1795.
 """
 
-import dataclasses
 import enum
+import functools
 from typing import Callable, Optional, Union
 
 import numpy as np
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.physics import constants
 from swirl_lm.physics.atmosphere import microphysics_generic
+from swirl_lm.physics.atmosphere import microphysics_one_moment_constants as constants_1m
 from swirl_lm.physics.atmosphere import microphysics_pb2
+from swirl_lm.physics.atmosphere import particles
+from swirl_lm.physics.atmosphere import terminal_velocity_chen2022
 from swirl_lm.physics.thermodynamics import water
 from swirl_lm.utility import types
 import tensorflow as tf
 
-# The density of liquid water [kg/m^3].
-RHO_WATER = 1e3
-# The density of crystal ice [kg/m^3].
-RHO_ICE = 0.917e3
-# The density of typical air [kg/m^3].
-RHO_AIR = 1.0
-# The thermal conductivity of air [J/(m s K)].
-K_COND = 2.4e-2
-# The kinematic visocity of air [m^2/s].
-NU_AIR = 1.6e-5
-# The molecular diffusivity of water vapor [m^2/s].
-D_VAP = 2.26e-5
-# The optical asymmetry factor of cloud droplets.
-ASYMMETRY_CLOUD = 0.8
-# The number of cloud droplets per cubic meter.
-DROPLET_N = 1e8
+
+Rain = particles.Rain
+Snow = particles.Snow
+Ice = particles.Ice
+Autoconversion = microphysics_pb2.OneMoment.Autoconversion
+Accretion = microphysics_pb2.OneMoment.Accretion
+
+TERMINAL_VELOCITY_GAMMA_TYPE = (
+    microphysics_pb2.OneMoment.TERMINAL_VELOCITY_GAMMA_TYPE
+)
+TERMINAL_VELOCITY_POWER_LAW = (
+    microphysics_pb2.OneMoment.TERMINAL_VELOCITY_POWER_LAW
+)
 
 
 class Phase(enum.Enum):
   """Defines phases of water."""
+
   LIQUID = 'l'
   ICE = 'i'
   VAPOR = 'v'
 
 
-def _gamma(x: Union[float, tf.Tensor]) -> tf.Tensor:
-  """Computes the Gamma function of x."""
-  with tf.control_dependencies(
-      [
-          tf.assert_greater(
-              x, 0.0, message='The Gamma function takes positive inputs only.'
-          )
-      ]
-  ):
-    return tf.math.exp(tf.math.lgamma(x))
-
-
-def compute_sphere_mass(rho: float, r: float) -> float:
-  """Computes the mass of a sphere."""
-  return 4.0 / 3.0 * np.pi * rho * r**3
-
-
-@dataclasses.dataclass(init=False, frozen=True)
-class Ice:
-  """Constants for ice related quantities."""
-
-  # The density of an ice crystal [kg/m^3].
-  rho: float = RHO_ICE
-
-  # Typical ice crystal radius [m].
-  r_0: float = 1e-5
-
-  # Unit mass of an ice crystal [kg].
-  m_0: float = compute_sphere_mass(RHO_ICE, r_0)
-  # Exponent to the radius ratio in the mass equation.
-  m_e: float = 3.0
-  # The calibration coefficients in the mass equation.
-  chi_m: float = 1.0
-  del_m: float = 0.0
-
-
-@dataclasses.dataclass(init=False, frozen=True)
-class Rain:
-  """Constants for rain related quantities."""
-
-  # The density of a rain drop [kg/m^3].
-  rho: float = RHO_WATER
-
-  # The drag coefficient of a rain drop [1].
-  c_d: float = 0.55
-
-  # Typical rain drop radius [m].
-  r_0: float = 1e-3
-
-  # Unit mass of a rain drop [kg].
-  m_0: float = compute_sphere_mass(rho, r_0)
-  # Exponent to the radius ratio in the mass equation.
-  m_e: float = 3.0
-  # The calibration coefficients in the mass equation.
-  chi_m: float = 1.0
-  del_m: float = 0.0
-
-  # Unit cross section area of a rain drop [m^2].
-  a_0: float = np.pi * r_0**2
-  # Exponent to the radius ratio in the cross section area equation.
-  a_e: float = 2.0
-  # The calibration coefficients in the cross section area equation.
-  chi_a: float = 1.0
-  del_a: float = 0.0
-
-  # Exponent to the radius ratio in the terminal velocity equation.
-  v_e: float = 0.5
-  # The calibration coefficients in the terminal velocity equation.
-  chi_v: float = 1.0
-  del_v: float = 0.0
-
-  # The ventilation factor coefficients [1].
-  a_vent: float = 1.5
-  b_vent: float = 0.53
-
-
-@dataclasses.dataclass(init=False, frozen=True)
-class Snow:
-  """Constants for snow related quantities."""
-
-  # The density of a snow crystal [kg/m^3].
-  rho: float = RHO_ICE
-
-  # Typical snow crystal radius [m].
-  r_0: float = 1e-3
-
-  # Unit mass of a snow crystal [kg] [1].
-  m_0: float = 0.1 * r_0**2
-  # Exponent to the radius ratio in the mass equation [1].
-  m_e: float = 2.0
-  # The calibration coefficients in the mass equation.
-  chi_m: float = 1.0
-  del_m: float = 0.0
-
-  # Unit cross section area of a snow crystal [m^2] [1].
-  a_0: float = 0.3 * np.pi * r_0**2
-  # Exponent to the radius ratio in the cross section area equation.
-  a_e: float = 2.0
-  # The calibration coefficients in the cross section area equation.
-  chi_a: float = 1.0
-  del_a: float = 0.0
-
-  # Exponent to the radius ratio in the terminal velocity equation [1].
-  v_e: float = 0.25
-  # The calibration coefficients in the terminal velocity equation.
-  chi_v: float = 1.0
-  del_v: float = 0.0
-
-  # The snow size distribution parameter exponent [3].
-  nu: float = 0.63
-  # The snow size distribution parameter coefficient [m^-4] [3].
-  mu: float = 4.36e9 * RHO_AIR**nu
-
-  # The ventilation factor coefficients [7].
-  a_vent: float = 0.65
-  b_vent: float = 0.44
-
-
-@dataclasses.dataclass(init=False, frozen=True)
-class Autoconversion:
-  """Constant coefficients in autoconversion."""
-
-  # Timescale for cloud liquid to rain water autoconversion [s] [1].
-  tau_lr: float = 1e3
-  # Timescale for cloud ice to snow autoconversion [s].
-  tau_is: float = 1e2
-  # Threshold for cloud liquid to rain water autoconversion [1].
-  q_l_threshold: float = 5e-4
-  # Threshold for cloud ice to snow autoconversion.
-  q_i_threshold: float = 1e-6
-  # Threshold particle radius between ice and snow [m] [4].
-  r_is: float = 6.25e-5
-
-
-@dataclasses.dataclass(init=False, frozen=True)
-class Accretion:
-  """Collision efficiencies in accretion."""
-
-  # Collision efficiency between rain drops and cloud droplets [1].
-  e_lr: float = 0.8
-  # Collision efficiency between snow and cloud droplets [5].
-  e_ls: float = 0.1
-  # Collision efficiency between rain drops and cloud ice [5].
-  e_ir: float = 1.0
-  # Collision efficiency between snow and cloud ice [6].
-  e_is: float = 0.1
-  # Collision efficiency between rain drops and snow [6].
-  e_rs: float = 1.0
-
-
-def _n_0(
-    coeff: Union[Rain, Snow, Ice],
+def _v_0(
+    particle: Rain | Snow,
     rho: Optional[tf.Tensor] = None,
-    q_s: Optional[tf.Tensor] = None,
 ) -> tf.Tensor:
-  """Computes the Marshall-Palmer distribution parameter [m^-4]."""
-  if isinstance(coeff, Snow):
-    assert q_s is not None, 'q_s is required for Snow, but None was provided.'
-    assert rho is not None, 'rho is required for Snow, but None was provided.'
-    return coeff.mu * tf.math.pow(rho * q_s / RHO_AIR, coeff.nu)
-  elif isinstance(coeff, Ice):
-    return tf.constant(2e7)
-  elif isinstance(coeff, Rain):
-    return tf.constant(1.6e7)
-  else:
-    raise ValueError(
-        f'One of Snow, Ice, or Rain is required but {type(coeff)} was provided.'
-    )
-
-
-def _v_0(coeff: Union[Rain, Snow],
-         rho: Optional[tf.Tensor] = None) -> tf.Tensor:
   """Computes unit terminal velocity."""
-  if isinstance(coeff, Rain):
+  if isinstance(particle, Rain):
     assert rho is not None
     return tf.math.sqrt(
         8.0
-        * coeff.r_0
+        * particle.params.r_0
         * constants.G
-        / (3.0 * coeff.c_d)
-        * (RHO_WATER / rho - 1.0)
+        / (3.0 * particle.params.c_d)
+        * (constants_1m.RHO_WATER / rho - 1.0)
     )
-  elif isinstance(coeff, Snow):
-    return tf.constant(2.0**2.25 * coeff.r_0**0.25)
+  elif isinstance(particle, Snow):
+    return tf.constant(2.0**2.25 * particle.params.r_0**0.25)
   else:
     raise ValueError(
-        f'One of Rain or Snow is required but {type(coeff)} was provided.'
+        f'One of Rain or Snow is required but {type(particle)} was provided.'
     )
 
 
@@ -303,45 +136,29 @@ class OneMoment(microphysics_generic.Microphysics):
   ):
     """Initializes required libraries required by microphysics models."""
     super().__init__(params, water_model)
-    self._rain_coeff = Rain()
-    self._snow_coeff = Snow()
-    self._ice_coeff = Ice()
-
-  def _marshall_palmer_distribution_parameter_lambda(
-      self,
-      coeff: Union[Rain, Snow, Ice],
-      rho: types.FlowFieldVal,
-      q: types.FlowFieldVal,
-  ) -> types.FlowFieldVal:
-    """Computes lambda in the Marshall-Palmer distribution parameters.
-
-    Args:
-      coeff: A Rain, Snow, or Ice dataclass object that stores constant
-        parameters.
-      rho: The density of the moist air [kg/m^3].
-      q: The water mass fraction [kg/kg].
-
-    Returns:
-      The lambda parameter in the Marshall-Palmer distribution.
-    """
-    m = coeff.m_e + coeff.del_m + 1.0
-
-    def lambda_fn(rho: tf.Tensor, q: tf.Tensor) -> tf.Tensor:
-      """Computes the lambda parameter for a single tf.Tensor q."""
-      # The denominator is 0 when the water mass fraction is 0. In this case,
-      # the distribution parameter is 0, which is provided by the behavior of
-      # divide_no_nan.
-      return tf.math.pow(
-          tf.math.divide_no_nan(
-              _gamma(m) * coeff.chi_m * coeff.m_0 * _n_0(coeff, rho, q),
-              tf.maximum(q, 0.0)
-              * rho
-              * tf.math.pow(coeff.r_0, coeff.m_e + coeff.del_m),
-          ),
-          1.0 / m,
+    assert params.microphysics is not None and params.microphysics.HasField(
+        'one_moment'
+    ), (
+        'The microphysics.one_moment field needs to be set in SwirlLMParameters'
+        ' in order to initialize a OneMoment object.'
+    )
+    one_moment_params = params.microphysics.one_moment
+    self._one_moment_params = one_moment_params
+    self._rain = Rain.from_config(one_moment_params.rain)
+    self._snow = Snow.from_config(one_moment_params.snow)
+    self._ice = Ice.from_config(one_moment_params.ice)
+    self._aut_coeff = one_moment_params.autoconversion
+    self._acc_coeff = one_moment_params.accretion
+    self._terminal_velocity_chen2022 = None
+    if (
+        one_moment_params.terminal_velocity_model_type
+        == TERMINAL_VELOCITY_GAMMA_TYPE
+    ):
+      self._terminal_velocity_chen2022 = (
+          terminal_velocity_chen2022.TerminalVelocityChen2022.from_config(
+              one_moment_params
+          )
       )
-
-    return tf.nest.map_structure(lambda_fn, rho, q)
 
   def _saturation(
       self,
@@ -371,7 +188,7 @@ class OneMoment(microphysics_generic.Microphysics):
 
   def _conduction_and_diffusion(
       self,
-      coeff: Union[Rain, Snow],
+      particle: Union[Rain, Snow],
       temperature: types.FlowFieldVal,
       q_l: Optional[types.FlowFieldVal] = None,
       q_c: Optional[types.FlowFieldVal] = None,
@@ -379,8 +196,8 @@ class OneMoment(microphysics_generic.Microphysics):
     """Computes the combined effect of thermal conduction and water diffusion.
 
     Args:
-      coeff: A Rain or Snow dataclass object that stores constant parameters for
-        microphysics processes.
+      particle: A Rain or Snow dataclass object that stores constant parameters
+        for microphysics processes.
       temperature: The temperature of the flow field [K].
       q_l: The specific humidity of the liquid phase [kg/kg].
       q_c: The specific humidity of the condensed phase [kg/kg].
@@ -390,7 +207,7 @@ class OneMoment(microphysics_generic.Microphysics):
     """
     lh = (
         self.water_model.lh_s(temperature)
-        if isinstance(coeff, Snow)
+        if isinstance(particle, Snow)
         else self.water_model.lh_v(temperature)
     )
 
@@ -402,8 +219,10 @@ class OneMoment(microphysics_generic.Microphysics):
       """Computes the effects of thermal conductivity and water diffusivity."""
       r_v = self.water_model.r_v
       return 1.0 / (
-          lh / (K_COND * temperature) * (lh / (r_v * temperature) - 1.0)
-          + (r_v * temperature) / (p_sat * D_VAP)
+          lh
+          / (constants_1m.K_COND * temperature)
+          * (lh / (r_v * temperature) - 1.0)
+          + (r_v * temperature) / (p_sat * constants_1m.D_VAP)
       )
 
     return tf.nest.map_structure(
@@ -415,7 +234,7 @@ class OneMoment(microphysics_generic.Microphysics):
 
   def _accretion(
       self,
-      coeff: Union[Rain, Snow],
+      particle: Union[Rain, Snow],
       rho: types.FlowFieldVal,
       q_l: types.FlowFieldVal,
       q_i: types.FlowFieldVal,
@@ -428,8 +247,8 @@ class OneMoment(microphysics_generic.Microphysics):
     be subtracted from the specific humidity of the cloud.
 
     Args:
-      coeff: A Rain or Snow dataclass object that stores constant parameters for
-        microphysics processes.
+      particle: A Rain or Snow dataclass object that stores constant parameters
+        for microphysics processes.
       rho: The density of the moist air [kg/m^3].
       q_l: The specific humidity of the liquid phase [kg/kg].
       q_i: The specific humidity of the ice phase [kg/kg].
@@ -440,14 +259,24 @@ class OneMoment(microphysics_generic.Microphysics):
       The rate of change of specific humidity of the precipitation (rain/snow)
       due to the collision with condensed phase water.
     """
-    pi_av_coeff = coeff.a_0 * coeff.chi_a * coeff.chi_v
+    coeff = particle.params
+    pi_av_coeff = particle.a_0 * coeff.chi_a * coeff.chi_v
     sigma_av = coeff.a_e + coeff.v_e + coeff.del_a + coeff.del_v
 
-    acc_coeff = Accretion()
-    e_cp_l = acc_coeff.e_lr if isinstance(coeff, Rain) else acc_coeff.e_ls
-    e_cp_i = acc_coeff.e_ir if isinstance(coeff, Rain) else acc_coeff.e_is
+    e_cp_l = (
+        self._acc_coeff.e_lr
+        if isinstance(particle, Rain)
+        else self._acc_coeff.e_ls
+    )
+    e_cp_i = (
+        self._acc_coeff.e_ir
+        if isinstance(particle, Rain)
+        else self._acc_coeff.e_is
+    )
 
-    lam = self._marshall_palmer_distribution_parameter_lambda(coeff, rho, q_p)
+    lam = particles.marshall_palmer_distribution_parameter_lambda(
+        particle, rho, q_p
+    )
 
     def accretion_fn(
         rho: tf.Tensor,
@@ -458,11 +287,11 @@ class OneMoment(microphysics_generic.Microphysics):
     ) -> tf.Tensor:
       """Computes the accretion rate."""
       return tf.math.divide_no_nan(
-          _n_0(coeff, rho, q_p)
+          particles.n_0(particle, rho, q_p)
           * pi_av_coeff
-          * _v_0(coeff, rho)
+          * _v_0(particle, rho)
           * (q_l * e_cp_l + q_i * e_cp_i)
-          * _gamma(sigma_av + 1.0),
+          * particles.gamma(sigma_av + 1.0),
           lam,
       ) * tf.math.pow(tf.math.divide_no_nan(1.0, coeff.r_0 * lam), sigma_av)
 
@@ -470,14 +299,14 @@ class OneMoment(microphysics_generic.Microphysics):
 
   def _autoconversion(
       self,
-      coeff: Union[Rain, Snow],
+      particle: Union[Rain, Snow],
       q: types.FlowFieldVal,
   ) -> types.FlowFieldVal:
     """Computes the increase rate of precipitation due to autoconversion.
 
     Args:
-      coeff: A Rain or Snow dataclass object that stores constant parameters for
-        microphysics processes.
+      particle: A Rain or Snow dataclass object that stores constant parameters
+        for microphysics processes.
       q: The specific humidity of cloud water. If `coeff` is `Rain`, `q` should
         be for the liquid phase (`q_l`); if `coeff` is `Snow`, `q` should be the
         ice phase (`q_i`).
@@ -486,19 +315,20 @@ class OneMoment(microphysics_generic.Microphysics):
       The rate of increase of precipitation (rain/snow) due to autoconversion.
 
     Raises:
-      ValueError if `coeff` is neither Rain nor Snow.
+      ValueError if `particle` is neither Rain nor Snow.
     """
     aut_coeff = Autoconversion()
 
-    if isinstance(coeff, Rain):
+    if isinstance(particle, Rain):
       q_threshold = aut_coeff.q_l_threshold
       tau = aut_coeff.tau_lr
-    elif isinstance(coeff, Snow):
+    elif isinstance(particle, Snow):
       q_threshold = aut_coeff.q_i_threshold
       tau = aut_coeff.tau_is
     else:
       raise ValueError(
-          f'{Rain} or {Snow} coefficients are required. {coeff} is provided.'
+          f'Rain or snow particle is required, but {type(particle)} is'
+          ' provided.'
       )
 
     return tf.nest.map_structure(
@@ -510,8 +340,8 @@ class OneMoment(microphysics_generic.Microphysics):
       temperature: types.FlowFieldVal,
       rho: types.FlowFieldVal,
       q_v: types.FlowFieldVal,
-      q_l: Optional[types.FlowFieldVal],
-      q_c: Optional[types.FlowFieldVal],
+      q_l: types.FlowFieldVal,
+      q_c: types.FlowFieldVal,
   ) -> types.FlowFieldVal:
     """Computes the increase rate of precipitation due to snow autoconversion.
 
@@ -525,15 +355,14 @@ class OneMoment(microphysics_generic.Microphysics):
     Returns:
       The rate of increase of snow due to autoconversion.
     """
-    aut_coeff = Autoconversion()
 
     s = self._saturation(temperature, rho, q_v, q_l, q_c)
 
-    g = self._conduction_and_diffusion(self._snow_coeff, temperature, q_l, q_c)
+    g = self._conduction_and_diffusion(self._snow, temperature, q_l, q_c)
 
     q_i = tf.nest.map_structure(tf.math.subtract, q_c, q_l)
-    lam = self._marshall_palmer_distribution_parameter_lambda(
-        self._ice_coeff, rho, q_i
+    lam = particles.marshall_palmer_distribution_parameter_lambda(
+        self._ice, rho, q_i
     )
 
     def snow_autoconversion_fn(
@@ -543,17 +372,17 @@ class OneMoment(microphysics_generic.Microphysics):
         lam: tf.Tensor,
     ) -> tf.Tensor:
       """Computes the autoconversion of snow."""
-      r_is = aut_coeff.r_is
+      r_is = self._aut_coeff.r_is
       aut = (
           4.0
           * np.pi
           / rho
           * (s - 1.0)
           * g
-          * _n_0(self._ice_coeff)
+          * particles.n_0(self._ice)
           * tf.math.exp(-lam * r_is)
           * (
-              r_is**2 / (self._ice_coeff.m_e + self._ice_coeff.del_m)
+              r_is**2 / (self._ice.params.m_e + self._ice.params.del_m)
               + tf.math.divide_no_nan((r_is * lam + 1.0), lam**2)
           )
       )
@@ -563,7 +392,7 @@ class OneMoment(microphysics_generic.Microphysics):
 
   def evaporation_sublimation(
       self,
-      coeff: Union[Rain, Snow],
+      particle: Union[Rain, Snow],
       temperature: types.FlowFieldVal,
       rho: types.FlowFieldVal,
       q_v: types.FlowFieldVal,
@@ -578,8 +407,8 @@ class OneMoment(microphysics_generic.Microphysics):
     snow (s - 1 > 0) and the sink due to vapor sublimation (s - 1 < 0).
 
     Args:
-      coeff: A Rain or Snow dataclass object that stores constant parameters for
-        microphysics processes.
+      particle: A Rain or Snow dataclass object that stores constant parameters
+        for microphysics processes.
       temperature: The temperature of the flow field [K].
       rho: The density of the moist air [kg/m^3].
       q_v: The specific humidity of the gas phase [kg/kg].
@@ -594,15 +423,18 @@ class OneMoment(microphysics_generic.Microphysics):
       Note that deposition is also considered so rate can be < 0 in the case
       of snow.
     """
-    if isinstance(coeff, Rain):
+    if isinstance(particle, Rain):
       s = self._saturation(temperature, rho, q_v, q_l, q_l)
     else:
       q_i = tf.nest.map_structure(tf.math.subtract, q_c, q_l)
       zeros = tf.nest.map_structure(tf.zeros_like, q_i)
       s = self._saturation(temperature, rho, q_v, zeros, q_i)
 
-    g = self._conduction_and_diffusion(coeff, temperature, q_l, q_c)
-    lam = self._marshall_palmer_distribution_parameter_lambda(coeff, rho, q_p)
+    g = self._conduction_and_diffusion(particle, temperature, q_l, q_c)
+    lam = particles.marshall_palmer_distribution_parameter_lambda(
+        particle, rho, q_p
+    )
+    coeff = particle.params
 
     def evap_subl_fn(
         rho: tf.Tensor,
@@ -612,25 +444,31 @@ class OneMoment(microphysics_generic.Microphysics):
         lam: tf.Tensor,
     ) -> tf.Tensor:
       """Computes the evaporation/sublimation rate."""
-      f_vent = coeff.a_vent + coeff.b_vent * (NU_AIR / D_VAP) ** (
-          1.0 / 3.0
-      ) * tf.math.divide_no_nan(1.0, coeff.r_0 * lam) ** (
+      f_vent = coeff.a_vent + coeff.b_vent * (
+          constants_1m.NU_AIR / constants_1m.D_VAP
+      ) ** (1.0 / 3.0) * tf.math.divide_no_nan(1.0, coeff.r_0 * lam) ** (
           0.5 * (coeff.v_e + coeff.del_v)
       ) * tf.math.sqrt(
           tf.math.divide_no_nan(
-              2.0 * coeff.chi_v * _v_0(coeff, rho), (NU_AIR * lam)
+              2.0 * coeff.chi_v * _v_0(particle, rho),
+              (constants_1m.NU_AIR * lam),
           )
-      ) * _gamma(
+      ) * particles.gamma(
           0.5 * (coeff.v_e + coeff.del_v + 5.0)
       )
       evap_subl = (
           tf.math.divide_no_nan(
-              -4.0 * np.pi * _n_0(coeff, rho, q_p) / rho * (s - 1.0) * g,
+              -4.0
+              * np.pi
+              * particles.n_0(particle, rho, q_p)
+              / rho
+              * (s - 1.0)
+              * g,
               lam**2,
           )
           * f_vent
       )
-      if isinstance(coeff, Rain):
+      if isinstance(particle, Rain):
         evap_subl = tf.where(
             tf.math.less(s, 1.0), evap_subl, tf.zeros_like(evap_subl)
         )
@@ -663,17 +501,17 @@ class OneMoment(microphysics_generic.Microphysics):
       The rate of change of cloud water due to evaporation and sublimation.
     """
     evap = self.evaporation_sublimation(
-        self._rain_coeff, temperature, rho, q_v, q_r, q_l, q_c
+        self._rain, temperature, rho, q_v, q_r, q_l, q_c
     )
     subl = self.evaporation_sublimation(
-        self._snow_coeff, temperature, rho, q_v, q_s, q_l, q_c
+        self._snow, temperature, rho, q_v, q_s, q_l, q_c
     )
 
     return tf.nest.map_structure(lambda e, s: e + s, evap, subl)
 
   def autoconversion_and_accretion(
       self,
-      coeff: Union[Rain, Snow],
+      particle: Union[Rain, Snow],
       temperature: types.FlowFieldVal,
       rho: types.FlowFieldVal,
       q_v: types.FlowFieldVal,
@@ -684,8 +522,8 @@ class OneMoment(microphysics_generic.Microphysics):
     """Computes the change of precipitation by autoconversion and accretion.
 
     Args:
-      coeff: A Rain or Snow dataclass object that stores constant parameters for
-        microphysics processes.
+      particle: A Rain or Snow dataclass object that stores constant parameters
+        for microphysics processes.
       temperature: The temperature of the flow field [K].
       rho: The density of the moist air [kg/m^3].
       q_v: The specific humidity of the gas phase [kg/kg].
@@ -698,47 +536,139 @@ class OneMoment(microphysics_generic.Microphysics):
       The rate of change of precipitation due to autoconversion and accretion.
     """
     q_i = tf.nest.map_structure(tf.math.subtract, q_c, q_l)
-    acc = self._accretion(coeff, rho, q_l, q_i, q_p)
+    acc = self._accretion(particle, rho, q_l, q_i, q_p)
 
-    if isinstance(coeff, Rain):
-      aut = self._autoconversion(coeff, q_l)
-    elif isinstance(coeff, Snow):
+    if isinstance(particle, Rain):
+      aut = self._autoconversion(particle, q_l)
+    elif isinstance(particle, Snow):
       aut = self._autoconversion_snow(temperature, rho, q_v, q_l, q_c)
+    else:
+      raise ValueError(
+          f'Autoconversion and accretion not supported for {type(particle)}.'
+      )
 
     return tf.nest.map_structure(tf.math.add, acc, aut)
 
-  def terminal_velocity(
+  def _terminal_velocity_power_law(
       self,
-      coeff: Union[Rain, Snow],
+      varname: str,
       rho: types.FlowFieldVal,
-      q_p: types.FlowFieldVal,
+      q: types.FlowFieldVal,
   ) -> types.FlowFieldVal:
-    """Computes the terminal velocity of rain or snow.
+    """Computes the bulk terminal velocity using a power law parameterization.
 
     Args:
-      coeff: A Rain or Snow dataclass object that stores constant parameters for
-        microphysics processes.
+      varname: The name of the humidity variable, either `q_r`, `q_s`, `q_l`,
+        or `q_i`.
       rho: The density of the moist air [kg/m^3].
-      q_p: The precipitation water mass fraction, which can be rain (q_r) or
-        snow (q_s) [kg/kg].
+      q: The humidity variable mass fraction, which can be rain (q_r), snow
+        (q_s), cloud water (q_l), or cloud ice (q_i) [kg/kg].
 
     Returns:
       The terminal velocity of rain/snow.
     """
-    lam = self._marshall_palmer_distribution_parameter_lambda(coeff, rho, q_p)
+    # Treat sedimentation of cloud droplet and ice crystal as rain and snow,
+    # respectively.
+    if varname in ('q_r', 'q_l'):
+      particle = self._rain
+    elif varname in ('q_i', 'q_s'):
+      particle = self._snow
+    else:
+      raise ValueError(f'Terminal velocity not supported for {varname}')
+    lam = particles.marshall_palmer_distribution_parameter_lambda(
+        particle, rho, q
+    )
+    coeff = particle.params
 
     def terminal_velocity_fn(rho: tf.Tensor, lam: tf.Tensor):
       """Computes the terminal velocity."""
       return (
           coeff.chi_v
-          * _v_0(coeff, rho)
+          * _v_0(particle, rho)
           * tf.math.divide_no_nan(1.0, (coeff.r_0 * lam))
           ** (coeff.v_e + coeff.del_v)
-          * _gamma(coeff.m_e + coeff.v_e + coeff.del_m + coeff.del_v + 1.0)
-          / _gamma(coeff.m_e + coeff.del_m + 1.0)
+          * particles.gamma(
+              coeff.m_e + coeff.v_e + coeff.del_m + coeff.del_v + 1.0
+          )
+          / particles.gamma(coeff.m_e + coeff.del_m + 1.0)
       )
 
     return tf.nest.map_structure(terminal_velocity_fn, rho, lam)
+
+  def _terminal_velocity_gamma_type(
+      self,
+      varname: str,
+      rho: types.FlowFieldVal,
+      q: types.FlowFieldVal,
+  ) -> types.FlowFieldVal:
+    """Computes the bulk terminal velocity using a gamma-type parameterization.
+
+    Args:
+      varname: The name of the humidity variable, either `q_r`, `q_s`, `q_l`,
+        or `q_i`.
+      rho: The density of the moist air [kg/m^3].
+      q: The humidity variable mass fraction, which can be rain (q_r), snow
+        (q_s), cloud water (q_l), or cloud ice (q_i) [kg/kg].
+
+    Returns:
+      The terminal velocity of rain/snow.
+    """
+    assert self._terminal_velocity_chen2022 is not None, (
+        'Gamma-type terminal velocity model must be set in one-moment'
+        ' microphysics scheme.'
+    )
+    if varname == 'q_r':
+      terminal_vel_fn = self._terminal_velocity_chen2022.rain_terminal_velocity
+    elif varname == 'q_s':
+      terminal_vel_fn = self._terminal_velocity_chen2022.snow_terminal_velocity
+    elif varname == 'q_l':
+      terminal_vel_fn = functools.partial(
+          self._terminal_velocity_chen2022.condensate_terminal_velocity,
+          self._rain,
+      )
+    elif varname == 'q_i':
+      terminal_vel_fn = functools.partial(
+          self._terminal_velocity_chen2022.condensate_terminal_velocity,
+          self._ice,
+      )
+    else:
+      raise ValueError(f'Terminal velocity not supported for {varname}')
+
+    return tf.nest.map_structure(terminal_vel_fn, rho, q)
+
+  def terminal_velocity(
+      self,
+      varname: str,
+      rho: types.FlowFieldVal,
+      q: types.FlowFieldVal,
+  ) -> types.FlowFieldVal:
+    """Computes the terminal velocity of precipitation or sedimentation.
+
+    Args:
+      varname: The name of the humidity variable, either `q_r`, `q_s`, `q_l`,
+        or `q_i`.
+      rho: The density of the moist air [kg/m^3].
+      q: The precipitation water mass fraction, which can be rain (q_r) or
+        snow (q_s) [kg/kg].
+
+    Returns:
+      The terminal velocity of rain/snow.
+    """
+    if (
+        self._one_moment_params.terminal_velocity_model_type
+        == TERMINAL_VELOCITY_GAMMA_TYPE
+    ):
+      return self._terminal_velocity_gamma_type(varname, rho, q)
+    elif (
+        self._one_moment_params.terminal_velocity_model_type
+        == TERMINAL_VELOCITY_POWER_LAW
+    ):
+      return self._terminal_velocity_power_law(varname, rho, q)
+    else:
+      raise ValueError(
+          f'{self._one_moment_params.terminal_velocity_model_type} '
+          'not supported in one-moment microphysics scheme.'
+      )
 
 
 class Adapter(microphysics_generic.MicrophysicsAdapter):
@@ -750,11 +680,18 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
       self,
       params: parameters_lib.SwirlLMParameters,
       water_model: water.Water,
-      one_moment_params: microphysics_pb2.OneMoment,
   ):
+    assert params.microphysics is not None and params.microphysics.HasField(
+        'one_moment'
+    ), (
+        'The microphysics.one_moment field needs to be set in SwirlLMParameters'
+        ' in order to initialize a one_moment.Adapter object.'
+    )
+    self._one_moment_params = params.microphysics.one_moment
     self._one_moment = OneMoment(params, water_model)
+    self._rain = Rain.from_config(self._one_moment_params.rain)
+    self._snow = Snow.from_config(self._one_moment_params.snow)
     self._dt = params.dt
-    self._one_moment_params = one_moment_params
 
   def terminal_velocity(
       self,
@@ -765,7 +702,8 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
     """Computes the terminal velocity for `q_r` or `q_s`.
 
     Args:
-      varname: The name of the humidity variable, either `q_r` or `q_s`.
+      varname: The name of the humidity variable, either `q_r`, `q_s`,
+        `q_l`, or `q_i`.
       states: A dictionary that holds all flow field variables.
       additional_states: A dictionary that holds all helper variables.
 
@@ -780,22 +718,22 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
     assert varname in (
         'q_r',
         'q_s',
+        'q_l',
+        'q_i',
     ), (
-        f'Terminal velocity is for `q_r` or `q_s` only, but {varname} is'
-        ' provided.'
+        'Terminal velocity is for `q_r`, `q_s`, `q_l`, or `q_i` only, but'
+        f' {varname} is provided.'
     )
 
-    coeff = Rain() if varname == 'q_r' else Snow()
-
     return self._one_moment.terminal_velocity(
-        coeff, states['rho_thermal'], states[varname]
+        varname, states['rho_thermal'], states[varname]
     )
 
   def _humidity_source_for_rain_and_snow(
       self,
       states: types.FlowFieldMap,
       thermo_states: types.FlowFieldMap,
-      coeff: Union[Rain, Snow],
+      particle: Union[Rain, Snow],
       include_autoconversion_and_accretion: bool,
   ):
     """Computes humidity source and clips it to (1 - k) * q / dt.
@@ -814,7 +752,7 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
     Args:
       states: A dictionary that holds all flow field variables.
       thermo_states: A dictionary that holds all thermodynamics variables.
-      coeff: A Rain, Snow dataclass object that stores constant parameters.
+      particle: A Rain, Snow dataclass object that stores constant parameters.
       include_autoconversion_and_accretion: Whether to include
         autoconversion and accretion in the computation.
 
@@ -822,11 +760,11 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
       The clipped source term.
     """
     q_p = (
-        thermo_states.get('q_r', states['q_r']) if isinstance(coeff, Rain)
+        thermo_states.get('q_r', states['q_r']) if isinstance(particle, Rain)
         else thermo_states.get('q_s', states['q_s'])
     )
     aut_and_acc = self._one_moment.autoconversion_and_accretion(
-        coeff,
+        particle,
         thermo_states['T'],
         states['rho_thermal'],
         thermo_states['q_v'],
@@ -835,7 +773,7 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
         thermo_states['q_c'],
     )
     evap_subl = self._one_moment.evaporation_sublimation(
-        coeff,
+        particle,
         thermo_states['T'],
         states['rho_thermal'],
         thermo_states['q_v'],
@@ -905,14 +843,14 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
       return self._humidity_source_for_rain_and_snow(
           states,
           thermo_states | {'q_v': q_v},
-          Rain(),
+          self._rain,
           include_autoconversion_and_accretion=True,
       )
     elif varname == 'q_s':
       return self._humidity_source_for_rain_and_snow(
           states,
           thermo_states | {'q_v': q_v},
-          Snow(),
+          self._snow,
           include_autoconversion_and_accretion=True,
       )
     elif varname == 'q_t':
@@ -921,13 +859,13 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
           self._humidity_source_for_rain_and_snow(
               states,
               thermo_states | {'q_v': q_v},
-              Rain(),
+              self._rain,
               include_autoconversion_and_accretion=True,
           ),
           self._humidity_source_for_rain_and_snow(
               states,
               thermo_states | {'q_v': q_v},
-              Snow(),
+              self._snow,
               include_autoconversion_and_accretion=True,
           ))
     else:
@@ -968,8 +906,8 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
     source = tf.nest.map_structure(tf.zeros_like, states['rho'])
 
     phase_params = (
-        (Rain(), self._one_moment.water_model.lh_v0),
-        (Snow(), self._one_moment.water_model.lh_s0),
+        (self._rain, self._one_moment.water_model.lh_v0),
+        (self._snow, self._one_moment.water_model.lh_s0),
     )
 
     cp = self._one_moment.water_model.cp_m(
@@ -992,14 +930,14 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
 
       return source_fn
 
-    for coeff, lh in phase_params:
+    for particle, lh in phase_params:
       # Calculate source terms for vapor and liquid conversions, respectively.
       # Use that c_{q_v->q_r/s} = -c_{q_r/s->q_v}, i.e., the negation of the
       # evaporation/sublimation rate.
       water_source = self._humidity_source_for_rain_and_snow(
           states,
           thermo_states,
-          coeff,
+          particle,
           include_autoconversion_and_accretion=(varname == 'theta_li'),
       )
 
@@ -1047,13 +985,13 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
 
     # Get conversion rates and energy source from cloud water/ice to rain/snow.
     source_li = tf.nest.map_structure(tf.zeros_like, states['rho'])
-    coeffs = [Rain(), Snow()]
+    particle_types = [self._rain, self._snow]
     q_p = [thermo_states['q_r'], thermo_states['q_s']]
     e_int = [thermo_states['e_l'], thermo_states['e_i']]
 
-    for coeff, q, e in zip(coeffs, q_p, e_int):
+    for particle, q, e in zip(particle_types, q_p, e_int):
       aut_acc = self._one_moment.autoconversion_and_accretion(
-          coeff,
+          particle,
           thermo_states['T'],
           states['rho_thermal'],
           thermo_states['q_v'],
@@ -1158,11 +1096,17 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
     ), 'Effective radius calculation is only valid for liquid or ice.'
 
     # Density of the condensate.
-    rho_c = RHO_WATER if phase == Phase.LIQUID.value else RHO_ICE
+    rho_c = (
+        constants_1m.RHO_WATER
+        if phase == Phase.LIQUID.value
+        else constants_1m.RHO_ICE
+    )
 
     def r_eff_fn(rho: tf.Tensor, q_c: tf.Tensor) -> tf.Tensor:
       """Equation 8 from Liu and hallett (1997)."""
-      alpha = (4.0 / 3.0 * np.pi * rho_c * ASYMMETRY_CLOUD) ** (-1 / 3)
-      return alpha * (rho * q_c / DROPLET_N) ** (1 / 3)
+      alpha = (4.0 / 3.0 * np.pi * rho_c * constants_1m.ASYMMETRY_CLOUD) ** (
+          -1 / 3
+      )
+      return alpha * (rho * q_c / constants_1m.DROPLET_N) ** (1 / 3)
 
     return tf.nest.map_structure(r_eff_fn, rho, q_c)

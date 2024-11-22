@@ -20,7 +20,7 @@ from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.equations import common
 from swirl_lm.equations import utils as eq_utils
 from swirl_lm.equations.source_function import scalar_generic
-from swirl_lm.physics.atmosphere import microphysics_utils
+from swirl_lm.physics.atmosphere import microphysics_generic
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import water
 from swirl_lm.utility import get_kernel_fn
@@ -48,6 +48,7 @@ class Humidity(scalar_generic.ScalarGeneric):
       params: parameters_lib.SwirlLMParameters,
       scalar_name: str,
       thermodynamics: thermodynamics_manager.ThermodynamicsManager,
+      microphysics: microphysics_generic.MicrophysicsAdapter | None = None,
   ):
     """Retrieves context information for the humidity source."""
     super().__init__(kernel_op, params, scalar_name, thermodynamics)
@@ -58,48 +59,42 @@ class Humidity(scalar_generic.ScalarGeneric):
     )
 
     self._include_subsidence = (
-        self._scalar_params.HasField('humidity') and
-        self._scalar_params.humidity.include_subsidence and
-        self._g_dim is not None)
+        self._scalar_params.HasField('humidity')
+        and self._scalar_params.humidity.include_subsidence
+        and self._g_dim is not None
+    )
 
     self._include_precipitation = (
-        self._scalar_params.HasField('humidity') and
-        self._scalar_params.humidity.include_precipitation)
+        params.microphysics is not None
+        and params.microphysics.include_precipitation
+    )
 
     self._include_condensation = (
-        self._scalar_params.HasField('humidity') and
-        self._scalar_params.humidity.include_condensation)
+        params.microphysics is not None
+        and params.microphysics.include_condensation
+        and self._scalar_name in ('q_c', 'q_v')
+    )
 
     self._include_sedimentation = (
-        self._scalar_params.HasField('humidity') and
-        self._scalar_params.humidity.include_sedimentation)
+        params.microphysics is not None
+        and params.microphysics.include_sedimentation
+    )
 
-    if scalar_name in ('q_r', 'q_s'):
-      assert self._include_precipitation, (
-          'Calculating q_r without setting include_precipitation to True is not'
-          ' well-defined.'
-      )
-
-    self._microphysics = None
+    self._microphysics = microphysics
     if (
         self._include_precipitation
         or self._include_condensation
-        or (self._include_sedimentation and scalar_name == 'q_t')
-        or scalar_name in ('q_r', 'q_s')
+        or self._include_sedimentation
     ):
-      assert self._scalar_params.humidity.HasField('microphysics'), (
-          'A microphysics model is required to consider precipitation or '
-          'condensation in the humidity equation, and to compute the humidity '
-          'variables `q_r` and `q_s`.'
+      assert self._microphysics is not None, (
+          'A microphysics model is required to consider precipitation, '
+          'condensation, or sedimentation in the humidity equation.'
       )
-      microphysics_model_params = (
-          microphysics_utils.get_model_params_from_proto(
-              self._scalar_params.humidity)
-      )
-      self._microphysics = (
-          microphysics_utils.select_microphysics(
-              microphysics_model_params, self._params, self._thermodynamics
-          )
+
+    if scalar_name in ('q_r', 'q_s'):
+      assert self._include_precipitation, (
+          'Calculating q_r without setting include_precipitation to True in '
+          'the microphysics configuration is not allowed.'
       )
 
   def _get_thermodynamic_variables(
@@ -355,8 +350,8 @@ class Humidity(scalar_generic.ScalarGeneric):
             ' undefined.'
         )
         w_l = self._microphysics.terminal_velocity(
-            'q_r',
-            {'rho_thermal': states['rho_thermal'], 'q_r': thermo_states['q_l']},
+            'q_l',
+            {'rho_thermal': states['rho_thermal'], 'q_l': thermo_states['q_l']},
             additional_states,
         )
         if 'q_r' in states:
@@ -376,8 +371,8 @@ class Humidity(scalar_generic.ScalarGeneric):
               w_r,
           )
         w_i = self._microphysics.terminal_velocity(
-            'q_s',
-            {'rho_thermal': states['rho_thermal'], 'q_s': thermo_states['q_i']},
+            'q_i',
+            {'rho_thermal': states['rho_thermal'], 'q_i': thermo_states['q_i']},
             additional_states,
         )
         if 'q_s' in states:
@@ -423,6 +418,15 @@ class Humidity(scalar_generic.ScalarGeneric):
           'A microphysics model is required to consider condensation in the'
           ' humidity equation.'
       )
+      if self._scalar_name == 'q_c':
+        op = tf.math.add
+      elif self._scalar_name == 'q_v':
+        op = tf.math.subtract
+      else:
+        raise NotImplementedError(
+            f'Condensation for {self._scalar_name} is not implemented. Only'
+            ' "q_c" and "q_v" are supported.'
+        )
       cond = self._microphysics.condensation(
           states['rho_thermal'],
           thermo_states['T'],
@@ -434,16 +438,7 @@ class Humidity(scalar_generic.ScalarGeneric):
       )
       cond_source = tf.nest.map_structure(
           tf.math.multiply, states[common.KEY_RHO], cond)
-      op = None
-      if self._scalar_name == 'q_c':
-        op = tf.math.add
-      elif self._scalar_name == 'q_v':
-        op = tf.math.subtract
-      else:
-        raise NotImplementedError(
-            f'Precipitation for {self._scalar_name} is not implemented. Only'
-            ' "q_c" and "q_v" are supported.'
-        )
+
       source = tf.nest.map_structure(op, source, cond_source)
 
     return source

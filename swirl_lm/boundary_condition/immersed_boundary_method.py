@@ -693,7 +693,7 @@ def init_ghost_point_helper_vars(
       # Source: Iaccarino and Verzicco, Applied Mechanics Reviews 56(3), 2003.
       degenerated_cell_mask = tf.nest.map_structure(
           lambda v: tf.where(v < 7.5, tf.ones_like(v), tf.zeros_like(v)),
-          tf.math.reduce_max(fluid_corner_point_mask, axis=0)
+          tf.math.reduce_sum(fluid_corner_point_mask, axis=0)
       )
 
       # Add the boundary interecpt (BI) as an additional point, if the enclosing

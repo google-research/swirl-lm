@@ -80,12 +80,12 @@ def compute_h_and_hface_from_coordinate_levels(
   return h, h_face
 
 
-def _get_global_coord_and_h_with_halos_periodic(
+def _get_h_with_halos_periodic(
     global_coord_no_halos: tf.Tensor,
     halo_width: int,
     domain_size: float,
-) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
-  """Gets the coordinate and scale factors for a periodic dimension."""
+) -> tuple[tf.Tensor, tf.Tensor]:
+  """Gets the stretched-grid scale factors for a periodic dimension."""
   # We extend the coordinates into the halos first, then compute the scale
   # factors. When extending, we initially pad each end with one more point than
   # necessary. The reason is that for periodic consistency, we want to avoid
@@ -107,27 +107,14 @@ def _get_global_coord_and_h_with_halos_periodic(
   )
 
   # Remove the extra point from each end.
-  return global_coord[1:-1], global_h[1:-1], global_h_face[1:-1]
+  return global_h[1:-1], global_h_face[1:-1]
 
 
-def _get_global_coord_and_h_with_halos_nonperiodic(
-    s_no_halos: tf.Tensor,
-    halo_width: int,
-) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
-  """Gets the coordinate and scale factors for a nonperiodic dimension."""
-  # We extend the coordinates into the halos first, then compute the scale
-  # factors.
-  ds_first = s_no_halos[1] - s_no_halos[0]
-  ds_last = s_no_halos[-1] - s_no_halos[-2]
-  pad_left = s_no_halos[0] + ds_first * tf.range(
-      -halo_width, 0, dtype=tf.float32
-  )
-  pad_right = s_no_halos[-1] + ds_last * tf.range(
-      1, halo_width + 1, dtype=tf.float32
-  )
-  global_coord = tf.concat([pad_left, s_no_halos, pad_right], axis=0)
-  h, h_face = compute_h_and_hface_from_coordinate_levels(global_coord)
-  return global_coord, h, h_face
+def _get_h_with_halos_nonperiodic(
+    global_coord_with_halos: tf.Tensor,
+) -> tuple[tf.Tensor, tf.Tensor]:
+  """Gets the stretched-grid scale factors for a nonperiodic dimension."""
+  return compute_h_and_hface_from_coordinate_levels(global_coord_with_halos)
 
 
 def local_stretched_grid_vars_from_global_xyz(
@@ -163,6 +150,7 @@ def local_stretched_grid_vars_from_global_xyz(
       continue
 
     global_coord_no_halos = params.global_xyz[dim]
+    global_coord = params.global_xyz_with_halos[dim]
 
     # From the coordinates without halos, get the global arrays for the
     # coordinates & the scale factors including boundary halos.  The arrays with
@@ -173,17 +161,11 @@ def local_stretched_grid_vars_from_global_xyz(
       # first and last grid point. This is done because the total domain size
       # is required information to fully specify the periodicity.
       domain_size = (params.lx, params.ly, params.lz)[dim]
-      global_coord, global_h, global_h_face = (
-          _get_global_coord_and_h_with_halos_periodic(
-              global_coord_no_halos, params.halo_width, domain_size
-          )
+      global_h, global_h_face = _get_h_with_halos_periodic(
+          global_coord_no_halos, params.halo_width, domain_size
       )
     else:  # Non-periodic dimension
-      global_coord, global_h, global_h_face = (
-          _get_global_coord_and_h_with_halos_nonperiodic(
-              global_coord_no_halos, params.halo_width
-          )
-      )
+      global_h, global_h_face = _get_h_with_halos_nonperiodic(global_coord)
 
     # Get local slices from the 1D global arrays.
     coord_local = common_ops.get_local_slice_of_1d_array(

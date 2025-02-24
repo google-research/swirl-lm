@@ -47,6 +47,9 @@ References:
 3. Meador, W. E., and W. R. Weaver, 1980: Two-Stream Approximations to Radiative
    Transfer in Planetary Atmospheres: A Unified Description of Existing Methods
    and a New Improvement. J. Atmos. Sci., 37, 630–643.
+4. Ukkonen, P. & Hogan, R. J. (2024) Twelve times faster yet accurate: A new
+   state-of-the-art in radiation schemes via performance and spectral
+   optimization. Journal of Advances in Modeling Earth Systems, 16(1). Portico.
 """
 
 import math
@@ -467,11 +470,38 @@ class MonochromaticTwoStreamSolver:
     def t_dir_fn(g1, g2, g4, a1, tau, ssa) -> tf.Tensor:
       return self._direct_transmittance(g1, g2, g4, a1, tau, ssa, zenith)
 
-    r_dir = tf.nest.map_structure(
+    r_dir_unconstrained = tf.nest.map_structure(
         r_dir_fn, gamma1, gamma2, gamma3, alpha2, optical_depth, ssa
     )
-    t_dir = tf.nest.map_structure(
+    t_dir_unconstrained = tf.nest.map_structure(
         t_dir_fn, gamma1, gamma2, gamma4, alpha1, optical_depth, ssa
+    )
+
+    # Constrain reflectance and transmittance to be positive and to not go above
+    # physical limits by enforcing the constraint that the direct beam can
+    # either be reflected, penetrate unscattetered to the bottom of the grid
+    # cell, or penetrate through but be scattered on the way.
+
+    def unscattered_beam_fn(g: tf.Tensor):
+      """Transmittance of direct, unscattered beam."""
+      return tf.math.exp(-g / tf.math.cos(zenith))
+
+    # Direct transmittance.
+    t0 = tf.nest.map_structure(unscattered_beam_fn, optical_depth)
+
+    def constrain_r_dir(t0: tf.Tensor, r_dir: tf.Tensor):
+      """Equation 9 of Hogan and Ukonnen (2024)."""
+      return tf.clip_by_value(r_dir, 0.0, 1.0 - t0)
+
+    def constrain_t_dir(t0: tf.Tensor, r_dir: tf.Tensor, t_dir: tf.Tensor):
+      """Equation 10 of Hogan and Ukonnen (2024)."""
+      return tf.clip_by_value(t_dir, 0.0, 1.0 - t0 - r_dir)
+
+    r_dir = tf.nest.map_structure(
+        constrain_r_dir, t0, r_dir_unconstrained
+    )
+    t_dir = tf.nest.map_structure(
+        constrain_t_dir, t0, r_dir, t_dir_unconstrained
     )
 
     return {

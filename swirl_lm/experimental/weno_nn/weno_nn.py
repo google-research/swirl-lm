@@ -49,7 +49,6 @@ PyTree = Any
 
 # Activation functions with unshared trainable parameters.
 _UNSHARED_ACTIVATION_FUNCTIONS = {
-    "GeGLU": nn.GeGLU,
     "rational_act_fun": rational_networks.RationalLayer,
     "unshared_rational_act_fun": rational_networks.UnsharedRationalLayer,
 }

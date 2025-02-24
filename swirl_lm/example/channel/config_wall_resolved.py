@@ -41,8 +41,10 @@ GRID_PBTXT = """
     dim_2: true
   }
   # An indicator of mesh stretching in each dimension.
-  stretched_grid_paths {
-      dim_1: 'swirl_lm/example/channel/test_data/y_120.txt'
+  stretched_grid_files {
+    dim_1 {
+      path: 'swirl_lm/example/channel/test_data/y_120.txt'
+    }
   }
   # The width of the ghost cells on each side of the domain. It is set to 2
   # considering the stencil width of the QUICK scheme.

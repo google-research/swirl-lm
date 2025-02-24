@@ -21,7 +21,7 @@ from swirl_lm.equations import utils as eq_utils
 from swirl_lm.equations.source_function import scalar_generic
 from swirl_lm.numerics import calculus
 from swirl_lm.physics.atmosphere import cloud
-from swirl_lm.physics.atmosphere import microphysics_utils
+from swirl_lm.physics.atmosphere import microphysics_generic
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import water
 from swirl_lm.utility import get_kernel_fn
@@ -44,6 +44,7 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
       params: parameters_lib.SwirlLMParameters,
       scalar_name: str,
       thermodynamics: thermodynamics_manager.ThermodynamicsManager,
+      microphysics: microphysics_generic.MicrophysicsAdapter | None = None,
   ):
     """Retrieves context information for the total energy source.
 
@@ -54,6 +55,7 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
       scalar_name: The name of the scalar that the source terms in this class is
         defined for. Only 'e_t' is allowed here.
       thermodynamics: An object that holds the thermodynamics library.
+      microphysics: An object that holds the microphysics library.
     """
     super().__init__(kernel_op, params, scalar_name, thermodynamics)
 
@@ -78,24 +80,14 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
         self._g_dim is not None)
 
     self._include_precipitation = (
-        self._scalar_params.HasField('total_energy') and
-        self._scalar_params.total_energy.include_precipitation and
-        self._g_dim is not None)
+        params.microphysics is not None and
+        params.microphysics.include_precipitation)
 
-    self._microphysics = None
+    self._microphysics = microphysics
     if self._include_precipitation:
-      assert self._scalar_params.total_energy.HasField('microphysics'), (
+      assert self._microphysics is not None, (
           'A microphysics model is required to consider precipitation in the'
           ' total energy equation.'
-      )
-      microphysics_model_params = (
-          microphysics_utils.get_model_params_from_proto(
-              self._scalar_params.total_energy)
-      )
-      self._microphysics = (
-          microphysics_utils.select_microphysics(
-              microphysics_model_params, self._params, self._thermodynamics
-          )
       )
 
     self._cloud = cloud.Cloud(self._thermodynamics.model)

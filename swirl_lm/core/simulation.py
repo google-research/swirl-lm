@@ -368,12 +368,11 @@ class Simulation:
     # For those additional states values that are not meant to be changed by the
     # inner solver (indicated by the `updated_additional_state_keys`), revert
     # their values back to the original values.
-    if self._update_additional_states:
-      states_new.update({
-          key: val
-          for key, val in additional_states.items()
-          if key not in self._updated_additional_states_keys
-      })
+    states_new.update({
+        key: val
+        for key, val in additional_states.items()
+        if key not in self._updated_additional_states_keys
+    })
 
     monitor_states = self.monitor.compute_analytics(states_new, replicas,
                                                     step_id)

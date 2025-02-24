@@ -167,10 +167,15 @@ def partial_mesh_for_core(
         'smaller than total number of core partitioning in z direction.')
 
   if pad_mode == 'PHYSICAL':
-    xs, ys, zs = [
-        params.grid_local_with_coord(coordinate, dim, True)
-        for dim in range(3)
-    ]
+    xs = common_ops.get_local_slice_of_1d_array(
+        params.global_xyz_with_halos[0], coordinate[0], core_nx, nx
+    )
+    ys = common_ops.get_local_slice_of_1d_array(
+        params.global_xyz_with_halos[1], coordinate[1], core_ny, ny
+    )
+    zs = common_ops.get_local_slice_of_1d_array(
+        params.global_xyz_with_halos[2], coordinate[2], core_nz, nz
+    )
   else:
     xs = get_slice_in_dim(core_nx, lx, cx, gx, params.x)
     ys = get_slice_in_dim(core_ny, ly, cy, gy, params.y)

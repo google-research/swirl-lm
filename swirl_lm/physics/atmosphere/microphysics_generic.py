@@ -45,7 +45,7 @@ class MicrophysicsAdapter(abc.ABC):
       states: types.FlowFieldMap,
       additional_states: types.FlowFieldMap,
   ) -> types.FlowFieldVal:
-    """Computes the terminal velocity for `q_r` or `q_s`.
+    """Computes the terminal velocity for `q_r`, `q_s`, `q_l`, or `q_i`.
 
     Args:
       varname: The name of the humidity variable, either `q_r` or `q_s`.
@@ -53,10 +53,11 @@ class MicrophysicsAdapter(abc.ABC):
       additional_states: A dictionary that holds all helper variables.
 
     Returns:
-      The terminal velocity for `q_r` or `q_s`.
+      The terminal velocity for `q_r`, `q_s`, `q_l`, or `q_i`.
 
     Raises:
-      NotImplementedError If `varname` is not one of `q_r` or `q_s`.
+      NotImplementedError If `varname` is not one of `q_r`, `q_s`, `q_l`, or
+      `q_i`.
     """
     raise NotImplementedError
 

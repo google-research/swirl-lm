@@ -5,6 +5,20 @@ solver_procedure: VARIABLE_DENSITY
 convection_scheme: CONVECTION_SCHEME_QUICK
 time_integration_scheme: TIME_SCHEME_CN_EXPLICIT_ITERATION
 use_3d_tf_tensor: true
+grid_params {
+  computation_shape {
+    dim_0: 1
+    dim_1: 1
+    dim_2: 1
+  }
+  length {
+    dim_0: 7
+    dim_1: 1.75
+    dim_2: 3.5
+  }
+  dt: 1e-2
+  kernel_size: 4
+}
 gravity_direction {
   dim_0: 0.0 dim_1: 0.0 dim_2: -1.0
 }

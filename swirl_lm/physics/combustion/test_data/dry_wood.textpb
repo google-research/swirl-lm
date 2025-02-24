@@ -3,6 +3,25 @@
 solver_procedure: VARIABLE_DENSITY
 convection_scheme: CONVECTION_SCHEME_QUICK
 time_integration_scheme: TIME_SCHEME_CN_EXPLICIT_ITERATION
+grid_params {
+  computation_shape {
+    dim_0: 2
+    dim_1: 2
+    dim_2: 2
+  }
+  length {
+    dim_0: 8.0
+    dim_1: 8.0
+    dim_2: 8.0
+  }
+  grid_size {
+    dim_0: 256
+    dim_1: 256
+    dim_2: 16
+  }
+  halo_width: 2
+  dt: 0.1
+}
 p_thermal: 1.01325e5
 density: 1.2061764708
 thermodynamics {

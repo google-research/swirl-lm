@@ -35,6 +35,7 @@ from swirl_lm.equations.source_function import scalar_generic
 from swirl_lm.equations.source_function import total_energy
 from swirl_lm.numerics import diffusion
 from swirl_lm.numerics import numerics_pb2
+from swirl_lm.physics.atmosphere import microphysics_utils
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import thermodynamics_pb2
 from swirl_lm.utility import common_ops
@@ -81,6 +82,11 @@ class Scalars(object):
     self.thermodynamics = thermodynamics_manager.thermodynamics_factory(
         self._params)
 
+    self.microphysics = None
+    if self._params.microphysics is not None:
+      self.microphysics = microphysics_utils.select_microphysics(
+          self._params, self.thermodynamics)
+
     self._bc = {
         varname: bc_val
         for varname, bc_val in self._params.bc.items()
@@ -91,23 +97,33 @@ class Scalars(object):
         sc.name: None for sc in self._params.scalars if sc.solve_scalar
     }
 
-    self._ib = ib if ib is not None else (
-        immersed_boundary_method.immersed_boundary_method_factory(self._params))
+    self._ib = ib
+    if self._ib is None:
+      self._ib = immersed_boundary_method.immersed_boundary_method_factory(
+          self._params
+      )
 
     self._dbg = dbg
 
     # Get functions that computes terms in tranport equations for all scalars.
     self._scalar_model = {}
     for scalar_name in self._params.transport_scalars_names:
-      args = (self._kernel_op, self._params, scalar_name, self.thermodynamics)
+      common_args = (
+          self._kernel_op,
+          self._params,
+          scalar_name,
+          self.thermodynamics,
+      )
       if scalar_name in potential_temperature.POTENTIAL_TEMPERATURE_VARNAME:
-        scalar_model = potential_temperature.PotentialTemperature(*args)
+        scalar_model = potential_temperature.PotentialTemperature(
+            *common_args, self.microphysics
+        )
       elif scalar_name in humidity.HUMIDITY_VARNAME:
-        scalar_model = humidity.Humidity(*args)
+        scalar_model = humidity.Humidity(*common_args, self.microphysics)
       elif scalar_name == 'e_t':
-        scalar_model = total_energy.TotalEnergy(*args)
+        scalar_model = total_energy.TotalEnergy(*common_args, self.microphysics)
       else:
-        scalar_model = scalar_generic.ScalarGeneric(*args)
+        scalar_model = scalar_generic.ScalarGeneric(*common_args)
       self._scalar_model[scalar_name] = scalar_model
 
   @tf.function

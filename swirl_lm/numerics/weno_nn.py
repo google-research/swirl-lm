@@ -162,39 +162,11 @@ class WenoNN:
           self._mlp_network[f'RationalLayer_{i}']['p_coeffs'],
           self._mlp_network[f'RationalLayer_{i}']['q_coeffs'],
       )
-    elif self._act_fun_name == 'GeGLU':
-      hidden_out = self._geglu(x, self._mlp_network[f'GeGLU_{i}'])
     else:
       raise NotImplementedError(
           f'Activation function: {self._act_fun_name} is not supported.'
       )
     return hidden_out
-
-  def _geglu(
-      self,
-      inputs: tf.Tensor,
-      params: dict[str, dict[str, tf.Tensor]],
-      approximate: bool = True,
-  ) -> tf.Tensor:
-    """Calculates the GeGLU activation function.
-
-    Args:
-      inputs: Input to the activation function.
-      params: Parameters of the GeGLU function. Format is same as the standard
-        dense layer of the FLAX model: {'Dense_0': {'bias': (b0,), 'kernel':
-        (k0_0, k0_1)}.
-      approximate: Whether to enable approximation in the `gelu` function.
-
-    Returns:
-      GeGLU function evaluated on the inputs.
-    """
-    output_dim = inputs.shape[-1]
-    y = (
-        tf.einsum('...ji,...kj->...ki', params['Dense_0']['kernel'], inputs)
-        + params['Dense_0']['bias']
-    )
-    x, gate = y[..., :output_dim], y[..., output_dim:]
-    return x * tf.nn.gelu(gate, approximate=approximate)
 
   def _rational_function(
       self,

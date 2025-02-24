@@ -14,7 +14,7 @@
 
 """The manager of thermodyanmics models."""
 
-from typing import Optional, Tuple
+from typing import Optional
 
 import numpy as np
 from swirl_lm.base import parameters as parameters_lib
@@ -81,7 +81,7 @@ class ThermodynamicsManager(object):
       states: FlowFieldMap,
       additional_states: FlowFieldMap,
       states_0: Optional[FlowFieldMap] = None,
-  ) -> Tuple[FlowFieldVal, FlowFieldVal]:
+  ) -> tuple[tf.Tensor, tf.Tensor]:
     """Updates the density based on field values provided.
 
     Args:

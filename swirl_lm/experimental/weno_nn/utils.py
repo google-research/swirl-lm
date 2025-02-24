@@ -49,7 +49,6 @@ _ACTIVATION_FUNCTIONS = {
 
 # List of activation functions that are trainable and different at each layer.
 _UNSHARED_ACTIVATION_FUNCTIONS = {
-    'GeGLU': nn.GeGLU,
     'rational_act_fun': rational_networks.RationalLayer,
     'unshared_rational_act_fun': rational_networks.UnsharedRationalLayer,
 }
@@ -129,7 +128,6 @@ def get_act_func(
         'swish',
         'rational_act_fun',
         'unshared_rational_act_fun',
-        'GeGLU',
     ]
 ) -> Callable[[jax.Array], jax.Array] | str | None:
   """Returns the activation function for the given function name.

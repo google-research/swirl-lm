@@ -62,6 +62,11 @@ the same variable multiple times during a cycle or even a step (e.g., inside a
 function called from a tf.while loop), but only the last value will be saved to
 disk.
 
+If a simulation exits early by reaching a non-finite state, then the debug
+variables in the state prior to the non-finite state will be all zeros. This is
+because the values for that step will have been overwritten with the values
+stored in computing the non-finite state, so zeros are output instead.
+
 Unlike normal simulation output, debug output can contain non-finite values. For
 example, if an intermediate value has NaNs in the halo, is output as debug,
 and the halo later gets overwritten, the debug output will contain these NaNs.
@@ -140,6 +145,23 @@ def get_vars(
   @tf.function
   def _f():
     return dict(_VARS)
+
+  debug_vars = strategy.run(_f)
+  duplicate_names = set(debug_vars) & set(disallowed_var_names)
+  assert (
+      not duplicate_names
+  ), f'Debug variables {duplicate_names} conflict with other variables.'
+  return debug_vars
+
+
+def zeros_like_vars(
+    strategy: tf.distribute.TPUStrategy,
+    disallowed_var_names: Iterable[str]
+) -> dict[str, tf.distribute.DistributedValues]:
+  """Like get_vars() but returns zeros."""
+  @tf.function
+  def _f():
+    return {k: tf.zeros_like(v) for k, v in _VARS.items()}
 
   debug_vars = strategy.run(_f)
   duplicate_names = set(debug_vars) & set(disallowed_var_names)

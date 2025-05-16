@@ -376,11 +376,16 @@ def init_ghost_point_helper_vars(
   Raises:
     NotImplementedError: If the `dim` through which the surface cuts is not 2,
       in which case the computation of the surface normals is not yet
-      implemented.
+      implemented, or if a stretched mesh is used.
   """
   if dim != 2:
     raise NotImplementedError(
         f'Surface must be in `dim` = 2, {dim} not yet supported'
+    )
+
+  if any(params.use_stretched_grid[dim_xyz] for dim_xyz in (0, 1, 2)):
+    raise NotImplementedError(
+        'Ghost point method cannot be used with stretched grids yet!'
     )
 
   kept_dims = [0, 1, 2]
@@ -457,9 +462,7 @@ def init_ghost_point_helper_vars(
       'CONSTANT',
   )
 
-  # Only take the first layer of ghost points just beneath the IB. Because
-  # _SEARCH_DIST > dz, we may have two ghost point layers, so we multiply with
-  # the ib_boundary to mask those out.
+  # Only take the first layer of ghost points just beneath the IB.
   # Note: Because `gp_mask` was obtained from `distance_along_normal` which DOES
   # contain halos, `gp_mask` will contain halos as well!
   gp_mask = tf.nest.map_structure(
@@ -668,9 +671,7 @@ def init_ghost_point_helper_vars(
     # multiplying their distance to the image point with zero, while all grid
     # nodes in the solid are masked with 1 (i.e., our
     # `fluid_corner_point_mask`).
-    node_dist = tf.nest.map_structure(
-        tf.math.multiply, node_dist, fluid_corner_point_mask
-    )
+    node_dist = tf.math.multiply(node_dist, fluid_corner_point_mask)
 
     # Flag all image points that have less than 8 enclosing grid nodes
     # in the FLUID domain. If all enclosing grid nodes for a given image point
@@ -781,19 +782,9 @@ def init_ghost_point_helper_vars(
   output.update({f'w_neumann_2x{n}': w_n_2x[n] for n in range(8)})
   output.update(
       {
-          'nx': unit_normals[..., 0],
-          'ny': unit_normals[..., 1],
-          'nz': unit_normals[..., 2],
           'ijk_gp': ijk_gp,
           'ib_norm_dist': common_ops.gather(distance_along_normal, ijk_gp),
-          'dist_pv': distance_along_normal,
           'gp_mask': gp_mask,
-          'x_gp': x_gp_ip['x_gp'],
-          'y_gp': y_gp_ip['x_gp'],
-          'z_gp': z_gp_ip['x_gp'],
-          'x_ip': x_gp_ip['x_ip'],
-          'y_ip': y_gp_ip['x_ip'],
-          'z_ip': z_gp_ip['x_ip'],
           'idx_p': p,
           'idx_q': q,
           'idx_s': s,
@@ -802,6 +793,22 @@ def init_ghost_point_helper_vars(
           'idx_s2': s2,
       }
   )
+
+  if params.dbg:
+    output.update(
+      {
+          'nx': unit_normals[..., 0],
+          'ny': unit_normals[..., 1],
+          'nz': unit_normals[..., 2],
+          'dist_pv': distance_along_normal,
+          'x_gp': x_gp_ip['x_gp'],
+          'y_gp': y_gp_ip['x_gp'],
+          'z_gp': z_gp_ip['x_gp'],
+          'x_ip': x_gp_ip['x_ip'],
+          'y_ip': y_gp_ip['x_ip'],
+          'z_ip': z_gp_ip['x_ip'],
+      }
+    )
 
   return output
 

@@ -692,6 +692,46 @@ class GridParametrization(object):
           self.global_xyz[dim], coord, core_n, core_n
       )
 
+  def grid_local_with_coord(
+      self,
+      coord: tuple[tf.Tensor | int, tf.Tensor | int, tf.Tensor | int],
+      dim: int,
+      include_halo: bool = True,
+  ) -> tf.Tensor:
+    """The local grid in `dim`.
+
+    Args:
+      coord: The coordinates of the current core in the partition.
+      dim: The dimension of the grid.
+      include_halo: An option of whether to include coordinates of halos in the
+        returned grid.
+
+    Returns:
+      The grid in dim `dim` local to `replica_id`.
+
+    Raises:
+      AssertionError: If the full grid includes additional boundary points, in
+        which case the full grid can not be evenly distributed across all cores
+        without halo.
+    """
+    n_local = (self.core_nx, self.core_ny, self.core_nz)[dim]
+    i_core = coord[dim]
+
+    if include_halo:
+      grid_full = self.global_xyz_with_halos[dim]
+      halo_multiplier = tf.constant(1, dtype=tf.int32)
+    else:
+      grid_full = (self.x, self.y, self.z)[dim]
+      halo_multiplier = tf.constant(0, dtype=tf.int32)
+
+    indices = tf.cast(tf.linspace(
+        i_core * n_local,
+        (i_core + 1) * n_local + 2 * halo_multiplier * self.halo_width - 1,
+        n_local + 2 * halo_multiplier * self.halo_width,
+    ), dtype=tf.int32)
+
+    return tf.gather(grid_full, indices)
+
   def x_local(
       self,
       replica_id: tf.Tensor,

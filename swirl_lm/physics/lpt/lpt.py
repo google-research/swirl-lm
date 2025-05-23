@@ -131,7 +131,7 @@ class LPT:
     )
     self.core_spacings = tf.convert_to_tensor(
         (
-            (len(params.x) - 1.0) / params.cz
+            (len(params.z) - 1.0) / params.cz
             if params.use_stretched_grid[2]
             else params.lz / params.cz,
             (len(params.x) - 1.0) / params.cx

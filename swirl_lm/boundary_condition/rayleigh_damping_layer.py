@@ -150,8 +150,10 @@ def target_value_mean_dims_by_var(
 
 
 def klemp_lilly_relaxation_coeff_fn(
-    dt: float,
     orientation: Iterable[_Orientation],
+    x0: tf.Tensor,
+    y0: tf.Tensor,
+    z0: tf.Tensor
 ) -> _InitFn:
   """Generates a function that computes 'sponge_beta' (Klemp & Lilly, 1978).
 
@@ -160,12 +162,14 @@ def klemp_lilly_relaxation_coeff_fn(
   beta = 𝛼ₘₐₓ sin² (π/2 (h - h_d) / (hₜ - h_d)), if h > h_d.
 
   Args:
-    dt: The time step size.
     orientation: A sequence of named variables that stores the orientation
       information of the sponge layer. Each orientation element includes a `dim`
       field that indicates the dimension of the sponge layer, and a `fraction`
       field that specifies the fraction that the sponge layer is taking at the
       higher end of `dim`.
+    x0: Coordinate of face 0 along the x dimension.
+    y0: Coordinate of face 0 along the y dimension.
+    z0: Coordinate of face 0 along the z dimension.
 
   Returns:
     The `sponge_beta` coefficient following Klemp & Lilly, 1978.
@@ -194,12 +198,15 @@ def klemp_lilly_relaxation_coeff_fn(
       if dim == 0:
         grid = xx
         h_t = lx
+        c0 = x0
       elif dim == 1:
         grid = yy
         h_t = ly
+        c0 = y0
       elif dim == 2:
         grid = zz
         h_t = lz
+        c0 = z0
       else:
         raise ValueError(
             'Dimension has to be one of 0, 1, and 2. {} is given.'.format(dim))
@@ -209,19 +216,19 @@ def klemp_lilly_relaxation_coeff_fn(
             'The fraction of sponge layer should be in (0, 1). {} is given in '
             'dim {}.'.format(sponge.fraction, dim))
 
-      a_max = np.power(sponge.a_coeff * dt, -1)
+      a_max = np.reciprocal(sponge.a_coeff)
 
       # Set the default face to the higher end for backward compatibility.
       face = sponge.face if sponge.HasField('face') else 1
 
       if face == 1:
-        h_d = (1.0 - sponge.fraction) * h_t
+        h_d = (1.0 - sponge.fraction) * h_t + c0
         buf = tf.compat.v1.where(
             tf.less_equal(grid, h_d), tf.zeros_like(grid),
             a_max * tf.math.pow(
                 tf.math.sin(np.pi / 2.0 * (grid - h_d) / (h_t - h_d)), 2))
       elif face == 0:
-        h_d = sponge.fraction * h_t
+        h_d = sponge.fraction * h_t + c0
         buf = tf.compat.v1.where(
             tf.greater_equal(grid, h_d), tf.zeros_like(grid),
             a_max *
@@ -238,11 +245,13 @@ def klemp_lilly_relaxation_coeff_fn(
 
 
 def klemp_lilly_relaxation_coeff_fns_for_sponges(
-    dt: float,
     sponge_infos: _RayleighDampingLayerSeq,
+    x0: tf.Tensor,
+    y0: tf.Tensor,
+    z0: tf.Tensor
 ) -> Dict[str, _InitFn]:
   return {_get_beta_name_from_sponge_info(sponge_info):
-          klemp_lilly_relaxation_coeff_fn(dt, sponge_info.orientation)
+          klemp_lilly_relaxation_coeff_fn(sponge_info.orientation, x0, y0, z0)
           for sponge_info in sponge_infos}
 
 
@@ -279,6 +288,7 @@ class RayleighDampingLayer(object):
       replicas: np.ndarray,
       field: FlowFieldVal,
       beta: FlowFieldVal,
+      dt: FlowFieldVal,
       target_value_mean_dims: Sequence[int],
       target_state: Optional[Union[float, FlowFieldVal]] = None,
   ) -> FlowFieldVal:
@@ -289,6 +299,7 @@ class RayleighDampingLayer(object):
         coordinates to replica id numbers.
       field: The value of the variable to which the sponge forcing is applied.
       beta: The coefficients to be applied as the sponge.
+      dt: The time step size.
       target_value_mean_dims: Dimensions over which to compute the target value
         mean.
       target_state: An optional reference state from which to compute the
@@ -303,12 +314,7 @@ class RayleighDampingLayer(object):
       target_value = common_ops.global_mean(
           field, replicas, axis=target_value_mean_dims)
 
-    if isinstance(target_value, float):
-      return tf.nest.map_structure(lambda b, f: b * (target_value - f), beta,
-                                   field)
-    else:
-      return tf.nest.map_structure(lambda b, f, t: b * (t - f), beta, field,
-                                   target_value)
+    return beta / dt * (target_value - field)
 
   @property
   def varnames(self) -> Sequence[str]:
@@ -390,7 +396,7 @@ class RayleighDampingLayer(object):
       ValueError: if 'sponge_beta' or `target_state_name` is not present in
       `additional_states`.
     """
-    del kernel_op, replica_id, params
+    del kernel_op, replica_id
 
     beta_names_not_in_additional_states = (
         set(self._beta_name_by_var.values()) - set(additional_states.keys()))
@@ -403,7 +409,7 @@ class RayleighDampingLayer(object):
         value: FlowFieldVal,
     ) -> FlowFieldVal:
       """Adds two states elementwise."""
-      return tf.nest.map_structure(tf.math.add, additional_states[name], value)
+      return additional_states[name] + value
 
     additional_states_updated = {}
     additional_states_updated.update(additional_states)
@@ -423,15 +429,15 @@ class RayleighDampingLayer(object):
         target_val = additional_states_updated[var_info.target_state_name]
       elif var_info.HasField('target_value'):
         target_val = var_info.target_value
+
       sponge_force = self._get_sponge_force(
           replicas, states[varname],
           additional_states[self._beta_name_by_var[varname]],
+          tf.convert_to_tensor(params.dt),
           self._target_value_mean_dims_by_var[varname],
           target_val)
       if not self._is_primitive[varname]:
-        sponge_force = tf.nest.map_structure(
-            tf.math.multiply, states['rho'], sponge_force
-        )
+        sponge_force = states['rho'] * sponge_force
       additional_states_updated.update(
           {sponge_name: add_to_additional_states(sponge_name, sponge_force)})
 

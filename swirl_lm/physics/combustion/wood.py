@@ -59,10 +59,12 @@ References:
 """
 
 import functools
+import logging
 from typing import Callable, Optional, Sequence
 
 import numpy as np
 from swirl_lm.base import parameters as parameters_lib
+from swirl_lm.communication import halo_exchange
 from swirl_lm.numerics import time_integration
 from swirl_lm.physics.combustion import wood_pb2
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
@@ -132,6 +134,8 @@ def _bound_scalar(
 
 
 def _reaction_rate(
+    replica_id: tf.Tensor,
+    replicas: np.ndarray,
     rho_f: tf.Tensor,
     rho_g: tf.Tensor,
     y_o: tf.Tensor,
@@ -142,9 +146,14 @@ def _reaction_rate(
     c_f: float,
     t_0_ivf: float,
     t_1_ivf: float,
+    periodic_dims: list[bool],
+    halo_width: int,
+    w_axis: float = 0.15,
+    w_center: float = 0.95,
     turbulent_combustion_model: Optional[
         turbulent_combustion_generic.TurbulentCombustionGeneric
     ] = None,
+    apply_temperature_filter: bool = True,
 ) -> tf.Tensor:
   """Computes the reation rate of the wood combustion.
 
@@ -152,6 +161,8 @@ def _reaction_rate(
     Ff = cF ϱf ϱo σcm 𝚿s 𝛌of / (ϱref sₓ²).
 
   Args:
+    replica_id: The index of the current TPU replica.
+    replicas: A numpy array that maps grid coordinates to replica id numbers.
     rho_f: The bulk density of the fuel in a unit volume, kg/m³.
     rho_g: The density of the surrounding gas, kg/m³.
     y_o: The mass fraction of the oxidizer.
@@ -162,8 +173,16 @@ def _reaction_rate(
     c_f: An empirical scaling coefficient in local fire reaction rates.
     t_0_ivf: Start temperature for the ramp up.
     t_1_ivf: End temperature for the ramp up.
+    periodic_dims: A list of booleans indicating whether the variable `psi` is
+      periodic along each dimension.
+    halo_width: The width of the halo.
+    w_axis: The fraction of the weights to be applied along the axes.
+    w_center: The fraction of the weights to be applied at the center in the
+      3 x 3 stencil.
     turbulent_combustion_model: The turbulence closure for the reaction source
       term.
+    apply_temperature_filter: Whether to apply the temperature filter to the
+      temperature field before computing the reaction source term.
 
   Returns:
     The reaction rate due to wood combustion.
@@ -187,6 +206,16 @@ def _reaction_rate(
 
   rho_f = _bound_scalar(rho_f, minval=0.0)
   y_o = _bound_scalar(y_o, minval=0.0, maxval=1.0)
+  if apply_temperature_filter:
+    temperature = dim12_filter(
+        replica_id,
+        replicas,
+        temperature,
+        periodic_dims,
+        halo_width,
+        w_axis,
+        w_center,
+    )
 
   src = (
       c_f
@@ -359,6 +388,65 @@ def _compute_mid_state(
   )
 
 
+def dim12_filter(
+    replica_id: tf.Tensor,
+    replicas: np.ndarray,
+    psi: tf.Tensor,
+    periodic_dims: list[bool],
+    halo_width: int,
+    w_axis: float = 0.15,
+    w_center: float = 0.95,
+) -> tf.Tensor:
+  """Applies a 2D filter along dimensions 1 and 2 for the variable `psi`.
+
+  Args:
+    replica_id: The index of the current TPU replica.
+    replicas: A numpy array that maps grid coordinates to replica id numbers.
+    psi: The 3D variable `psi` to be filtered.
+    periodic_dims: A list of booleans indicating whether the variable `psi` is
+      periodic along each dimension.
+    halo_width: The width of the halo.
+    w_axis: The fraction of the weights to be applied along the axes.
+    w_center: The fraction of the weights to be applied at the center in the
+      3 x 3 stencil.
+
+  Returns:
+    The filtered `psi`.
+  """
+  logging.info('Temperature filter: w_axis: %s, w_center: %s', w_axis, w_center)
+  halo_dims = (0, 1, 2)
+  replica_dims = (0, 1, 2)
+  bc = [
+      [(halo_exchange.BCType.NEUMANN, 0.0)] * 2,
+  ] * 3
+  psi = halo_exchange.inplace_halo_exchange(
+      psi,
+      halo_dims,
+      replica_id,
+      replicas,
+      replica_dims,
+      periodic_dims,
+      bc,
+      halo_width,
+  )
+  w_corner = (1 - w_center) * (1 - w_axis) * 0.25
+  w_axis = (1 - w_center) * w_axis * 0.25
+  filters = tf.constant(
+      [
+          [w_corner, w_axis, w_corner],
+          [w_axis, w_center, w_axis],
+          [w_corner, w_axis, w_corner],
+      ],
+      dtype=tf.float32,
+  )[..., tf.newaxis, tf.newaxis]
+  # Here we assume that the 0th dimension of `psi` is the batch dimension, which
+  # corresponds to the height of the 3D domain.
+  inputs = psi[..., tf.newaxis]
+  return tf.nn.conv2d(inputs, filters, strides=[1, 1, 1, 1], padding='SAME')[
+      ..., 0
+  ]
+
+
 class Wood(object):
   """A library of wood combustion."""
 
@@ -366,15 +454,20 @@ class Wood(object):
       self,
       model_params: wood_pb2.Wood,
       thermodynamics_model: thermodynamics_manager.ThermodynamicsManager,
+      swirl_lm_params: parameters_lib.SwirlLMParameters,
   ):
     """Initializes the wood combustion library.
 
     Args:
       model_params: The parameters for the wood combustion model.
       thermodynamics_model: The thermodynamics model.
+      swirl_lm_params: The parameters for the Swirl-LM simulation.
     """
     self.model_params = model_params
     params = self.model_params
+    assert swirl_lm_params.use_3d_tf_tensor, (
+        '3D TF tensor is required to apply the temperature filter.'
+    )
 
     self.s_b = params.s_b
     self.s_x = params.s_x
@@ -391,9 +484,20 @@ class Wood(object):
         params.reaction_integration_scheme)
 
     self.thermodynamics_model = thermodynamics_model
+
     self.reaction_rate = functools.partial(
-        _reaction_rate, s_b=self.s_b, s_x=self.s_x, c_f=self.c_f,
-        t_0_ivf=params.t_0_ivf, t_1_ivf=params.t_1_ivf)
+        _reaction_rate,
+        s_b=self.s_b,
+        s_x=self.s_x,
+        c_f=self.c_f,
+        t_0_ivf=params.t_0_ivf,
+        t_1_ivf=params.t_1_ivf,
+        periodic_dims=swirl_lm_params.periodic_dims,
+        halo_width=swirl_lm_params.halo_width,
+        w_axis=params.w_axis,
+        w_center=params.w_center,
+        apply_temperature_filter=params.apply_temperature_filter,
+    )
 
     self.combustion_model_option = params.WhichOneof(
         'combustion_model_option'
@@ -624,10 +728,16 @@ class Wood(object):
         params: grid_parametrization.GridParametrization,
     ) -> FlowFieldMap:
       """Updates 'rho_f', 'T_s', 'src_rho', 'src_T', and 'src_Y_O'."""
-      del kernel_op, replica_id, replicas
+      del kernel_op
 
       t_far_field = self._get_far_field_temperature(additional_states)
       combustion_states = dict(states)
+
+      def reaction_rate(rho_f, rho, y_o, tke, t_s):
+        """Computes the reaction rate."""
+        return self.reaction_rate(
+            replica_id, replicas, rho_f, rho, y_o, tke, t_s
+        )
 
       def rhs_t_g_fn(t_s, t_g, theta_val, f_f, rho_f, rho, t_far_field):
         """Computes the mass-specific source term for gas phase temperature."""
@@ -644,9 +754,7 @@ class Wood(object):
         rho = self.thermodynamics_model.update_thermal_density(
             combustion_states, additional_states
         )
-        f_f = tf.nest.map_structure(
-            self.reaction_rate, rho_f, rho, y_o, tke, t_s
-        )
+        f_f = reaction_rate(rho_f, rho, y_o, tke, t_s)
         theta_val = _theta(rho_f, rho_f_init)
 
         rhs_rho_f = tf.nest.map_structure(_src_fuel, f_f)
@@ -823,10 +931,16 @@ class Wood(object):
         params: grid_parametrization.GridParametrization,
     ) -> FlowFieldMap:
       """Updates wood combustion associated states."""
-      del kernel_op, replica_id, replicas
+      del kernel_op
 
       t_far_field = self._get_far_field_temperature(additional_states)
       combustion_states = dict(states)
+
+      def reaction_rate(rho_f, rho, y_o, tke, t_s):
+        """Computes the reaction rate of the fuel."""
+        return self.reaction_rate(
+            replica_id, replicas, rho_f, rho, y_o, tke, t_s
+        )
 
       def rhs_t_g_fn(t_s, t_g, theta_val, f_f, rho_f, rho, t_far_field):
         """Compute sthe mass-specific source term for gas phase temperature."""
@@ -844,9 +958,7 @@ class Wood(object):
         rho = self.thermodynamics_model.update_thermal_density(
             combustion_states, additional_states
         )
-        f_f = tf.nest.map_structure(
-            self.reaction_rate, rho_f, rho, y_o, tke, t_s
-        )
+        f_f = reaction_rate(rho_f, rho, y_o, tke, t_s)
         if evaporation_fn is None:
           evap_buf = tf.nest.map_structure(
               functools.partial(
@@ -1037,7 +1149,23 @@ class Wood(object):
         elif key == 'phi_w':
           new_value = scalars_new[5]
         elif key == 'src_q_t':
-          new_value = f_w_mid
+          # The source term for the total humidity is composed of the
+          # evaporation of fuel moisture and the reaction product of the wood
+          # combustion. The Chemical composition of the reaction product follows
+          # C6H10O5 + 6O2 = 6CO2 + 5H2O
+          # Ref: Cunningham, P., & Reeder, M. J. (2009). Severe convective
+          # storms initiated by intense wildfires: Numerical simulations of
+          # pyro‐convection and pyro‐tornadogenesis. Geophysical Research
+          # Letters, 36(12). https://doi.org/10.1029/2009gl039262
+          src_p = tf.nest.map_structure(
+              lambda f_f_i: (_N_F + _N_O) * f_f_i, f_f_mid
+          )
+          src_p = _localize_by_fuel(rho_f_mid, src_p)
+          # Note that the molecular weight of CO2 and H2O are 44 and 18,
+          # respectively.
+          w_tot = 6 * 44.0 + 5 * 18.0
+          f_w_comb = 5 * 18.0 / w_tot * src_p
+          new_value = tf.nest.map_structure(tf.math.add, f_w_comb, f_w_mid)
 
         if new_value is not None:
           updated_additional_states.update({key: new_value})
@@ -1065,4 +1193,4 @@ def wood_combustion_factory(config: parameters_lib.SwirlLMParameters) -> Wood:
   thermodynamics_model = thermodynamics_manager.thermodynamics_factory(
       config)
 
-  return Wood(config.combustion.wood, thermodynamics_model)
+  return Wood(config.combustion.wood, thermodynamics_model, config)

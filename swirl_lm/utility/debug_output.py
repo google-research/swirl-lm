@@ -129,6 +129,10 @@ def dump_value(name: str, x: types.FlowFieldVal) -> None:
   _VARS[var_name].assign(x)
 
 
+def is_debug_enabled(name: str) -> bool:
+  return name in _VARS
+
+
 def get_vars(
     strategy: tf.distribute.TPUStrategy,
     disallowed_var_names: Iterable[str]

@@ -19,7 +19,6 @@ from os import path as osp
 
 from absl import app
 from absl import flags
-from flax.training import orbax_utils
 from flax.training import train_state
 import jax
 import jax.numpy as jnp
@@ -127,9 +126,8 @@ def main(argv):
   orbax_checkpointer = checkpoint.PyTreeCheckpointer()
   bundle_ckpt = {"model": state, "config": config, "losses": dict_losses}
 
-  save_args = orbax_utils.save_args_from_target(bundle_ckpt)
   orbax_checkpointer.save(
-      workdir + "/checkpoints", bundle_ckpt, save_args=save_args
+      workdir + "/checkpoints", bundle_ckpt
   )
 
 

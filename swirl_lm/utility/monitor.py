@@ -78,16 +78,16 @@ class Monitor(object):
     # If time averaging is enabled, the analytics quantities are averaged over
     # time.
     self._time_averaging = False
-    self._averaging_start_step = 0
-    self._averaging_end_step = None
+    self._averaging_start_seconds = 0
+    self._averaging_end_seconds = None
     if self._monitor_spec.HasField('time_averaging'):
       self._time_averaging = True
       if self._monitor_spec.time_averaging.HasField('start_time_seconds'):
-        start_time_secs = self._monitor_spec.time_averaging.start_time_seconds
-        self._averaging_start_step = int(start_time_secs // params.dt)
+        self._averaging_start_seconds = (
+            self._monitor_spec.time_averaging.start_time_seconds)
       if self._monitor_spec.time_averaging.HasField('end_time_seconds'):
-        end_time_secs = self._monitor_spec.time_averaging.end_time_seconds
-        self._averaging_end_step = int(end_time_secs // params.dt)
+        self._averaging_end_seconds = (
+            self._monitor_spec.time_averaging.end_time_seconds)
 
     # Boundary conditions.
     self._homogeneous_dims = params.periodic_dims
@@ -182,42 +182,67 @@ class Monitor(object):
       self,
       states: FlowFieldMap,
       replicas: np.ndarray,
-      step: tf.Tensor = None,
+      dt_and_simulation_time: tuple[tf.Tensor, tf.Tensor] | None = None,
   ) -> MonitorDataType:  # pytype: disable=annotation-type-mismatch
     """Computes and stores analytics for the given calculation module.
 
     Args:
       states: A Dict mapping field names to their local subgrid representation.
       replicas: A numpy array that maps grid coordinates to replica id numbers.
-      step: A tf.Tensor holding the current simulation step. This is necessary
-        only if time averaging is required for the analytics being computed.
+      dt_and_simulation_time: Time step in seconds for the current step and
+        the simulated seconds since the beginning of the simulation.
 
     Returns:
       A dict containing all the updated monitor variables for the given module.
     """
-
     def should_time_filter():
       """Checks that the step should be included in the time average."""
-      if not self._time_averaging or step is None:
+      if not self._time_averaging or dt_and_simulation_time is None:
         return tf.constant(False)
-      check_lower_bound = step > self._averaging_start_step
+      _, simulation_time = dt_and_simulation_time
+      check_lower_bound = simulation_time >= self._averaging_start_seconds
       check_upper_bound = (
-          self._averaging_end_step is None or step <= self._averaging_end_step)
+          self._averaging_end_seconds is None or
+          simulation_time <= self._averaging_end_seconds)
       return tf.math.logical_and(check_lower_bound, check_upper_bound)
 
     def apply_time_filter(
         statistic: Union[tf.Tensor, Sequence[tf.Tensor]],
-        prev_stat: Union[tf.Tensor, Sequence[tf.Tensor]]) -> tf.Tensor:
-      """Applies the time filter to the analytics value."""
-      if step is None:
+        prev_stat: Union[tf.Tensor, Sequence[tf.Tensor]]
+    ) -> Union[tf.Tensor, Sequence[tf.Tensor]]:
+      """Applies the time filter to the analytics value.
+
+      The time filter is a time weighted average of the statistic:
+
+        avg_i = sum(statistic_i * dt_i) / time_{i+1}
+
+      and
+
+        time_i = sum(dt_j for j <= i)
+
+      We use time_{i+1} instead of time_i, i.e., we assume the value
+      at time_i persists until time_{i+1} and the average reported at time_i
+      is actually the average at time_{i+1}.
+
+      Example:
+           t:  0s        1s                    5s
+          dt:  1s        4s                    3s
+        stat: 10         20                    30
+         avg: 10*1/1=10  (10*1+20*4)/(1+4)=18  (10*1+20*4+30*3)/(1+4+3)=22.5
+
+      Args:
+        statistic: Current value of the statistic.
+        prev_stat: Average at the last time step.
+
+      Returns:
+        The average at the current time step.
+      """
+      if dt_and_simulation_time is None:
         return statistic
-      valid_count = tf.cast(
-          step - self._averaging_start_step + 1, dtype=_TF_DTYPE)
-      statistic = tf.nest.map_structure(
-          lambda prev_stat, statistic: prev_stat +  # pylint:disable=g-long-lambda
-          (statistic - prev_stat) / valid_count,
-          prev_stat,
-          statistic)
+      dt, simulation_time = dt_and_simulation_time
+      valid_duration = tf.cast(
+          simulation_time - self._averaging_start_seconds + dt, dtype=_TF_DTYPE)
+      statistic = prev_stat + (statistic - prev_stat) * dt / valid_duration
       return statistic
 
     monitor_vars = {}
@@ -242,7 +267,7 @@ class Monitor(object):
     return monitor_vars
 
   def monitor_var_init_from_spec(self):
-    """Initializes the requested analytics from `MonitosSpec`."""
+    """Initializes the requested analytics from `MonitorSpec`."""
     vars_dict = {}
     for state_analytics in self._monitor_spec.state_analytics:
       for analytics_spec in state_analytics.analytics:
@@ -312,7 +337,7 @@ class Monitor(object):
 
     Args:
       varname: The name of the analytics to be updated.
-      value: The value of the anlaytical quantity.
+      value: The value of the analytical quantity.
 
     Raises:
       ValueError: If `varname` is not a requested analytical quantity or shape

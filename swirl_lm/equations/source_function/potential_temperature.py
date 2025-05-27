@@ -202,7 +202,7 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
       phi: types.FlowFieldVal,
       states: types.FlowFieldMap,
       additional_states: types.FlowFieldMap,
-  ) -> types.FlowFieldVal:
+  ) -> types.ScalarSource:
     """Computes all possible source terms in potential temperature equation.
 
     Args:
@@ -425,4 +425,4 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
       )
       source = tf.nest.map_structure(tf.math.add, source, precip)
 
-    return source
+    return types.ScalarSource(total=source)

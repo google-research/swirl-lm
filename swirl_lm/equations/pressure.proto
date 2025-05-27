@@ -19,7 +19,7 @@ package research.simulation;
 import "swirl_lm/linalg/poisson_solver.proto";
 
 // A library of parameters for solving the pressure equation.
-// Next id: 6
+// Next id: 7
 message Pressure {
   // The option and parameters of the Poisson solver.
   optional PoissonSolver solver = 1;
@@ -50,4 +50,20 @@ message Pressure {
   // if the option of this parameter is `false`. Default set to `true` for
   // backward compatibility.
   optional bool update_p_bc_by_flow = 5 [default = true];
+  // An option for the treatment of the pressure boundary condition at a wall
+  // in the presence of gravity.
+  enum VerticalBCTreatment {
+    // Original implementation where pressure and buoyancy at the wall only
+    // approximately balance. This is currently left as the default option so
+    // as not to break existing simulations. New simulations should prefer the
+    // option PRESSURE_BUOYANCY_BALANCING. Eventually, this option will be
+    // removed.
+    APPROXIMATE = 0;
+    // Option where the BC is computed precisely to ensure balance of the
+    // pressure and buoyancy force at the wall, to avoid spurious forcing of a
+    // fluid from equilibrium.
+    PRESSURE_BUOYANCY_BALANCING = 1;
+  }
+  optional VerticalBCTreatment vertical_bc_treatment = 6
+      [default = APPROXIMATE];
 }

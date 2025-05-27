@@ -249,7 +249,7 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
       phi: types.FlowFieldVal,
       states: types.FlowFieldMap,
       additional_states: types.FlowFieldMap,
-  ) -> types.FlowFieldVal:
+  ) -> types.ScalarSource:
     """Computes the source term in the total energy transport equation.
 
     Args:
@@ -376,4 +376,4 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
       )
       source = tf.nest.map_structure(tf.math.add, source, src_precipitation)
 
-    return source
+    return types.ScalarSource(total=source)

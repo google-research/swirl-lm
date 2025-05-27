@@ -59,9 +59,9 @@ class LookupCloudOptics(loader.DataLoaderBase, metaclass=abc.ABCMeta):
   # Liquid particle size upper bound for interpolation.
   radius_liq_upper: float
   # Factor for calculating interpolation for liquid particle.
-  radius_ice_lower: float
+  diameter_ice_lower: float
   # Ice particle size upper bound for interpolation.
-  radius_ice_upper: float
+  diameter_ice_upper: float
 
   # Lookup table for liquid extinction coefficient (`nbnd, nsize_liq`) in
   # m²/g.
@@ -103,8 +103,8 @@ class LookupCloudOptics(loader.DataLoaderBase, metaclass=abc.ABCMeta):
     data['n_size_ice'] = dims['nsize_ice']
     data['radius_liq_lower'] = tables['radliq_lwr']
     data['radius_liq_upper'] = tables['radliq_upr']
-    data['radius_ice_lower'] = tables['radice_lwr']
-    data['radius_ice_upper'] = tables['radice_upr']
+    data['diameter_ice_lower'] = tables['radice_lwr']
+    data['diameter_ice_upper'] = tables['radice_upr']
     data['ext_liq'] = tables['lut_extliq']
     data['ssa_liq'] = tables['lut_ssaliq']
     data['asy_liq'] = tables['lut_asyliq']

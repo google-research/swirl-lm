@@ -362,7 +362,7 @@ def delta_layer(
 
   # Initializing a global normalization constant if provided.
   if not global_norm:
-    re_norm = jnp.clip(jnp.maximum(delta_1, delta_2), a_min=eps)
+    re_norm = jnp.clip(jnp.maximum(delta_1, delta_2), min=eps)
   else:
     re_norm = global_norm
 

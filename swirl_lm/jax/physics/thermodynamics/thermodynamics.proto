@@ -1,0 +1,221 @@
+// Copyright 2021 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto2";
+
+package swirl_lm_jax;
+
+option java_multiple_files = true;
+
+// A library of thermodynamics in a fluid simulation.
+message Thermodynamics {
+  oneof thermodynamics_type {
+    LinearMixing linear_mixing = 1;
+    IdealGasLaw ideal_gas_law = 2;
+    Water water = 3;
+    ConstantDensity constant_density = 4;
+  }
+
+  // The model of the solver for density representation.
+  enum SolverMode {
+    // Unsupported solver mode.
+    UNKNOWN = 0;
+    // The mode for representing density in the low-Mach number variable density
+    // approach. In this approach, the thermodynamic density is used to compute
+    // all conservative variables, hence there's a strong coupling between the
+    // momentum and thermodynamical quantities.
+    LOW_MACH = 1;
+    // The mode for representing density in the anelastic approach. In this
+    // approach, the reference density (constant with respect to time), is used
+    // to compute all conservative variables. The thermodynamic density is used
+    // to compute the buoyancy term only, which conforms with the Boussinesq
+    // approximation.
+    ANELASTIC = 2;
+  }
+  optional SolverMode solver_mode = 5 [default = LOW_MACH];
+}
+
+// Parameters required by the linear mixing model.
+message LinearMixing {}
+
+// Parameters required by the ideal gas law.
+// Next id: 6
+message IdealGasLaw {
+  // The surface temperature, K. The default value is provided in the CLIMA
+  // design doc.
+  optional float t_s = 1 [default = 290.4];
+  // The height of the domain, in units of meter. Default value roughly
+  // represents of Earth’s midlatitude atmosphere.
+  optional float height = 2 [default = 8000.0];
+  // The temperature difference between the top and bottom of the domain, in
+  // units of K. Default value roughly represents of Earth’s midlatitude
+  // atmosphere.
+  optional float delta_t = 3 [default = 60.0];
+  // An indicator of whether constant potential temperature is used to define
+  // the reference/hydrostatic pressure. Do not define this field if the
+  // potential temperature in the simulation setup is not a constant.
+  optional float const_theta = 4;
+  // Isochoric specific heats of the dry air, J/kg/K.
+  // Sources for values below:
+  // 1. Pressel, Kyle G., Colleen M. Kaul, Tapio Schneider, Zhihong Tan, and
+  //    Siddhartha Mishra. 2015. “Large-Eddy Simulation in an Anelastic
+  //    Framework with Closed Water and Entropy Balances: LARGE-EDDY SIMULATION
+  //    FRAMEWORK.” Journal of Advances in Modeling Earth Systems 7 (3):
+  //    1425–56.
+  // 2. https://www.engineeringtoolbox.com/water-properties-d_1508.html.
+  optional float cv_d = 5 [default = 716.9];
+}
+
+// Parameters required by the constant density model.
+message ConstantDensity {}
+
+// A library for parameters required by the water thermodynamics.
+// Next id: 29
+message Water {
+  // The gas constant of water vapor, in unit of J/kg/K. The default value is
+  // computed based on treating the molecular weight of water as 0.018 kg/mol.
+  optional float r_v = 1 [default = 461.89];
+  // The reference temperature, in units of K. The default value is set at 0
+  // degree Celsius.
+  optional float t_0 = 2 [default = 273.0];
+  // The minimum temperature allowed, in units of K.
+  optional float t_min = 3 [default = 250.0];
+  // The temperature at freezing condition, in units of K.
+  optional float t_freeze = 4 [default = 273.15];
+  // The triple point temperature, in units of K. Source for the triple point
+  // values:
+  // engineeringtoolbox.com/critical-point-water-steam-d_834.html
+  optional float t_triple = 5 [default = 273.16];
+  // The nucleation temperature, in units of K. Default value obtained from
+  // CliMa:
+  // https://github.com/CliMA/CLIMAParameters.jl/blob/main/src/Planet/planet_parameters.jl
+  optional float t_icenuc = 25 [default = 233.0];
+  // The triple point pressure, in units of Pa.
+  optional float p_triple = 6 [default = 611.7];
+  // The reference pressure used in the definition of potential temperature, in
+  // units of Pa.
+  // TODO(sheide): Double check the consistency of this parameter with
+  // `p_thermal`.
+  optional float p00 = 27 [default = 1e5];
+  // The reference specific internal energy of water vapor, in units of J/kg.
+  // The default value derived based on CLIMA design doc, Eq. 2.11.
+  optional float e_int_v0 = 7 [default = 2.132e6];
+  // The reference specific internal energy of ice, in units of J/kg.
+  // The default value derived based on CLIMA design doc, Eq. 2.11.
+  optional float e_int_i0 = 8 [default = 3.34e5];
+  // The latent heat of vaporization, in unit of J/kg. The default value is
+  // taken from http://www.splung.com/content/sid/6/page/latentheat.
+  optional float lh_v0 = 9 [default = 2.258e6];
+  // The latent heat of fusion, in unit of J/kg. The default value is
+  // taken from http://www.splung.com/content/sid/6/page/latentheat.
+  optional float lh_s0 = 10 [default = 2.592e6];
+  // Specific heats of the dry air at constant volume, J/kg/K.
+  // Sources for values below:
+  // 1. Pressel, Kyle G., Colleen M. Kaul, Tapio Schneider, Zhihong Tan, and
+  //    Siddhartha Mishra. 2015. “Large-Eddy Simulation in an Anelastic
+  //    Framework with Closed Water and Entropy Balances: LARGE-EDDY SIMULATION
+  //    FRAMEWORK.” Journal of Advances in Modeling Earth Systems 7 (3):
+  //    1425–56.
+  // 2. https://www.engineeringtoolbox.com/water-properties-d_1508.html.
+  optional float cv_d = 11 [default = 716.9];
+  // Specific heats of water vapor at constant volume, J/kg/K.
+  optional float cv_v = 12 [default = 1397.11];
+  // Specific heats of liquid water at constant volume, J/kg/K.
+  optional float cv_l = 13 [default = 4217.4];
+  // Specific heats of ice at constant volume, J/kg/K.
+  optional float cv_i = 14 [default = 2050.0];
+  // Specific heats of water vapor at constant pressure, J/kg/K.
+  optional float cp_v = 15 [default = 1859.0];
+  // Specific heats of liquid water at constant pressure, J/kg/K.
+  optional float cp_l = 16 [default = 4219.9];
+  // Specific heats of ice at constant pressure, J/kg/K.
+  optional float cp_i = 17 [default = 2050.0];
+
+  // The maximum number of iterations for the secant solver for temperature.
+  optional int32 max_temperature_iterations = 18 [default = 101];
+  // The tolerance of the secant solver for temperature's function f.
+  optional float temperature_tolerance = 19 [default = 1e-2];
+  // The atol and rtol of temperature when running iterations with Newton
+  // method, recommended value is < 1e-6, down to machine precision 1e-7 (with
+  // tf.float32) or even totally turned off (by setting it to be non-positive),
+  // unless there is enough information about the `f` function.
+  //
+  // To be backward compatible, when unset it falls back to reuse
+  // `temperature_tolerance`, though it's not recommended.
+  optional float temperature_successive_tol = 24;
+
+  // The number of iterations for density computation.
+  optional int32 num_density_iterations = 20 [default = 1];
+
+  // Whether to use the fast thermodynamics solver (only applicable when the
+  // prognostic variables are theta_li and q_t; no effect otherwise.)
+  optional bool use_fast_thermodynamics = 28;
+
+  // An option of the reference state. This option assumes the hydrostatic
+  // temperature follows a tanh profile, as specified in CliMa design doc, p 50,
+  // Eq. 7.3.
+  // Next id: 4
+  message GeoStaticReferenceState {
+    // The surface temperature, in units of K. The default value is provided in
+    // the CliMa design doc.
+    optional float t_s = 1 [default = 290.4];
+    // The height of the domain, in units of meter. Default value roughly
+    // represents of Earth’s midlatitude atmosphere.
+    optional float height = 2 [default = 8000.0];
+    // The temperature difference between the top and bottom of the domain, in
+    // units of K. Default value roughly represents of Earth’s midlatitude
+    // atmosphere.
+    optional float delta_t = 3 [default = 60.0];
+  }
+
+  // An option of the reference state. This option assumes the potential
+  // temperature is a constant.
+  // Next id: 5
+  message ConstThetaReferenceState {
+    // An indicator of whether constant potential temperature is used to define
+    // the reference/hydrostatic pressure. Do not define this field if the
+    // potential temperature in the simulation setup is not a constant.
+    optional float theta = 1;
+    // The total humidity in the reference state.
+    optional float q_t = 2;
+    // The liquid humidity in the reference state.
+    optional float q_l = 3;
+    // The ice humidity in the reference state.
+    optional float q_i = 4;
+  }
+
+  // An option of the reference state. This option assumes the thermodynamic
+  // states are constants regardless of the height.
+  message ConstReferenceState {
+    // The reference temperature in units of K, e.g. the sea surface
+    // temperature, the far field temperature.
+    optional float t_ref = 1;
+  }
+
+  // An option of the reference state where the profiles for pressure and
+  // potential temperature is defined by the user. With this option, it is
+  // required that `p_ref` and `theta_ref` are provided as additional_states.
+  // If `q_t_init` is also in additional_states, it will be used to compute
+  // the reference state; otherwise it is assumed that q_t = 0 in the reference
+  // state. The recommended practice for setting these states is to enforce the
+  // hydrostatic balance condition for all thermodynamics variables.
+  message UserDefinedReferenceState {}
+
+  oneof reference_state {
+    GeoStaticReferenceState geo_static_reference_state = 21;
+    ConstThetaReferenceState const_theta_reference_state = 22;
+    ConstReferenceState const_reference_state = 23;
+    UserDefinedReferenceState user_defined_reference_state = 26;
+  }
+}

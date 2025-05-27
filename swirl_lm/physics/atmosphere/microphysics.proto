@@ -154,4 +154,9 @@ message OneMoment {
   // Terminal velocity parameterization options.
   optional TerminalVelocityModelType terminal_velocity_model_type = 7
       [default = TERMINAL_VELOCITY_POWER_LAW];
+
+  // The cut-off temperature for the microphysics source terms. Temperatures
+  // above this value will be treated as this value. Density will be adjusted
+  // accordingly to conform with the equation of state.
+  optional float temperature_max = 8;
 }

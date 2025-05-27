@@ -1,0 +1,10 @@
+syntax = "proto2";
+
+package swirl_lm_jax;
+
+// Marks strings in proto messages as paths to files, so they can be treated
+// as such (e.g., the path needs to point to an existing file). See file_io.py
+// for functions that work on Files.
+message File {
+  optional string path = 1;
+}

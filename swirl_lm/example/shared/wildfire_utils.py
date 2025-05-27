@@ -91,16 +91,30 @@ SlantLine = collections.namedtuple(
 
 # TODO(b/145002624): Replace flags with configs.
 _FUEL_DENSITY = flags.DEFINE_float(
-    'fuel_density', 1.0, 'The density of the fuel.', allow_override=True
+    'fuel_density', None, 'The density of the fuel.'
 )
 _FUEL_BED_HEIGHT = flags.DEFINE_float(
-    'fuel_bed_height', 1.0, 'The height of the fuel bed.', allow_override=True
+    'fuel_bed_height', None, 'The height of the fuel bed.'
 )
 _MOISTURE_DENSITY = flags.DEFINE_float(
     'moisture_density',
-    0.01,
+    None,
     'The bulk density of the moisture in a unit volume, in units of kg/m^3.',
-    allow_override=True,
+)
+_FUEL_LAYERS = flags.DEFINE_string(
+    'fuel_layers',
+    '',
+    'Defines the layers of fuel based on the fuel height, fuel density, and'
+    ' moisture content. The format of this string is a semicolon-separated list'
+    ' of comma-separated groups of floats, where the first float is the height,'
+    ' the second float is the fuel density, and the third float is the moisture'
+    ' content. The layers have to be specified in a bottom-to-top order. For'
+    ' example, "1.0,0.5,0.08;2.0,0.25,0.5;3.0,0.125,1.0" refers to a fuel bed'
+    ' with three layers, with the bottom layer having a height of 1.0 m, a fuel'
+    ' density of 0.5 kg/m^3, and a moisture content of 8%; the second layer'
+    ' having a height from 1 to 2 m, a fuel density of 0.25 kg/m^3, and a'
+    ' moisture content of 50%; and the top layer having a height from 2 to 3 m,'
+    ' a fuel density of 0.125 kg/m^3, and a moisture content of 100%.',
 )
 _C_D = flags.DEFINE_float(
     'c_d', 1.0, 'The drag coefficient of the vegetation.', allow_override=True
@@ -547,6 +561,28 @@ def _distance_to_arc(
   )
 
 
+def _parse_fuel_layers(info: str):
+  """Processes the string that specifies the fuel layer information."""
+  output = []
+  for float_group in info.split(';'):
+    # Explicitly split the inputs to raise an error if the input is not in the
+    # expected format.
+    # In the string, the first element is the fuel bed height, the second is
+    # the fuel density, and the third is the moisture content. The returned
+    # tuple is (fuel_bed_height, fuel_density, moisture_density), where
+    # moisture_density is computed as fuel_density * moisture_content.
+    n_0, n_1, n_2 = float_group.split(',')
+    fuel_bed_height = float(n_0)
+    fuel_density = float(n_1)
+    moisture_density = fuel_density * float(n_2)
+    output.append({
+        'height': fuel_bed_height,
+        'rho_f': fuel_density,
+        'rho_m': moisture_density,
+    })
+  return output
+
+
 class WildfireUtils:
   """A library of utilities that are useful for wildfire simulations."""
 
@@ -678,10 +714,33 @@ class WildfireUtils:
                       self.config.core_nz)
 
     # Parameters for the vegetation and ignition kernel.
-    self.fuel_density = _FUEL_DENSITY.value
-    self.fuel_bed_height = np.maximum(_FUEL_BED_HEIGHT.value, 0.0)
-    self.moisture_density = _MOISTURE_DENSITY.value
+    is_single_layer_fuel = (
+        _FUEL_BED_HEIGHT.value is not None
+        and _FUEL_DENSITY.value is not None
+        and _MOISTURE_DENSITY.value is not None
+    )
+    is_multi_layer_fuel = _FUEL_LAYERS.value is not None and _FUEL_LAYERS.value
 
+    assert is_single_layer_fuel != is_multi_layer_fuel, (
+        'Exactly one of (fuel_bed_height, fuel_density) and fuel_layers must be'
+        ' specified.'
+    )
+
+    if is_single_layer_fuel:
+      self.fuel_density = _FUEL_DENSITY.value
+      self.fuel_bed_height = np.maximum(_FUEL_BED_HEIGHT.value, 0.0)
+      self.moisture_density = _MOISTURE_DENSITY.value
+      self.fuel_layers = [{
+          'height': self.fuel_bed_height,
+          'rho_f': self.fuel_density,
+          'rho_m': self.moisture_density,
+      }]
+    else:  # is_multi_layer_fuel
+      self.fuel_layers = _parse_fuel_layers(_FUEL_LAYERS.value)
+
+    # TODO(wqing): For now we assume the ignition depth is the same as the
+    # bottom-layer fuel depth. We should make it configurable.
+    self.ignition_depth = self.fuel_layers[0]['height']
     self.ignition_option = _IGNITION_OPTION.value
     if self.ignition_option == IgnitionKernelType.BOX:
       self.ignition_x_low = _IGNITION_X_LOW.value
@@ -775,6 +834,41 @@ class WildfireUtils:
           self.t_init * tf.ones_like(xx, dtype=_TF_DTYPE))
     else:
       self.init_fn_t = temperature_init_fn(self.config, self.t_var)
+
+  def generate_fuel_layer_init_fn(self, variable_type: str):
+    """Generates an initial function for the fuel or moisture density."""
+    if variable_type not in ['rho_f', 'rho_m']:
+      raise ValueError(
+          f'Variable type {variable_type} is not supported for fuel layers.'
+          ' Available options are `rho_f` and `rho_m`.'
+      )
+
+    def init_fuel_layer(xx, yy, zz, lx, ly, lz, coord):
+      """Generates initial `rho_f` or `rho_m` field."""
+      del xx, yy, lx, ly, lz, coord
+      # Note that we assume the fuel is piled along the z dimension.
+      if self.config.g_dim != 2:
+        raise NotImplementedError(
+            'We support fuel being piled along dimension 2 only.'
+            f' {self.config.g_dim} is requested.'
+        )
+
+      fuel_var = tf.zeros_like(zz)
+      fuel_layer_thickness = [layer['height'] for layer in self.fuel_layers]
+      fuel_top_height = np.sum(fuel_layer_thickness)
+      # The loop goes from top to bottom so that layers lower than the previous
+      # ones will override what is previously assigned.
+      for layer in self.fuel_layers[::-1]:
+        fuel_var = tf.where(
+            tf.less_equal(zz, fuel_top_height),
+            layer[variable_type] * tf.ones_like(zz),
+            fuel_var,
+        )
+        fuel_top_height -= layer['height']
+
+      return fuel_var
+
+    return init_fuel_layer
 
   def update_wind_speed(self, wind_speed):
     """Updates the wind speed (using the angle specified with --wind_angle)."""
@@ -1088,32 +1182,55 @@ class WildfireUtils:
 
     return init_fn
 
-  def init_spherical_ignition_kernel(
+  def init_spherical_ignition_kernel_init_fn(
       self,
-      xx: initializer.TensorOrArray,
-      yy: initializer.TensorOrArray,
-      zz: initializer.TensorOrArray,
-      lx: float,
-      ly: float,
-      lz: float,
-      coord: ThreeIntTuple,
-  ) -> tf.Tensor:
-    """Generates a spherical ignition kernel with smooth interface."""
-    del lx, ly, lz, coord
+      fuel_top_elevation: tf.Tensor,
+      ground_elevation: tf.Tensor,
+  ) -> InitFn:
+    """Generates an init function for arc ignition."""
     if self.ignition_option != IgnitionKernelType.SPHERE:
       raise ValueError(
-          'Spherical ignition kernel is only available for '
+          'SPHERE ignition kernel is only available for '
           '`IgnitionKernelType.SPHERE`. {} is not feasible.'.format(
-              self.ignition_option))
+              self.ignition_option
+          )
+      )
 
-    rr = tf.math.sqrt(
-        tf.math.pow(xx - self.ignition_center_x, 2) +
-        tf.math.pow(yy - self.ignition_center_y, 2) +
-        tf.math.pow(zz - self.ignition_center_z, 2))
+    def init_fn(
+        xx: initializer.TensorOrArray,
+        yy: initializer.TensorOrArray,
+        zz: initializer.TensorOrArray,
+        lx: float,
+        ly: float,
+        lz: float,
+        coord: ThreeIntTuple,
+    ) -> tf.Tensor:
+      """Generates a spherical ignition kernel with smooth interface."""
+      del lx, ly, lz, coord
+      if self.ignition_option != IgnitionKernelType.SPHERE:
+        raise ValueError(
+            'Spherical ignition kernel is only available for '
+            '`IgnitionKernelType.SPHERE`. {} is not feasible.'.format(
+                self.ignition_option))
 
-    return 0.5 * (
-        tf.math.tanh(self.ignition_scale * (rr + self.ignition_radius)) -
-        tf.math.tanh(self.ignition_scale * (rr - self.ignition_radius)))
+      rr = tf.math.sqrt(
+          tf.math.pow(xx - self.ignition_center_x, 2) +
+          tf.math.pow(yy - self.ignition_center_y, 2) +
+          tf.math.pow(zz - self.ignition_center_z, 2))
+
+      sphere = 0.5 * (
+          tf.math.tanh(self.ignition_scale * (rr + self.ignition_radius))
+          - tf.math.tanh(self.ignition_scale * (rr - self.ignition_radius))
+      )
+
+      location_z = tf.math.logical_and(
+          tf.less_equal(zz, fuel_top_elevation),
+          tf.greater_equal(zz, ground_elevation),
+      )
+
+      return tf.where(location_z, sphere, tf.zeros_like(sphere))
+
+    return init_fn
 
   def init_arc_ignition_kernel_init_fn(
       self,
@@ -1176,7 +1293,9 @@ class WildfireUtils:
           fuel_top_elevation, ground_elevation
       )
     elif self.ignition_option == IgnitionKernelType.SPHERE:
-      ignition_shape_fn = self.init_spherical_ignition_kernel
+      ignition_shape_fn = self.init_spherical_ignition_kernel_init_fn(
+          fuel_top_elevation, ground_elevation
+      )
     elif self.ignition_option == IgnitionKernelType.ARC:
       ignition_shape_fn = self.init_arc_ignition_kernel_init_fn(
           fuel_top_elevation, ground_elevation
@@ -1311,5 +1430,6 @@ class WildfireUtils:
       compute the sponge forcing term.
     """
     klrc = rayleigh_damping_layer.klemp_lilly_relaxation_coeff_fns_for_sponges
-    beta_fns_by_name = klrc(self.config.dt, self.config.sponge)
+    beta_fns_by_name = klrc(self.config.sponge, self.config.x[0],
+                            self.config.y[0], self.config.z[0])
     return self.sponge.init_fn(self.config, coordinates, beta_fns_by_name)

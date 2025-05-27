@@ -1,0 +1,173 @@
+// Copyright 2022 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+syntax = "proto2";
+
+package swirl_lm_jax;
+
+import "swirl_lm/jax/utility/grid_parametrization.proto";
+
+// When evaluating convergence, one can use componentwise or elementwise
+// difference as a criterion. Given two vectors `lhs`, `rhs`:
+//
+// 1. Compute `tol = atol + rtol * abs(rhs)`
+// 2. Compute `diff = lhs - rhs`
+// 3. Define `distance = max(abs(diff) - tol)`
+//
+// This is based on `rtol` applied to `rhs` only. If `symmetric` is set, one
+// will compute the distance similarly and final distance is the maximum.
+//
+// Note that this criterion is close to `L_INF` norm, but not exact, and they're
+// different in 2 ways:
+// 1. residual = abs(diff) - tol, without an `abs` for `residual`
+// 2. Based on #1, the distance could be negative when `lhs` & `rhs` are close
+//    enough.
+//
+// Next id: 4
+message ComponentWiseConvergence {
+  optional bool symmetric = 1 [default = false];
+  // Absolute tolerance, dominant for small values close to `0`.
+  optional float atol = 2;
+  // Relative tolerance, dominant for large values far away from `0`.
+  optional float rtol = 3;
+}
+
+// Next id: 7
+message BandPreconditioner {
+  repeated float coefficients = 1;
+  optional int32 halo_width = 2;
+
+  optional int32 dominating_direction = 3;
+  optional float dominating_grid_spacing_gap = 4;
+  // One might do Taylor expansion to any order, for the preconditioner matrix
+  // sum's inverse:
+  //   (1 + x)^{-1} = 1 - x + x^2 - x^3 + ...
+  optional int32 taylor_expansion_order = 5;
+  // When there is no Taylor expansion, fall back to the symmetric version, or
+  // apply the operator in the donimating direction only.
+  optional bool symmetric = 6 [default = false];
+}
+
+// Conjugate gradient solver's preconditioner, to speed up convergence.
+//
+// Although Jacobi could be a good choice of precondition for e.g. diagonal
+// dominant matrices, it does **NOT** apply for the Hessian matrix in Poisson
+// solver, as its diagonal elements are all the same, and it doesn't help with
+// convergence rate at all.
+// Next id: 2
+message Preconditioner {
+  oneof solver {
+    BandPreconditioner band_preconditioner = 1;
+  }
+}
+
+// A message that stores the parameters required by the selected Poisson solver.
+// Next id: 5
+message PoissonSolver {
+  // The parameters used by the Jacobi iterative solver.
+  // Next id: 3
+  message Jacobi {
+    // The maximum number of iterations to be performed before the solution
+    // converges.
+    optional int32 max_iterations = 1;
+    // The weight to be applied to the update in each iteration.
+    optional float omega = 2 [default = 0.67];
+  }
+
+  // The parameters used by the fast diagonalization/direct solver.
+  // Next id: 6
+  message FastDiagonalization {
+    // The width of the halo cells.
+    optional int32 halo_width = 1;
+    // The threshold for the eigenvalues to prevent division by zero.
+    optional float cutoff = 2;
+    // Boundary conditions of the lower end of a domain in each dimension.
+    optional swirl_lm_jax.CoordinateBC boundary_condition_low = 4;
+    // Boundary conditions of the higher end of a domain in each dimension.
+    optional swirl_lm_jax.CoordinateBC boundary_condition_high = 5;
+
+    // Deprecated/Removed fields.
+    reserved 3;
+  }
+
+  // The parameters used by the conjugate gradient solver.
+  // Next id: 8
+  message ConjugateGradient {
+    // The maximum number of iterations to be performed before the solution
+    // converges.
+    optional int32 max_iterations = 1;
+    // The width of the halo cells.
+    optional int32 halo_width = 2;
+
+    // There could be multiple metrics to be used as convergence criterion:
+    // 1. L2 norm, absolute or relative to rhs
+    // 2. Componentwise difference, close to L_INF but not exactly the same.
+    //    - For more details, refer to `ComponentWiseConvergence` definition.
+    //
+    // When both are specified, the final convergence criterion is a logical OR
+    // of these 2 conditions.
+    //
+    // Convergence criterion #1: L2 norm
+    //
+    // The absolute tolerance as a metric of the solution convergence.
+    optional float atol = 3 [default = 1e-2];
+    // Orthogonal to `atol`, on the `L2` norm as the convergence criterion:
+    //   - true: `L2` reduction relative to `rhs`
+    //   - false: Absolute `L2`
+    optional bool l2_norm_reduction = 5 [default = false];
+    //
+    // Convergence criterion #2: componentwise, close to L_INF though not exact.
+    //
+    optional ComponentWiseConvergence component_wise_convergence = 6;
+
+    // If true, subtracting off the mean of residual and iterate.
+    optional bool reprojection = 4 [default = true];
+
+    optional Preconditioner preconditioner = 7;
+  }
+
+  // Next id: 8
+  message Multigrid {
+    // The number of multigrid cycle iterations.
+    optional int32 num_iterations = 1 [default = 1];
+
+    // The number of smoother iterations.
+    optional int32 n_smooth = 2 [default = 1];
+
+    // The weight in the smoother. The default smoother is Jacobi, and the
+    // default value for the weight, 2/3, results in the standard weighted
+    // Jacobi.
+    optional float weight = 3 [default = 0.67];
+
+    // The number of coarse grid correction iterations. Use 1 for V-cycle.
+    optional int32 n_coarse = 4 [default = 1];
+
+    // The coarsest subgrid shape.
+    optional swirl_lm_jax.CoordinateInt coarsest_subgrid_shape = 5;
+
+    // Controls whether A-inverse is used. If false, smoothing is done at the
+    // coarsest level, rather than solving exactly.
+    optional bool use_a_inv = 6 [default = true];
+
+    // A specification of boundary condition types per dimension.
+    optional swirl_lm_jax.CoordinateBC boundary_condition = 7;
+  }
+
+  // A solver that has exactly one type. New solvers can be added to this field.
+  oneof solver {
+    Jacobi jacobi = 1;
+    FastDiagonalization fast_diagonalization = 2;
+    ConjugateGradient conjugate_gradient = 3;
+    Multigrid multigrid = 4;
+  }
+}

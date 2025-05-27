@@ -1,0 +1,91 @@
+// Copyright 2021 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto2";
+
+package swirl_lm_jax;
+
+import "swirl_lm/jax/utility/grid_parametrization.proto";
+
+option java_multiple_files = true;
+
+// Stores the boundary conditions of a variable for the 6 faces of the
+// computational domain.
+message BoundaryCondition {
+  // The name of the variable for which the boundary conditions belongs to.
+  optional string name = 1;
+
+  message BoundaryConditionParams {
+    // This controls the step_id when the buffer storing the boundary condition
+    // value is initialized to a desired value. The specific initialization will
+    // depend on the type of the boundary condition.
+    // Currently this is only used for NONREFLECTING boundary type.
+    optional int32 buffer_init_step = 1 [default = 0];
+
+    // This only applies for NONREFLECTING boundary condition type. It
+    // controls how the phase velocity in the convective nonreflecting boundary
+    // condition is determined. Specifically,
+    //
+    //      ∂ϕ/∂t = - U* ∂ϕ/∂x, for the "high" side of the domain, and
+    //      ∂ϕ/∂t = + U* ∂ϕ/∂x, for the "low" side of the domain, and
+    //
+    // for NONREFLECTING_LOCAL_MAX, the phase velocity is calculated on the
+    // boundary as local point-wise max:
+    //
+    //      U* = abs(max(u + u0, 0)), for the "high" end, and
+    //      U* = abs(min(u - u0, 0)), for the "low" end.
+    //
+    // For NONREFLECTING_GLOBAL_MEAN:
+    //
+    //      U* = abs(global_mean(u) + u0), for the "high" end, and
+    //      U* = abs(global_mean(u) - u0), for the "low" end.
+    //
+    // where `mean` is the global mean over the entire boundary.
+    //
+    // For  NONREFLECTING_GLOBAL_MAX:
+    //
+    //      U* = abs(max(global_max(u), 0) + u0), for the "high" end, and
+    //      U* = abs(min(global_min(u), 0) - u0), for the "low" end.
+    //
+    // Note that `u0` is specified as the value in BoundaryInfo.
+    enum NonReflectingMode {
+      NONREFLECTING_LOCAL_MAX = 0;
+      NONREFLECTING_GLOBAL_MEAN = 1;
+      NONREFLECTING_GLOBAL_MAX = 2;
+    }
+    optional NonReflectingMode nonreflecting_bc_mode = 2
+        [default = NONREFLECTING_LOCAL_MAX];
+  }
+
+  // The information of a boundary condition for a specific face.
+  // Next id: 6.
+  message BoundaryInfo {
+    // The dimension of the boundary condition.
+    optional int32 dim = 1;
+    // The location of the boundary: 1 indicates the `high` end, and 0 indicates
+    // the low end.
+    optional int32 location = 2;
+    // The type of the boundary condition.
+    optional swirl_lm_jax.BoundaryConditionType type = 3
+        [default = BC_TYPE_UNKNOWN];
+    // The value associated with this boundary if `type` is `DIRICHLET`.
+    // TODO(wqing): make the value a 2D/3D array so that it can represent more
+    // complex boundary conditions.
+    optional float value = 4;
+    // Parameters associated with the specific boundary condition.
+    optional BoundaryConditionParams bc_params = 5;
+  }
+  // The detailed information of each boundary.
+  repeated BoundaryInfo boundary_info = 2;
+}

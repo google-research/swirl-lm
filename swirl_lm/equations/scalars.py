@@ -29,6 +29,7 @@ from swirl_lm.base import physical_variable_keys_manager
 from swirl_lm.boundary_condition import immersed_boundary_method
 from swirl_lm.communication import halo_exchange
 from swirl_lm.equations import common
+from swirl_lm.equations import utils as eq_utils
 from swirl_lm.equations.source_function import humidity
 from swirl_lm.equations.source_function import potential_temperature
 from swirl_lm.equations.source_function import scalar_generic
@@ -209,7 +210,8 @@ class Scalars(object):
         actual RHS term).
 
     Returns:
-      scalar_function: A function that computes the `f(phi)`.
+      scalar_function: A function that computes the `f(phi)` and the potential
+      source term to the mass.
     """
     logging.info('Tracing `_scalar_update`.')
     source = (
@@ -242,7 +244,9 @@ class Scalars(object):
           replica_id, replicas, phi, states, additional_states
       )
 
-      source_all = tf.nest.map_structure(tf.math.add, source, source_additional)
+      source_all = tf.nest.map_structure(
+          tf.math.add, source, source_additional.total
+      )
 
       if dbg:
         return {
@@ -291,7 +295,7 @@ class Scalars(object):
             }, helper_states)
         rhs = rhs_ib_updated[rhs_name]
 
-      return rhs
+      return rhs, source_additional.mass
 
     return scalar_function
 
@@ -331,7 +335,7 @@ class Scalars(object):
       states: FlowFieldMap,
       states_0: FlowFieldMap,
       additional_states: FlowFieldMap,
-  ) -> FlowFieldMap:
+  ) -> tuple[FlowFieldMap, FlowFieldVal]:
     """Predicts the scalars from the generic scalar transport equation.
 
     Args:
@@ -363,10 +367,18 @@ class Scalars(object):
           {sc_name: common_ops.average(states[sc_name], states_0[sc_name])})
 
     updated_scalars = {}
+    mass_source = tf.nest.map_structure(tf.zeros_like, states[_KEY_RHO])
+
     for sc_name in self._params.transport_scalars_names:
       sc_mid = states_mid[sc_name]
       diffusivity = self._scalar_model[sc_name].get_diffusivity(
           replicas, sc_mid, states, additional_states
+      )
+      # Bounds diffusivity here instead of in the `get_diffusivity` function
+      # to apply the constraint to all scalars regardless of their specific
+      # implementations.
+      diffusivity = eq_utils.bound_viscosity(
+          diffusivity, additional_states, self._params
       )
       helper_states = {'diffusivity': diffusivity}
       helper_states.update(additional_states)
@@ -405,8 +417,10 @@ class Scalars(object):
       time_scheme = self._params.scalar_time_integration_scheme(sc_name)
       if (time_scheme ==
           numerics_pb2.TimeIntegrationScheme.TIME_SCHEME_CN_EXPLICIT_ITERATION):
-        updated_scalars.update(
-            time_advance_cn_explicit(scalar_rhs_fn(sc_mid), sc_name))
+        rhs, src_rho = scalar_rhs_fn(sc_mid)
+        updated_scalars.update(time_advance_cn_explicit(rhs, sc_name))
+        if src_rho is not None:
+          mass_source = tf.nest.map_structure(tf.math.add, mass_source, src_rho)
       else:
         raise ValueError(
             'Time integration scheme %s is not supported yet for scalars.' %
@@ -426,7 +440,7 @@ class Scalars(object):
                                                replicas, updated_scalars,
                                                additional_states, self._bc)
 
-    return updated_scalars  # pytype: disable=bad-return-type
+    return updated_scalars, mass_source  # pytype: disable=bad-return-type
 
   def correction_step(
       self,

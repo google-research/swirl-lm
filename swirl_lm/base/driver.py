@@ -96,7 +96,7 @@ FLAGS = flags.FLAGS
 CKPT_DIR_FORMAT = '{filename_prefix}-ckpts/'
 COMPLETION_FILE = 'DONE'
 _MAX_UVW_CFL = 'max_uvw_cfl'
-SIMULATION_TIME = 'simulation_time'
+TIME_VARNAME = simulation.TIME_VARNAME
 
 Array: TypeAlias = Any
 PerReplica: TypeAlias = tf.types.experimental.distributed.PerReplica
@@ -182,6 +182,8 @@ def _get_state_keys(params: parameters_lib.SwirlLMParameters):
       params.helper_var_keys if params.helper_var_keys else []
   )
 
+  additional_keys.append(TIME_VARNAME)
+
   # Add additional and helper_var keys required for stretched grids.
   stretched_grid_additional_keys, stretched_grid_helper_var_keys = (
       stretched_grid.additional_and_helper_var_keys(
@@ -256,7 +258,7 @@ def _init_fn(
           (params.num_steps, 4), dtype=types.TF_DTYPE
       )
 
-    states[SIMULATION_TIME] = tf.convert_to_tensor(0, dtype=tf.float64)
+    states[TIME_VARNAME] = tf.convert_to_tensor(0, dtype=tf.float64)
 
     if params.lpt is not None:
       states.update(lpt.init_fn(params))
@@ -610,31 +612,33 @@ def _one_cycle(
           )
 
       if SAVE_MAX_UVW_AND_CFL.value:
-        grid_spacings_1d: tuple[FlowFieldVal, FlowFieldVal, FlowFieldVal] = (
-            tuple(
-                params.physical_grid_spacing(
-                    dim, params.use_3d_tf_tensor, additional_states
-                )
-                for dim in (0, 1, 2)
-            )
-        )
-        updated_state[_MAX_UVW_CFL] = tf.tensor_scatter_nd_add(
-            state[_MAX_UVW_CFL],
-            tf.convert_to_tensor([
-                [cycle_step_id, 0],
-                [cycle_step_id, 1],
-                [cycle_step_id, 2],
-                [cycle_step_id, 3],
-            ]),
-            _compute_max_uvw_and_cfl(
-                updated_state, grid_spacings_1d, logical_replicas
-            ),
-        )
+        with tf.name_scope('retrieve_grid_spacings'):
+          grid_spacings_1d: tuple[FlowFieldVal, FlowFieldVal, FlowFieldVal] = (
+              tuple(
+                  params.physical_grid_spacing(
+                      dim, params.use_3d_tf_tensor, additional_states
+                  )
+                  for dim in (0, 1, 2)
+              )
+          )
+        with tf.name_scope('save_max_cfl'):
+          updated_state[_MAX_UVW_CFL] = tf.tensor_scatter_nd_add(
+              state[_MAX_UVW_CFL],
+              tf.convert_to_tensor([
+                  [cycle_step_id, 0],
+                  [cycle_step_id, 1],
+                  [cycle_step_id, 2],
+                  [cycle_step_id, 3],
+              ]),
+              _compute_max_uvw_and_cfl(
+                  updated_state, grid_spacings_1d, logical_replicas
+              ),
+          )
 
       # Simulation time will accumulate precision errors with this approach.
       # For now, the converter deals with this by rounding off to a fewer
       # number of significant digits.
-      updated_state[SIMULATION_TIME] = state[SIMULATION_TIME] + params.dt64
+      updated_state[TIME_VARNAME] = state[TIME_VARNAME] + params.dt64
 
       prev_state = state
       # Some state keys such as `replica_id` may not lie in either of the three
@@ -642,11 +646,12 @@ def _one_cycle(
       state = _stateless_update_if_present(state, updated_state)
       cycle_step_id += 1
       if SAVE_LAST_VALID_STEP.value:
-        if _state_has_nan_inf(state, logical_replicas):
-          # Detected nan/inf, skip the update of state by early-exiting from the
-          # for loop.
-          has_non_finite = True
-          break
+        with tf.name_scope('save_last_valid_step'):
+          if _state_has_nan_inf(state, logical_replicas):
+            # Detected nan/inf, skip the update of state by early-exiting from
+            # the for loop.
+            has_non_finite = True
+            break
 
     if not params.use_3d_tf_tensor:
       # Unsplit the keys that were previously split.
@@ -1070,120 +1075,130 @@ def solver_loop(
     )
     # num_steps_completed and has_non_finite are guaranteed to be identical for
     # all replicas, so we are just taking replica 0 value.
-    num_steps_completed = _local_state_value(
-        strategy, num_steps_completed)[0].numpy()
-    has_non_finite = _local_state_value(
-        strategy, has_non_finite)[0].numpy()
+    with tf.name_scope('check_states_validity'):
+      num_steps_completed = _local_state_value(
+          strategy, num_steps_completed)[0].numpy()
+      has_non_finite = _local_state_value(
+          strategy, has_non_finite)[0].numpy()
 
     step_id.assign_add(num_steps_completed)
 
     if SAVE_MAX_UVW_AND_CFL.value:
-      # CFL number is guaranteed to be identical for all replicas, so take
-      # replica 0 value.
-      cfl_values = (
-          params.dt
-          * _local_state_value(strategy, state[_MAX_UVW_CFL])[0].numpy()[:, 3]
-      )
-      max_cfl_number_from_cycle = tf.reduce_max(cfl_values)
-      cfl_number_from_last_step = cfl_values[num_steps_completed - 1]
-      logging.info(
-          'max CFL number from last cycle: %.3f.  CFL number from last step:'
-          ' %.3f',
-          max_cfl_number_from_cycle,
-          cfl_number_from_last_step,
-      )
+      with tf.name_scope('print_max_cfl'):
+        # CFL number is guaranteed to be identical for all replicas, so take
+        # replica 0 value.
+        cfl_values = (
+            params.dt
+            * _local_state_value(strategy, state[_MAX_UVW_CFL])[0].numpy()[:, 3]
+        )
+        max_cfl_number_from_cycle = tf.reduce_max(cfl_values)
+        cfl_number_from_last_step = cfl_values[num_steps_completed - 1]
+        logging.info(
+            'max CFL number from last cycle: %.3f.  CFL number from last step:'
+            ' %.3f',
+            max_cfl_number_from_cycle,
+            cfl_number_from_last_step,
+        )
 
     # If we just attempted the first cycle, log information about available
     # debug variables to help with debugging.
-    if cycle == 0:
-      debug_output.log_variable_use()
+    with tf.name_scope('log_debug_variable'):
+      if cycle == 0:
+        debug_output.log_variable_use()
 
     # Check if we did not complete a full cycle.
     if has_non_finite:
-      logging.info(
-          'Non-convergence detected. Early exit from cycle %d at step %d.',
-          cycle, step_id_value())
-      if num_steps_completed > 1:
-        write_status = write_state_and_sync(prev_state,
-                                            step_id=step_id_value() - 1,
-                                            use_zeros_for_debug_values=True)
+      with tf.name_scope('logging_non_finite_states'):
         logging.info(
-            'Dumping last valid state at step %d done. Write status: %s',
-            step_id_value() - 1, write_status)
-      write_status = write_state_and_sync(state, step_id=step_id_value(),
-                                          allow_non_finite_values=True)
-      logging.info(
-          'Dumping final non-finite state done. Write status: %s',
-          write_status
-      )
-      # Save checkpoint to update the completed step.
-      # Note: Only after the logging, which forces the `write_status` to be
-      # materialized, we can guarantee that the actual write actions are
-      # completed, and we update the saved completed step here.
-      ckpt_manager.save()
-      # Wait for checkpoint manager before marking completion.
-      ckpt_manager.sync()
-      # Mark simulation as complete.
-      _write_completion_file(output_dir)
-      raise _NonRecoverableError(
-          f'Non-convergence detected. Early exit from cycle {cycle} at step '
-          f'{step_id_value()}. The last valid state at step '
-          f'{step_id_value() - 1} has been saved in the specified output path.'
-      )
+            'Non-convergence detected. Early exit from cycle %d at step %d.',
+            cycle, step_id_value())
+        if num_steps_completed > 1:
+          write_status = write_state_and_sync(prev_state,
+                                              step_id=step_id_value() - 1,
+                                              use_zeros_for_debug_values=True)
+          logging.info(
+              'Dumping last valid state at step %d done. Write status: %s',
+              step_id_value() - 1, write_status)
+        write_status = write_state_and_sync(state, step_id=step_id_value(),
+                                            allow_non_finite_values=True)
+        logging.info(
+            'Dumping final non-finite state done. Write status: %s',
+            write_status
+        )
+        # Save checkpoint to update the completed step.
+        # Note: Only after the logging, which forces the `write_status` to be
+        # materialized, we can guarantee that the actual write actions are
+        # completed, and we update the saved completed step here.
+        ckpt_manager.save()
+        # Wait for checkpoint manager before marking completion.
+        ckpt_manager.sync()
+        # Mark simulation as complete.
+        _write_completion_file(output_dir)
+        raise _NonRecoverableError(
+            f'Non-convergence detected. Early exit from cycle {cycle} at step'
+            f' {step_id_value()}. The last valid state at step'
+            f' {step_id_value() - 1} has been saved in the specified output'
+            ' path.'
+        )
 
     # Consider explicitly deleting prev_state here to free its memory because
     # after its written to disk it is no longer needed.
-
-    replica_id_values = []
-    replica_id_values.extend(_local_state_value(strategy, state['replica_id']))
-    logging.info(
-        'One cycle computation is done. Replicas are: %s',
-        str([v.numpy() for v in replica_id_values]),
-    )
-    t1 = time.time()
-    logging.info(
-        'Completed total %d steps (%d cycles, %s simulation time) so far. '
-        'Took %s for the last cycle (%d steps).',
-        step_id_value(),
-        cycle + 1,
-        text_util.seconds_to_string(
-            int(step_id_value()) * params.dt64, precision=params.dt64
-        ),
-        text_util.seconds_to_string(t1 - t0),
-        params.num_steps,
-    )
+    with tf.name_scope('logging_time_info'):
+      replica_id_values = []
+      replica_id_values.extend(
+          _local_state_value(strategy, state['replica_id'])
+      )
+      logging.info(
+          'One cycle computation is done. Replicas are: %s',
+          str([v.numpy() for v in replica_id_values]),
+      )
+      t1 = time.time()
+      logging.info(
+          'Completed total %d steps (%d cycles, %s simulation time) so far. '
+          'Took %s for the last cycle (%d steps).',
+          step_id_value(),
+          cycle + 1,
+          text_util.seconds_to_string(
+              int(step_id_value()) * params.dt64, precision=params.dt64
+          ),
+          text_util.seconds_to_string(t1 - t0),
+          params.num_steps,
+      )
 
     # Save checkpoint if the current step, from the start of the simulation,
     # is a multiple of the checkpoint interval, else just record, a possibly
     # shortened version of the current state.
-    if (step_id_value() - params.start_step) % checkpoint_interval == 0:
-      write_status = write_state_and_sync(state=state, step_id=step_id_value())
+    with tf.name_scope('writing_checkpoints'):
+      if (step_id_value() - params.start_step) % checkpoint_interval == 0:
+        write_status = write_state_and_sync(
+            state=state, step_id=step_id_value()
+        )
+        logging.info(
+            '`Post cycle writing full state done. Write status: %s',
+            write_status,
+        )
+        # Only after the logging, which forces the `write_status` to be
+        # materialized, we can guarantee that the actual write actions are
+        # completed, and we update the saved completed step here.
+        ckpt_manager.save()
+      else:
+        # Note, the first time this is called retracing will occur for the
+        # subgraphs in `distributed_write_state` if data_dump_filter is not
+        # `None`.
+        write_status = write_state_and_sync(
+            state=state,
+            step_id=step_id_value(),
+            data_dump_filter=data_dump_filter,
+        )
+        logging.info(
+            '`Post cycle writing filtered state done. Write status: %s',
+            write_status,
+        )
+      t2 = time.time()
       logging.info(
-          '`Post cycle writing full state done. Write status: %s',
-          write_status,
+          'Writing output & checkpoint took %s.',
+          text_util.seconds_to_string(t2 - t1),
       )
-      # Only after the logging, which forces the `write_status` to be
-      # materialized, we can guarantee that the actual write actions are
-      # completed, and we update the saved completed step here.
-      ckpt_manager.save()
-    else:
-      # Note, the first time this is called retracing will occur for the
-      # subgraphs in `distributed_write_state` if data_dump_filter is not
-      # `None`.
-      write_status = write_state_and_sync(
-          state=state,
-          step_id=step_id_value(),
-          data_dump_filter=data_dump_filter,
-      )
-      logging.info(
-          '`Post cycle writing filtered state done. Write status: %s',
-          write_status,
-      )
-    t2 = time.time()
-    logging.info(
-        'Writing output & checkpoint took %s.',
-        text_util.seconds_to_string(t2 - t1),
-    )
 
   # Wait for checkpoint manager before marking completion.
   ckpt_manager.sync()

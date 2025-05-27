@@ -3,6 +3,7 @@
 solver_procedure: VARIABLE_DENSITY
 convection_scheme: CONVECTION_SCHEME_QUICK
 time_integration_scheme: TIME_SCHEME_CN_EXPLICIT_ITERATION
+use_3d_tf_tensor: true
 p_thermal: 1.01325e5
 density: 1.2061764708
 thermodynamics {

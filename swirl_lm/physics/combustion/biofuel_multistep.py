@@ -32,6 +32,7 @@ class Dehydration:
     """Initializes the dehydration model."""
     self.arrhenius_factor = params.arrhenius_factor
     self.activation_temperature = params.activation_temperature
+    self.min_dehydration_temperature = params.min_dehydration_temperature
 
   def dehydration_rate(self, **kwargs) -> types.FlowFieldVal:
     """Computes the rate of dehydration following an Arrhenius law.
@@ -47,11 +48,13 @@ class Dehydration:
     """
     t_s = kwargs['t_s']
     rho_m = kwargs['rho_m']
-    rate_fn = (
-        lambda rho, t: self.arrhenius_factor
+    rate_fn = lambda rho, t: tf.where(
+        tf.greater(t, self.min_dehydration_temperature),
+        self.arrhenius_factor
         / tf.math.sqrt(t)
         * rho
-        * tf.math.exp(-self.activation_temperature / t)
+        * tf.math.exp(-self.activation_temperature / t),
+        tf.zeros_like(rho),
     )
 
     return tf.nest.map_structure(rate_fn, rho_m, t_s)
@@ -84,7 +87,9 @@ class PyrolysisAndCharOxidation:
         swirl_lm_params
     )
 
-    self.combustion_model = wood.Wood(model_params.wood, thermodynamics_model)
+    self.combustion_model = wood.Wood(
+        model_params.wood, thermodynamics_model, swirl_lm_params
+    )
 
     assert self.combustion_model.combustion_model_option == 'moist_wood', (
         'The combustion model has to be configured with the moist option'

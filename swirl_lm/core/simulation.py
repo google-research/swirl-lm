@@ -36,6 +36,9 @@ from swirl_lm.utility.types import FlowFieldMap
 import tensorflow as tf
 
 
+TIME_VARNAME = 'simulation_time'
+
+
 class Simulation:
   """Defines the step function for a variable-density low Mach solver.
 
@@ -263,7 +266,7 @@ class Simulation:
       # not enforced for the conservative scalars, but they are enforced for the
       # temporary primitive scalars.
       with tf.name_scope('scalar_prediction_step'):
-        scalar_prediction_states = self.scalars.prediction_step(
+        scalar_prediction_states, mass_source = self.scalars.prediction_step(
             replica_id, replicas, states_k, states_0, additional_states)
       states_k.update(scalar_prediction_states)
 
@@ -334,12 +337,15 @@ class Simulation:
       # Step 6: Get the pressure correction. NB: the boundary condition for
       # density is set to be Neumann everywhere.
       with tf.name_scope('pressure_step'):
+        additional_states_with_mass_source = dict(additional_states) | {
+            'mass_source': mass_source
+        }
         pressure_step_states = self.pressure.step(
             replica_id,
             replicas,
             states_k,
             states_0,
-            additional_states,
+            additional_states_with_mass_source,
             i,
             step_id,
         )
@@ -374,8 +380,9 @@ class Simulation:
         if key not in self._updated_additional_states_keys
     })
 
-    monitor_states = self.monitor.compute_analytics(states_new, replicas,
-                                                    step_id)
+    monitor_states = self.monitor.compute_analytics(
+        states_new, replicas, (tf.convert_to_tensor(self._params.dt),
+                               additional_states[TIME_VARNAME]))
     states_new.update(monitor_states)
 
     for varname in ['u', 'v', 'w'] + self._params.transport_scalars_names:

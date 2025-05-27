@@ -5,12 +5,15 @@ package research.simulation;
 import "swirl_lm/physics/combustion/wood.proto";
 
 // Parameters that are required to compute the dehydration source term.
-// Next id: 3
+// Next id: 4
 message Dehydration {
   // The activation temperature of the dehydration process.
   optional float activation_temperature = 1;
   // The Arrhenius constant for the dehydration rate.
   optional float arrhenius_factor = 2;
+  // The minimum temperature that the dehydration process starts. Default is set
+  // to 0 to allow the dehydration process to start at any temperature.
+  optional float min_dehydration_temperature = 3 [default = 0.0];
 }
 
 // Parameters that are required to compute the source terms due to pyrolysis and

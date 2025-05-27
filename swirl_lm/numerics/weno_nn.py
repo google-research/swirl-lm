@@ -467,7 +467,7 @@ class WenoNN:
       else:
         weno_wt = tf.unstack(weno_wt, axis=-1)
 
-      return weno_wt
+      return weno_wt  # pytype: disable=bad-return-type
 
     weno_wt_neg = _calculate_weno_nn_wt_single_side(delta_neg)
     # Invert the order of neg side of WENO-weights to match the training of the

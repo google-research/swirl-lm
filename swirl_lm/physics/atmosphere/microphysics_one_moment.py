@@ -299,38 +299,22 @@ class OneMoment(microphysics_generic.Microphysics):
 
   def _autoconversion(
       self,
-      particle: Union[Rain, Snow],
+      q_threshold: float,
+      tau: float,
       q: types.FlowFieldVal,
   ) -> types.FlowFieldVal:
     """Computes the increase rate of precipitation due to autoconversion.
 
     Args:
-      particle: A Rain or Snow dataclass object that stores constant parameters
-        for microphysics processes.
+      q_threshold: Threshold for conversion in kg/kg.
+      tau: Timescale for autoconversion in seconds.
       q: The specific humidity of cloud water. If `coeff` is `Rain`, `q` should
         be for the liquid phase (`q_l`); if `coeff` is `Snow`, `q` should be the
         ice phase (`q_i`).
 
     Returns:
       The rate of increase of precipitation (rain/snow) due to autoconversion.
-
-    Raises:
-      ValueError if `particle` is neither Rain nor Snow.
     """
-    aut_coeff = Autoconversion()
-
-    if isinstance(particle, Rain):
-      q_threshold = aut_coeff.q_l_threshold
-      tau = aut_coeff.tau_lr
-    elif isinstance(particle, Snow):
-      q_threshold = aut_coeff.q_i_threshold
-      tau = aut_coeff.tau_is
-    else:
-      raise ValueError(
-          f'Rain or snow particle is required, but {type(particle)} is'
-          ' provided.'
-      )
-
     return tf.nest.map_structure(
         lambda q_c: tf.maximum(q_c - q_threshold, 0.0) / tau, q
     )
@@ -390,6 +374,37 @@ class OneMoment(microphysics_generic.Microphysics):
 
     return tf.nest.map_structure(snow_autoconversion_fn, rho, s, g, lam)
 
+  def _ventilation_factor(
+      self,
+      particle: Union[Rain, Snow],
+      rho: tf.Tensor,
+      lam: tf.Tensor,
+  ) -> types.FlowFieldVal:
+    """Computes the ventilation factor for the given particle.
+
+    Args:
+      particle: A Rain or Snow dataclass object that stores constant parameters
+        for microphysics processes.
+      rho: The density of the moist air [kg/m^3].
+      lam: The Marshall Palmer distribution parameter lambda.
+
+    Returns:
+      The ventilation factor for the given particle.
+    """
+    coeff = particle.params
+    return coeff.a_vent + coeff.b_vent * (
+        constants_1m.NU_AIR / constants_1m.D_VAP
+    ) ** (1.0 / 3.0) * tf.math.divide_no_nan(1.0, coeff.r_0 * lam) ** (
+        0.5 * (coeff.v_e + coeff.del_v)
+    ) * tf.math.sqrt(
+        tf.math.divide_no_nan(
+            2.0 * coeff.chi_v * _v_0(particle, rho),
+            (constants_1m.NU_AIR * lam),
+        )
+    ) * particles.gamma(
+        0.5 * (coeff.v_e + coeff.del_v + 5.0)
+    )
+
   def evaporation_sublimation(
       self,
       particle: Union[Rain, Snow],
@@ -434,7 +449,6 @@ class OneMoment(microphysics_generic.Microphysics):
     lam = particles.marshall_palmer_distribution_parameter_lambda(
         particle, rho, q_p
     )
-    coeff = particle.params
 
     def evap_subl_fn(
         rho: tf.Tensor,
@@ -444,18 +458,7 @@ class OneMoment(microphysics_generic.Microphysics):
         lam: tf.Tensor,
     ) -> tf.Tensor:
       """Computes the evaporation/sublimation rate."""
-      f_vent = coeff.a_vent + coeff.b_vent * (
-          constants_1m.NU_AIR / constants_1m.D_VAP
-      ) ** (1.0 / 3.0) * tf.math.divide_no_nan(1.0, coeff.r_0 * lam) ** (
-          0.5 * (coeff.v_e + coeff.del_v)
-      ) * tf.math.sqrt(
-          tf.math.divide_no_nan(
-              2.0 * coeff.chi_v * _v_0(particle, rho),
-              (constants_1m.NU_AIR * lam),
-          )
-      ) * particles.gamma(
-          0.5 * (coeff.v_e + coeff.del_v + 5.0)
-      )
+      f_vent = self._ventilation_factor(particle, rho, lam)
       evap_subl = (
           tf.math.divide_no_nan(
               -4.0
@@ -509,6 +512,56 @@ class OneMoment(microphysics_generic.Microphysics):
 
     return tf.nest.map_structure(lambda e, s: e + s, evap, subl)
 
+  def snow_melt(
+      self,
+      snow: Snow,
+      temperature: types.FlowFieldVal,
+      rho: types.FlowFieldVal,
+      q_s: types.FlowFieldVal,
+  ) -> types.FlowFieldVal:
+    """Computes the melting rate from snow to rain.
+
+    Args:
+      snow: A Snow dataclass object that stores constant parameters for
+        microphysics processes.
+      temperature: The temperature of the flow field [K].
+      rho: The density of the moist air [kg/m^3].
+      q_s: The snow water mass fraction [kg/kg].
+
+    Returns:
+      The melting rate for conversion from snow to rain.
+    """
+    lam = particles.marshall_palmer_distribution_parameter_lambda(
+        snow, rho, q_s
+    )
+
+    def melt_fn(
+        rho: tf.Tensor,
+        q_s: tf.Tensor,
+        t: tf.Tensor,
+        lam: tf.Tensor,
+    ) -> tf.Tensor:
+      """Computes the melt rate."""
+      f_vent = self._ventilation_factor(snow, rho, lam)
+      # Note that a lower bound of 0 is added to the temperature difference term
+      # to avoid negative rates.
+      melt = (
+          tf.math.divide_no_nan(
+              4.0
+              * np.pi
+              * particles.n_0(snow, rho, q_s)
+              * constants_1m.K_COND
+              / self.water_model.lh_f(t)
+              / rho
+              * tf.math.maximum(t - self.water_model.t_freeze, 0.0),
+              lam**2,
+          )
+          * f_vent
+      )
+      return tf.where(tf.math.greater(q_s, 0.0), melt, tf.zeros_like(q_s))
+
+    return tf.nest.map_structure(melt_fn, rho, q_s, temperature, lam)
+
   def autoconversion_and_accretion(
       self,
       particle: Union[Rain, Snow],
@@ -538,10 +591,12 @@ class OneMoment(microphysics_generic.Microphysics):
     q_i = tf.nest.map_structure(tf.math.subtract, q_c, q_l)
     acc = self._accretion(particle, rho, q_l, q_i, q_p)
 
+    aut_coeff = Autoconversion()
+
     if isinstance(particle, Rain):
-      aut = self._autoconversion(particle, q_l)
+      aut = self._autoconversion(aut_coeff.q_l_threshold, aut_coeff.tau_lr, q_l)
     elif isinstance(particle, Snow):
-      aut = self._autoconversion_snow(temperature, rho, q_v, q_l, q_c)
+      aut = self._autoconversion(aut_coeff.q_i_threshold, aut_coeff.tau_is, q_i)
     else:
       raise ValueError(
           f'Autoconversion and accretion not supported for {type(particle)}.'
@@ -689,9 +744,38 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
     )
     self._one_moment_params = params.microphysics.one_moment
     self._one_moment = OneMoment(params, water_model)
+    self._water_model = water_model
     self._rain = Rain.from_config(self._one_moment_params.rain)
     self._snow = Snow.from_config(self._one_moment_params.snow)
     self._dt = params.dt
+
+  def _clip_temperature_and_adjust_density(
+      self,
+      states: types.FlowFieldMap,
+      additional_states: types.FlowFieldMap,
+      thermo_states: types.FlowFieldMap,
+  ) -> dict[str, types.FlowFieldVal]:
+    """Applies an upper bound to the temperature and recomputes density."""
+    if not self._one_moment_params.HasField('temperature_max'):
+      return {'T': thermo_states['T'], 'rho': states['rho_thermal']}
+
+    temperature = tf.nest.map_structure(
+        lambda t: tf.math.minimum(
+            t, self._one_moment_params.temperature_max * tf.ones_like(t)
+        ),
+        thermo_states['T'],
+    )
+    rho = self._water_model.saturation_density(
+        'T',
+        temperature,
+        states['q_t'],
+        states['u'],
+        states['v'],
+        states['w'],
+        zz=thermo_states.get('zz', None),
+        additional_states=additional_states,
+    )
+    return {'T': temperature, 'rho': rho}
 
   def terminal_velocity(
       self,
@@ -732,11 +816,12 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
   def _humidity_source_for_rain_and_snow(
       self,
       states: types.FlowFieldMap,
+      additional_states: types.FlowFieldMap,
       thermo_states: types.FlowFieldMap,
       particle: Union[Rain, Snow],
       include_autoconversion_and_accretion: bool,
-  ):
-    """Computes humidity source and clips it to (1 - k) * q / dt.
+  ) -> tuple[types.FlowFieldVal, types.FlowFieldVal]:
+    """Computes humidity source (clipped to (1 - k) * q / dt) and melt term.
 
     Physically q cannot be negative, but instead of limiting the source such
     that
@@ -751,22 +836,27 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
 
     Args:
       states: A dictionary that holds all flow field variables.
+      additional_states: A dictionary that holds all helper variables.
       thermo_states: A dictionary that holds all thermodynamics variables.
       particle: A Rain, Snow dataclass object that stores constant parameters.
       include_autoconversion_and_accretion: Whether to include
         autoconversion and accretion in the computation.
 
     Returns:
-      The clipped source term.
+      The clipped source term and the snow melt term.
     """
+    validated_thermo_states = self._clip_temperature_and_adjust_density(
+        states, additional_states, thermo_states
+    )
+
     q_p = (
         thermo_states.get('q_r', states['q_r']) if isinstance(particle, Rain)
         else thermo_states.get('q_s', states['q_s'])
     )
     aut_and_acc = self._one_moment.autoconversion_and_accretion(
         particle,
-        thermo_states['T'],
-        states['rho_thermal'],
+        validated_thermo_states['T'],
+        validated_thermo_states['rho'],
         thermo_states['q_v'],
         q_p,
         thermo_states['q_l'],
@@ -774,15 +864,23 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
     )
     evap_subl = self._one_moment.evaporation_sublimation(
         particle,
-        thermo_states['T'],
-        states['rho_thermal'],
+        validated_thermo_states['T'],
+        validated_thermo_states['rho'],
         thermo_states['q_v'],
         q_p,
         thermo_states['q_l'],
         thermo_states['q_c'],
     )
+    melt = self._one_moment.snow_melt(
+        self._snow,
+        validated_thermo_states['T'],
+        validated_thermo_states['rho'],
+        thermo_states.get('q_s', states['q_s']),
+    )
+    if isinstance(particle, Snow):
+      melt = tf.nest.map_structure(tf.math.negative, melt)
 
-    def _add_and_clip(q_p, q_t, aut_and_acc, evap_subl):
+    def _add_and_clip(q_p, q_t, aut_and_acc, evap_subl, melt):
       # Clip the humidity source such that
       #
       #   q_p + dt * src >= k * q_p and
@@ -801,15 +899,24 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
       else:
         source = -evap_subl
       k = self._one_moment_params.humidity_source_term_limiter_k
-      return tf.clip_by_value(
-          source,
+      source_total = tf.clip_by_value(
+          source + melt,
           (-(1 - k) * tf.maximum(q_p, 0.0) / self._dt),
           ((1 - k) * tf.maximum(q_t, 0.0) / self._dt),
       )
+      return source_total - melt
 
-    return tf.nest.map_structure(_add_and_clip, q_p,
-                                 thermo_states.get('q_t', states['q_t']),
-                                 aut_and_acc, evap_subl)
+    return (
+        tf.nest.map_structure(
+            _add_and_clip,
+            q_p,
+            thermo_states.get('q_t', states['q_t']),
+            aut_and_acc,
+            evap_subl,
+            melt,
+        ),
+        melt,
+    )
 
   def humidity_source_fn(
       self,
@@ -840,34 +947,43 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
     )
 
     if varname == 'q_r':
-      return self._humidity_source_for_rain_and_snow(
+      src, melt = self._humidity_source_for_rain_and_snow(
           states,
+          additional_states,
           thermo_states | {'q_v': q_v},
           self._rain,
           include_autoconversion_and_accretion=True,
       )
+      return tf.nest.map_structure(tf.math.add, src, melt)
     elif varname == 'q_s':
-      return self._humidity_source_for_rain_and_snow(
+      src, melt = self._humidity_source_for_rain_and_snow(
           states,
+          additional_states,
           thermo_states | {'q_v': q_v},
           self._snow,
           include_autoconversion_and_accretion=True,
       )
+      return tf.nest.map_structure(tf.math.add, src, melt)
     elif varname == 'q_t':
+      src_rain, _ = self._humidity_source_for_rain_and_snow(
+          states,
+          additional_states,
+          thermo_states | {'q_v': q_v},
+          self._rain,
+          include_autoconversion_and_accretion=True,
+      )
+      src_snow, _ = self._humidity_source_for_rain_and_snow(
+          states,
+          additional_states,
+          thermo_states | {'q_v': q_v},
+          self._snow,
+          include_autoconversion_and_accretion=True,
+      )
       return tf.nest.map_structure(
-          lambda src_rain, src_snow: tf.math.negative(src_rain + src_snow),
-          self._humidity_source_for_rain_and_snow(
-              states,
-              thermo_states | {'q_v': q_v},
-              self._rain,
-              include_autoconversion_and_accretion=True,
-          ),
-          self._humidity_source_for_rain_and_snow(
-              states,
-              thermo_states | {'q_v': q_v},
-              self._snow,
-              include_autoconversion_and_accretion=True,
-          ))
+          lambda src_r, src_s: tf.math.negative(src_r + src_s),
+          src_rain,
+          src_snow,
+      )
     else:
       raise NotImplementedError(
           f'{varname} is not a valid humidity type for the 1-moment'
@@ -903,6 +1019,10 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
         f' term computation, but `{varname}` is provided.'
     )
 
+    validated_thermo_states = self._clip_temperature_and_adjust_density(
+        states, additional_states, thermo_states
+    )
+
     source = tf.nest.map_structure(tf.zeros_like, states['rho'])
 
     phase_params = (
@@ -934,27 +1054,52 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
       # Calculate source terms for vapor and liquid conversions, respectively.
       # Use that c_{q_v->q_r/s} = -c_{q_r/s->q_v}, i.e., the negation of the
       # evaporation/sublimation rate.
-      water_source = self._humidity_source_for_rain_and_snow(
+      water_source, melt = self._humidity_source_for_rain_and_snow(
           states,
+          additional_states,
           thermo_states,
           particle,
           include_autoconversion_and_accretion=(varname == 'theta_li'),
       )
 
-     # Converts water mass fraction conversion rates to an energy source term.
+      # Converts water mass fraction conversion rates to an energy source term.
+      exner_inv = self._one_moment.water_model.exner_inverse(
+          validated_thermo_states['rho'],
+          thermo_states['q_t'],
+          validated_thermo_states['T'],
+          thermo_states['zz'],
+          additional_states,
+      )
       theta_source = tf.nest.map_structure(
           energy_source_fn(lh),
           states['rho'],
           cp,
-          self._one_moment.water_model.exner_inverse(
-              states['rho_thermal'],
-              thermo_states['q_t'],
-              thermo_states['T'],
-              thermo_states['zz'],
-              additional_states,
-          ),
+          exner_inv,
           water_source,
       )
+
+      # Add the melt term to the source term. Because the melt has the same
+      # magnitude for rain and snow, with snow having a negative sign, we only
+      # add the melt term for snow.
+      if isinstance(particle, Snow):
+        melt_heat_src_fn = (
+            lambda rho, lh, cp, exner_inv, melt: rho
+            * lh
+            / cp
+            * exner_inv
+            * melt
+        )
+        melt_heat_sink = tf.nest.map_structure(
+            melt_heat_src_fn,
+            states['rho'],
+            self._water_model.lh_f(validated_thermo_states['T']),
+            cp,
+            exner_inv,
+            melt,
+        )
+        theta_source = tf.nest.map_structure(
+            tf.math.add, theta_source, melt_heat_sink
+        )
 
       source = tf.nest.map_structure(tf.math.add, source, theta_source)
 
@@ -976,7 +1121,9 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
     Returns:
       The source term in the total energy equation due to microphysics.
     """
-    del additional_states
+    validated_thermo_states = self._clip_temperature_and_adjust_density(
+        states, additional_states, thermo_states
+    )
 
     # Get potential energy.
     pe = tf.nest.map_structure(
@@ -992,8 +1139,8 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
     for particle, q, e in zip(particle_types, q_p, e_int):
       aut_acc = self._one_moment.autoconversion_and_accretion(
           particle,
-          thermo_states['T'],
-          states['rho_thermal'],
+          validated_thermo_states['T'],
+          validated_thermo_states['rho'],
           thermo_states['q_v'],
           q,
           thermo_states['q_l'],
@@ -1012,8 +1159,8 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
     # Use that c_{q_v->q_l} = -c_{q_l->q_v}, i.e. minus the evaporation
     # rate.
     evap_subl = self._one_moment.evaporation(
-        thermo_states['T'],
-        states['rho_thermal'],
+        validated_thermo_states['T'],
+        validated_thermo_states['rho'],
         thermo_states['q_v'],
         thermo_states['q_r'],
         thermo_states['q_s'],
@@ -1027,6 +1174,8 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
         states['rho'],
         evap_subl,
     )
+
+    # TODO(wqing): Add the source term for snow melt.
 
     return tf.nest.map_structure(tf.math.add, source_v, source_li)
 

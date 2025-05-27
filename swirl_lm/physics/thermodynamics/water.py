@@ -127,6 +127,11 @@ class Water(thermodynamics_generic.ThermodynamicModel):
           self._ref_state_type))
 
   @property
+  def t_freeze(self):
+    """The freezing point of water."""
+    return self._t_freeze
+
+  @property
   def cp_d(self):
     """The isobaric specific heat.
 
@@ -174,6 +179,18 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     return tf.nest.map_structure(
         lambda t: self._lh_s0 + (self._cp_v - self._cp_i) * (t - self._t_0),
         temperature)
+
+  def lh_f(self, temperature: FlowFieldVal) -> FlowFieldVal:
+    """Computes the latent heat of freezing/fusion at `temperature`.
+
+    Args:
+      temperature: The temperature of the flow field [K].
+
+    Returns:
+      The latent heat of freezing/fusion at the input temperature.
+    """
+    lh_f0 = self._lh_s0 - self._lh_v0
+    return lh_f0 + (self._cp_l - self._cp_i) * (temperature - self._t_0)
 
   def humidity_to_volume_mixing_ratio(
       self,

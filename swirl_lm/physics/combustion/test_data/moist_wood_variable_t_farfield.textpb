@@ -3,6 +3,7 @@
 solver_procedure: VARIABLE_DENSITY
 convection_scheme: CONVECTION_SCHEME_QUICK
 time_integration_scheme: TIME_SCHEME_CN_EXPLICIT_ITERATION
+use_3d_tf_tensor: true
 grid_params {
   computation_shape {
     dim_0: 2
@@ -48,6 +49,7 @@ combustion {
     }
     include_radiation: true
     t_variable: "T_init"
+    apply_temperature_filter: true
   }
 }
 scalars {

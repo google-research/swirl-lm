@@ -1,0 +1,139 @@
+// Copyright 2021 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto2";
+
+package swirl_lm_jax;
+
+import "swirl_lm/jax/utility/file.proto";
+
+// Defines the type of boundary condition to be used for each variable in a
+// specific boundary.
+// Next id: 7.
+enum BoundaryConditionType {
+  // The default option where no boundary condition is set. Results in an error
+  // if that direction is not periodic.
+  BC_TYPE_UNKNOWN = 0;
+  // The Dirichlet boundary condition. A value needs to be specified for this
+  // type of boundary condition.
+  BC_TYPE_DIRICHLET = 1;
+  // The Neumann boundary condition.
+  BC_TYPE_NEUMANN = 2;
+  // The Neumann boundary condition estimated with 2nd order scheme.
+  BC_TYPE_NEUMANN_2 = 5;
+  // Maintains the current value for the specified boundary.
+  BC_TYPE_NO_TOUCH = 3;
+  // The periodic boundary condition.
+  BC_TYPE_PERIODIC = 4;
+  // The nonreflecting boundary condition.
+  // Using the "high" side of the domain as an example, a forward Euler with
+  // upwinding scheme is used to solve the boundary:
+  //
+  //    ∂ϕ/∂t = - U* ∂ϕ/∂x
+  //
+  // In discrete form:
+  //
+  //    ϕⱼⁿ⁺¹ = (1 - Δt U* /Δx) ϕⱼⁿ + (Δt U* /Δx) ϕⱼ₋₁ⁿ
+  //
+  // Similarly for "low" side of the domain boundary, we have a symmetric case:
+  //
+  //    ∂ϕ/∂t = U* ∂ϕ/∂x
+  //
+  // In discrete form:
+  //
+  //    ϕⱼⁿ⁺¹ = (1 - Δt U* /Δx) ϕⱼⁿ + (Δt U* /Δx) ϕⱼ₊₁ⁿ
+  //
+  // In the current implementation, U* is specified by the configuration
+  // through the value in the boundary condition and the mode (specified
+  // through `boundary_info.bc_params.nonreflecting_bc_mode`) setting as:
+  //
+  // For NONREFLECTING_LOCAL_MAX mode:
+  //
+  //    U* = abs(max(u + u0, 0)) for the "high" side of the domain, and
+  //    U* = abs(min(u - u0, 0)) for the "low" side of the domain.
+  //
+  // For NONREFLECTING_GLOBAL_MEAN mode:
+  //
+  //    U* = abs(global_mean(u) + u0), for the "high" side of the domain, and
+  //    U* = abs(global_mean(u) - u0), for the "low" side of the domain.
+  //
+  // For NONREFLECTING_GLOBAL_MAX mode:
+  //
+  //    U* = abs(max(global_max(u), 0) + u0), for the "high" side of the domain,
+  //    U* = abs(min(global_min(u), 0) - u0), for the "low" side of the domain.
+  //
+  //  where u is the (spatially dependent) velocity field at the boundary
+  //  (first inner fluid layer), while u0 is value specified for the boundary
+  //  condition configuration.
+  BC_TYPE_NONREFLECTING = 6;
+}
+
+// Messages encapsulating 3-D coordinates.
+message CoordinateInt {
+  optional int32 dim_x = 1;
+  optional int32 dim_y = 2;
+  optional int32 dim_z = 3;
+}
+
+message CoordinateFloat {
+  optional float dim_x = 1;
+  optional float dim_y = 2;
+  optional float dim_z = 3;
+}
+
+message CoordinateBC {
+  optional BoundaryConditionType dim_x = 1;
+  optional BoundaryConditionType dim_y = 2;
+  optional BoundaryConditionType dim_z = 3;
+}
+
+message CoordinateFile {
+  optional File dim_x = 1;
+  optional File dim_y = 2;
+  optional File dim_z = 3;
+}
+
+message CoordinateBool {
+  optional bool dim_x = 1;
+  optional bool dim_y = 2;
+  optional bool dim_z = 3;
+}
+
+// A message that parameterizes a distributed simulation.
+// Next id: 11
+message GridParametrization {
+  // The shape or topology of compute cores.
+  optional CoordinateInt computation_shape = 1;
+  // The full grid length in each dimension. This is the length of the grid
+  // including padding, if any.
+  optional CoordinateFloat length = 2;
+  // The grid size per core in each dimension.
+  optional CoordinateInt grid_size = 3;
+  // The halo width.
+  optional int32 halo_width = 4 [default = 2];
+  // The absolute time step per simulation finite difference step.
+  optional float dt = 5;
+  // The convolutional kernel dimension.
+  optional int32 kernel_size = 6 [default = 128];
+  // The full grid size (over all cores) in each dimension. This is the physical
+  // grid size (padding is excluded).
+  optional CoordinateInt physical_full_grid_size = 7;
+  // The paths to files containing stretched grid data.
+  optional CoordinateFile stretched_grid_files = 8;
+  // Specifies if the flow field is periodic in a direction.
+  optional CoordinateBool periodic = 9;
+  // Specifies the order of the axes for storing all the fields and mesh
+  // partitions. It should be a permutation of 'xyz'.
+  optional string data_axis_order = 10 [default = 'xyz'];
+}

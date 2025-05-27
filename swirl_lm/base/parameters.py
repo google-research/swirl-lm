@@ -29,6 +29,7 @@ from swirl_lm.base import physical_variable_keys_manager
 from swirl_lm.boundary_condition import boundary_condition_utils
 from swirl_lm.boundary_condition import boundary_conditions_pb2
 from swirl_lm.communication import halo_exchange
+from swirl_lm.equations import pressure_pb2
 from swirl_lm.numerics import derivatives
 from swirl_lm.numerics import numerics_pb2
 from swirl_lm.physics.thermodynamics import thermodynamics_pb2
@@ -219,6 +220,10 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
     self.diffusion_scheme = config.diffusion_scheme
     self.time_integration_scheme = config.time_integration_scheme
 
+    self.diff_stab_crit = (
+        config.diff_stab_crit if config.HasField('diff_stab_crit') else None
+    )
+
     self.enable_scalar_recorrection = config.enable_scalar_recorrection
     self.enable_rhie_chow_correction = config.enable_rhie_chow_correction
 
@@ -381,7 +386,9 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
               f'similarity theory.')
 
     if any(self.use_stretched_grid):
-      _validate_config_for_stretched_grid(config)
+      _validate_config_for_stretched_grid(
+          config, self.use_stretched_grid, self.global_xyz, self.g_dim
+      )
 
     # Toggle if to run with the debug mode.
     self.dbg = FLAGS.simulation_debug
@@ -978,6 +985,9 @@ def params_from_config_file_flag() -> SwirlLMParameters:
 
 def _validate_config_for_stretched_grid(
     config: parameters_pb2.SwirlLMParameters,
+    use_stretched_grid: tuple[bool, bool, bool],
+    global_xyz: tuple[tf.Tensor, tf.Tensor, tf.Tensor],
+    g_dim: Literal[0, 1, 2] | None,
 ) -> None:
   """Validates the config for features available with stretched grid.
 
@@ -986,11 +996,40 @@ def _validate_config_for_stretched_grid(
 
   Args:
     config: An instance of the `SwirlLMParameters` proto.
+    use_stretched_grid: A tuple of booleans indicating whether the grid is
+      stretched in each dimension.
+    global_xyz: A tuple of tensors representing the global coordinates in each
+      dimension, excluding halos.
+    g_dim: The dimension along which the gravity force acts. If not None, then
+      buoyancy is present.
 
   Raises:
     NotImplementedError: If the config has features turned on that are not
     supported by stretched grid.
+    ValueError: If gravity is present, the pressure-buoyancy-balancing boundary
+      condition is used, and the 2nd coordinate level is not exactly 3 times the
+      first coordinate level.
   """
+  if (
+      g_dim is not None
+      and use_stretched_grid[g_dim]
+      and config.pressure.vertical_bc_treatment
+      == pressure_pb2.Pressure.VerticalBCTreatment.PRESSURE_BUOYANCY_BALANCING
+  ):
+    coord = global_xyz[g_dim]
+    # If gravity is present and the pressure-buoyancy-balancing boundary
+    # condition is used, it is required that z0=coord[0] is the height
+    # above the ground of the first level, and that the first halo node has
+    # coordinate value of z_{-1} = -coord[0]. Let z1=coord[1]. The requirement
+    # for boundary conditions is that z1 - z0 = z0 - z_{-1}. Thus, z1 = 3 * z0
+    # is required.
+    if not np.isclose(coord[1], 3 * coord[0], rtol=1e-4):
+      raise ValueError(
+          'When using stretched grid in the direction with gravity, the second'
+          ' coordinate level must be exactly 3 times the first coordinate'
+          ' level.'
+      )
+
   if config.HasField('boundary_models') and config.boundary_models.HasField(
       'ib'
   ):

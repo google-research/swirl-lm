@@ -36,6 +36,7 @@ from swirl_lm.utility import file_io
 from swirl_lm.utility import file_pb2
 from swirl_lm.utility import grid_parametrization_pb2
 from swirl_lm.utility import stretched_grid_util
+from swirl_lm.utility import text_util
 from swirl_lm.utility import types
 import tensorflow as tf
 
@@ -219,7 +220,7 @@ def _load_array_from_file(array_file: file_pb2.File) -> tf.Tensor:
   Returns:
     A 1D tensor of the data from the file.
   """
-  contents = file_io.load_file(array_file)
+  contents = text_util.strip_line_comments(file_io.load_file(array_file), '#')
   return tf.convert_to_tensor(
       np.fromstring(contents, sep='\n'), dtype=tf.float32
   )

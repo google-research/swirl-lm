@@ -335,7 +335,7 @@ class ScalarGeneric(abc.ABC):
       phi: types.FlowFieldVal,
       states: types.FlowFieldMap,
       additional_states: types.FlowFieldMap,
-  ) -> types.FlowFieldVal:
+  ) -> types.ScalarSource:
     """Computes the source term in the transport equation.
 
     Args:
@@ -349,4 +349,4 @@ class ScalarGeneric(abc.ABC):
       The source term of this scalar transport equation.
     """
     del replica_id, replicas, states, additional_states
-    return tf.nest.map_structure(tf.zeros_like, phi)
+    return types.ScalarSource(total=tf.nest.map_structure(tf.zeros_like, phi))

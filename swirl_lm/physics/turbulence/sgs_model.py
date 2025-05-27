@@ -282,6 +282,13 @@ class SgsModel(object):
     self._params = swirllm_params.sgs_model
     self._deriv_lib = swirllm_params.deriv_lib
 
+    self._nu_t_max = (
+        self._params.nu_t_max if self._params.HasField('nu_t_max') else None
+    )
+    self._diff_t_max = (
+        self._params.diff_t_max if self._params.HasField('diff_t_max') else None
+    )
+
     if not self._params or not self._params.HasField('sgs_model_type'):
       logging.warning(
           'SGS is used but no model is specified. Turbulent viscosity and '
@@ -399,8 +406,11 @@ class SgsModel(object):
           )
       )
 
-    return tf.nest.map_structure(
+    diff_t = tf.nest.map_structure(
         lambda d: tf.math.maximum(d, self._params.diff_t_min), diff_t
+    )
+    return diff_t if self._diff_t_max is None else tf.nest.map_structure(
+        lambda d: tf.math.minimum(d, self._diff_t_max), diff_t
     )
 
   def turbulent_viscosity(
@@ -477,8 +487,11 @@ class SgsModel(object):
           )
       )
 
-    return tf.nest.map_structure(
+    nu_t = tf.nest.map_structure(
         lambda n: tf.math.maximum(n, self._params.nu_t_min), nu_t
+    )
+    return nu_t if self._nu_t_max is None else tf.nest.map_structure(
+        lambda n: tf.math.minimum(n, self._nu_t_max), nu_t
     )
 
   def smagorinsky(
@@ -810,9 +823,7 @@ class SgsModel(object):
     )
 
     return tf.nest.map_structure(
-        lambda delta_l, s_l: tf.math.minimum(  # pylint: disable=g-long-lambda
-            (c_s * delta_l) ** 2 * s_l, self._params.diff_t_max
-        ),
+        lambda delta_l, s_l: (c_s * delta_l) ** 2 * s_l,
         delta_updated,
         df_magnitude,
     )

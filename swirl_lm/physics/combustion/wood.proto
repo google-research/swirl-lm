@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// LINT: LEGACY_NAMES
+
 syntax = "proto2";
 
 package research.simulation;
@@ -28,7 +30,7 @@ import "swirl_lm/physics/combustion/turbulent_kinetic_energy.proto";
 //     Coupled Atmosphere–fire Model: Basic Fire Behavior and Dependence on Wind
 //     Speed.” Journal of Geophysical Research 110 (D13): 287.
 //
-// Next id: 20
+// Next id: 23
 message Wood {
   // The B scale of the fuel elements, in units of m.
   optional float s_b = 1;
@@ -104,4 +106,15 @@ message Wood {
   // [1].
   optional float t_0_ivf = 18 [default = 300.0];
   optional float t_1_ivf = 19 [default = 700.0];
+
+  // The following three parameters are used to filter the temperature field
+  // before computing the reaction source term.
+  // The option of applying the temperature filter to the temperature field
+  // before computing the reaction source term.
+  optional bool apply_temperature_filter = 22 [default = false];
+  // The fraction of the weights to be applied along the axes.
+  optional float w_axis = 20 [default = 0.15];
+  // The fraction of the weights to be applied at the center in the 3 x 3
+  // stencil.
+  optional float w_center = 21 [default = 0.95];
 }

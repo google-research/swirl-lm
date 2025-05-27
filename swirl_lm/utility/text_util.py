@@ -14,6 +14,8 @@
 
 """Utility functions for text."""
 
+import re
+
 
 def _decimal_digits(numerator: int, denominator: int) -> str:
   """Returns the digits after the decimal point, e.g, '05' for 50 / 1000.
@@ -102,3 +104,8 @@ def seconds_to_string(total_seconds: float, separator: str = ' ',
     return zero
 
   return separator.join(f'{k}{v}' for k, v, _ in parts)
+
+
+def strip_line_comments(text: str, comment_marker: str) -> str:
+  strip_re = r'\s*' + re.escape(comment_marker) + r'.*$'
+  return re.sub(strip_re, '', text, flags=re.MULTILINE)

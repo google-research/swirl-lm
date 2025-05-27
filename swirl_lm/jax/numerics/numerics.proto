@@ -1,0 +1,81 @@
+// Copyright 2021 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto2";
+
+package swirl_lm_jax;
+
+option java_multiple_files = true;
+
+// Defines the types of numerical fluxes.
+enum NumericalFlux {
+  // The default option where no flux is used. Should results in an error.
+  NUMERICAL_FLUX_UNKNOWN = 0;
+  // The upwinding flux.
+  NUMERICAL_FLUX_UPWINDING = 1;
+  // The Lax-Friedrich flux.
+  NUMERICAL_FLUX_LF = 2;
+  // The Roe flux.
+  NUMERICAL_FLUX_ROE = 3;
+}
+
+// Defines the types of convection schemes.
+// Next id: 10
+enum ConvectionScheme {
+  // The default option where no scheme is used. Should results in an error.
+  CONVECTION_SCHEME_UNKNOWN = 0;
+  // The first order upwinding scheme.
+  CONVECTION_SCHEME_UPWIND_1 = 1;
+  // The second order upwinding QUICK scheme.
+  CONVECTION_SCHEME_QUICK = 2;
+  // The fifth order WENO scheme.
+  CONVECTION_SCHEME_WENO_5 = 5;
+  // The third order WENO scheme.
+  CONVECTION_SCHEME_WENO_3 = 6;
+  // The third order WENO scheme based on pre-trained neural network.
+  CONVECTION_SCHEME_WENO_3_NN = 7;
+  // The second order central differencing shceme.
+  CONVECTION_SCHEME_CENTRAL_2 = 3;
+  // The fourth order central differencing shceme.
+  CONVECTION_SCHEME_CENTRAL_4 = 4;
+  // The Van Leer flux limiter.
+  CONVECTION_SCHEME_FLUX_LIMITER_VAN_LEER = 8;
+  // The MUSCL scheme.
+  CONVECTION_SCHEME_FLUX_LIMITER_MUSCL = 9;
+}
+
+// Defines the types of diffusion schemes.
+enum DiffusionScheme {
+  // The default option where no scheme is used. Should results in an error.
+  DIFFUSION_SCHEME_UNKNOWN = 0;
+  // The diffusion term computed with the second order central scheme at nodes.
+  // The width of the stencil is 5.
+  DIFFUSION_SCHEME_CENTRAL_5 = 1;
+  // The diffusion term computed from diffusive fluxes on cell faces. The width
+  // of the stencil is 3.
+  DIFFUSION_SCHEME_CENTRAL_3 = 2;
+  // The diffusion term computed with a 27-node stencil (3 in each direction)
+  // without interpolations.
+  DIFFUSION_SCHEME_STENCIL_3 = 3;
+}
+
+// Defines the type of time integration schemes.
+enum TimeIntegrationScheme {
+  // The default option where no scheme is used. Should result in an error.
+  TIME_SCHEME_UNKNOWN = 0;
+  // The third order Runge Kutta scheme.
+  TIME_SCHEME_RK3 = 1;
+  // The semi-implicit Crank-Nicolson scheme with explicit subiterations.
+  TIME_SCHEME_CN_EXPLICIT_ITERATION = 2;
+}

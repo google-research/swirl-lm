@@ -374,6 +374,7 @@ def coriolis_force(
     phi: float,
     u_g: Dict[str, float],
     vertical_dim: int,
+    ambient_from_states: bool = False,
 ) -> composite_types.StatesUpdateFn:
   """Generates an update function for the Coriolis force term.
 
@@ -392,6 +393,9 @@ def coriolis_force(
     u_g: A dict containing the geostrophic winds keyed by the velocity
       component they correspond to.
     vertical_dim: The dimension of the vertical direction.
+    ambient_from_states: An indicator of whether to use ambient states from
+      `additional_states` instead of `u_g` to compute the Coriolis force. The
+      ambient states has to be named as '{varname}_ambient'.
 
   Returns:
     An update function for the `additional_states` with keys `src_u` and
@@ -418,10 +422,18 @@ def coriolis_force(
     del kernel_op, replica_id, replicas, params
 
     additional_states_new = {}
-    deltas = tuple([
-        subtract_scalar(states[k], u_g[k])
-        for k in ordered_velocity_keys
-    ])
+    deltas = []
+    for k in ordered_velocity_keys:
+      ambient_name = f'{k}_ambient'
+      if not ambient_from_states or ambient_name not in additional_states:
+        deltas.append(subtract_scalar(states[k], u_g[k]))
+      else:
+        deltas.append(
+            tf.nest.map_structure(
+                tf.math.subtract, states[k], additional_states[ambient_name]
+            )
+        )
+    deltas = tuple(deltas)
     horizontal_dims = [0, 1, 2]
     del horizontal_dims[vertical_dim]
 

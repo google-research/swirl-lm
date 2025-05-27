@@ -77,3 +77,12 @@ InfeedElementSpec = NamedTuple('InfeedElementSpec', [('type', tf.DType),
                                                      ('shape', tf.TensorShape)])
 SingleInfeedSpec = Optional[Mapping[Text, InfeedElementSpec]]
 InfeedSpec = Union[Sequence[SingleInfeedSpec], SingleInfeedSpec]
+
+
+class ScalarSource(NamedTuple):
+  """Defines the source term in a scalar transport equation."""
+  # The total source term.
+  total: FlowFieldVal
+  # The source term to be added to the right hand side of the Poisson equation
+  # when the thermodynamics mode is LOW_MACH.
+  mass: Optional[FlowFieldVal] = None

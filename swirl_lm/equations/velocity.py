@@ -657,13 +657,15 @@ class Velocity(object):
       nu_t = self._sgs_model.turbulent_viscosity(
           (u_mid, v_mid, w_mid),
           replicas=replicas,
-          additional_states=additional_states)
-      mu = tf.nest.map_structure(
-          lambda nu_t_i, rho_i: (self._params.nu + nu_t_i) * rho_i, nu_t,
-          states_0[_KEY_RHO])
+          additional_states=additional_states,
+      )
+      nu = self._params.nu + nu_t
     else:
-      mu = tf.nest.map_structure(lambda rho_i: self._params.nu * rho_i,
-                                 states_0[_KEY_RHO])
+      nu = tf.constant(self._params.nu, dtype=types.TF_DTYPE)
+
+    nu = eq_utils.bound_viscosity(nu, additional_states, self._params)
+
+    mu = common_ops.map_structure_3d(tf.math.multiply, nu, states_0[_KEY_RHO])
 
     forces = [self._source[_KEY_U], self._source[_KEY_V], self._source[_KEY_W]]
 

@@ -157,11 +157,12 @@ class SimulatedTurbulentInflow():
       ValueError: If `index` is out of the range of the last dimension of
         `inflow_data`.
     """
+    inflow_shape = tf.shape(inflow_data)
     check_op = tf.debugging.assert_equal(
         tf.math.logical_and(
-            tf.math.less(index, inflow_data.shape[0]),
+            tf.math.less(index, inflow_shape[0]),
             tf.math.greater_equal(index, 0)), True,
-        (f'Index ({index}) is out of range [0, {inflow_data.shape[2]}] when '
+        (f'Index ({index}) is out of range [0, {inflow_shape[2]}] when '
          f'extracting the inflow plane.'))
 
     with tf.control_dependencies([check_op]):

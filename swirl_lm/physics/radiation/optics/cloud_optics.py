@@ -45,7 +45,7 @@ _KG_TO_G_FACTOR = 1e3
 _M_TO_MICRONS_FACTOR = 1e6
 
 
-def _radius_interpolant(
+def _particle_size_interpolant(
     f: tf.Tensor, lower_bnd: float, upper_bnd: float, n_size: int
 ) -> Dict[str, Callable[..., Interpolant]]:
   """Creates effective radius interpolant based on desired number of points."""
@@ -97,22 +97,26 @@ def compute_optical_properties(
   # tables. Default to the lower bound to prevent an out-of-range error when
   # interpolating. These default values will later be eliminated by the cloud
   # mask constructed below.
-  radius_eff = [
-      tf.math.maximum(
-          _M_TO_MICRONS_FACTOR * radius_eff_liq, lookup.radius_liq_lower
+  particle_size = [
+      tf.clip_by_value(
+          _M_TO_MICRONS_FACTOR * radius_eff_liq,
+          lookup.radius_liq_lower,
+          lookup.radius_liq_upper,
       ),
-      tf.math.maximum(
-          _M_TO_MICRONS_FACTOR * radius_eff_ice, lookup.radius_ice_lower
+      tf.clip_by_value(
+          _M_TO_MICRONS_FACTOR * 2.0 * radius_eff_ice,
+          lookup.diameter_ice_lower,
+          lookup.diameter_ice_upper,
       ),
   ]
 
   # Create interpolant for cloud droplet effective radius.
-  radius_lower = [lookup.radius_liq_lower, lookup.radius_ice_lower]
-  radius_upper = [lookup.radius_liq_upper, lookup.radius_ice_upper]
+  size_lower = [lookup.radius_liq_lower, lookup.diameter_ice_lower]
+  size_upper = [lookup.radius_liq_upper, lookup.diameter_ice_upper]
   n_size = [lookup.n_size_liq, lookup.n_size_ice]
 
   interpolants = tf.nest.map_structure(
-      _radius_interpolant, radius_eff, radius_lower, radius_upper, n_size
+      _particle_size_interpolant, particle_size, size_lower, size_upper, n_size
   )
 
   roughness = lookup.ice_roughness.value

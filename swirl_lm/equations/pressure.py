@@ -123,7 +123,7 @@
 
 import collections
 import functools
-from typing import Any, Dict, Literal, Mapping, Optional, Text, Tuple
+from typing import Any, Dict, Literal, Mapping, Optional, Text, Tuple, TypeAlias
 
 from absl import logging
 import numpy as np
@@ -139,6 +139,7 @@ from swirl_lm.numerics import interpolation
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import thermodynamics_pb2
 from swirl_lm.utility import common_ops
+from swirl_lm.utility import debug_output
 from swirl_lm.utility import debug_print
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import monitor
@@ -148,8 +149,11 @@ import tensorflow as tf
 from google.protobuf import text_format
 
 
-FlowFieldVal = types.FlowFieldVal
-FlowFieldMap = types.FlowFieldMap
+FlowFieldVal: TypeAlias = types.FlowFieldVal
+FlowFieldMap: TypeAlias = types.FlowFieldMap
+BoundaryType: TypeAlias = boundary_condition_utils.BoundaryType
+VerticalBCTreatment: TypeAlias = pressure_pb2.Pressure.VerticalBCTreatment
+_NormType: TypeAlias = common_ops.NormType
 
 _G_THRESHOLD = 1e-6
 
@@ -158,8 +162,6 @@ _G_THRESHOLD = 1e-6
 # for the Poisson solver only.
 _POISSON_SOLVER_INTERNAL_DTYPE = None
 _TF_DTYPE = types.TF_DTYPE
-
-_NormType = common_ops.NormType
 
 _DEBUG_PRINT_LOG_LEVEL = debug_print.LogLevel.INFO
 
@@ -397,7 +399,7 @@ def _get_first_last_grid_spacing_for_wall_bc(
 ) -> tuple[float, float]:
   """Returns the first and last grid spacing in `dim`, allowing nonuniform grid.
 
-  Only valid for a wall-like boundary condition, not a periodic BC.
+  Used for a wall-like, Neumann boundary condition, not a periodic BC.
 
   Args:
     params: An instance of SwirlLMParameters specifying the configuration.
@@ -407,9 +409,10 @@ def _get_first_last_grid_spacing_for_wall_bc(
     The first and last grid spacing.
   """
   if params.use_stretched_grid[dim]:
-    coord = params.global_xyz[dim]
-    first_grid_spacing = coord[1] - coord[0]
-    last_grid_spacing = coord[-1] - coord[-2]
+    halo_width = params.halo_width
+    coord = params.global_xyz_with_halos[dim]
+    first_grid_spacing = coord[halo_width] - coord[halo_width - 1]
+    last_grid_spacing = coord[-halo_width] - coord[-(halo_width + 1)]
   else:
     first_grid_spacing = last_grid_spacing = params.grid_spacings[dim]
   return first_grid_spacing, last_grid_spacing
@@ -711,8 +714,9 @@ class Pressure(object):
 
       return exchange_halos(dpr, bc_dp)
 
-    src_rho = self._source['rho'] if self._source['rho'] is not None else (
-        tf.nest.map_structure(tf.zeros_like, states['p']))
+    src_rho = additional_states['mass_source']
+    if self._source['rho'] is not None:
+      src_rho = tf.nest.map_structure(tf.math.add, self._source['rho'], src_rho)
 
     # Mean removal is only applied when no Dirichlet boundary conditions are
     # specified, in which case there will be infinite number of solutions.
@@ -750,6 +754,10 @@ class Pressure(object):
     dp = common_ops.remove_global_mean(
         common_ops.tf_cast(dp, _TF_DTYPE), replicas,
         halo_width) if mean_removal else common_ops.tf_cast(dp, _TF_DTYPE)
+
+    if debug_output.is_debug_enabled('debug_pressure_residual'):
+      residual = self._solver.residual(dp, b, helper_vars)
+      debug_output.dump_value('debug_pressure_residual', residual)
 
     # Debug print is guarded behind the flag so the default (not enabled)
     # is a no-op where the computational graph is not changed.
@@ -856,91 +864,249 @@ class Pressure(object):
     # of it is 0, so that the first term in the shear stress formulation is 0.
 
     # Updates the pressure boundary condition based on the simulation setup.
-    for i in (0, 1, 2):
-      for j in range(2):
-        if (
-            self._params.bc_type[i][j]
-            == boundary_condition_utils.BoundaryType.PERIODIC
-        ):
-          bc_p[i][j] = None
+    for dim in (0, 1, 2):
+      for face in (0, 1):
+        if self._params.bc_type[dim][face] == BoundaryType.PERIODIC:
+          bc_p[dim][face] = None
 
-        elif (
-            self._params.bc_type[i][j]
-            == boundary_condition_utils.BoundaryType.INFLOW
-        ):
-          bc_p[i][j] = (halo_exchange.BCType.NEUMANN_2, 0.0)
+        elif self._params.bc_type[dim][face] == BoundaryType.INFLOW:
+          bc_p[dim][face] = (halo_exchange.BCType.NEUMANN_2, 0.0)
 
-        elif (
-            self._params.bc_type[i][j]
-            == boundary_condition_utils.BoundaryType.OUTFLOW
-        ):
+        elif self._params.bc_type[dim][face] == BoundaryType.OUTFLOW:
           if self._pressure_params.pressure_outlet:
             # Enforce a pressure outlet boundary condition on demand.
-            bc_p[i][j] = (halo_exchange.BCType.DIRICHLET, 0.0)
+            bc_p[dim][face] = (halo_exchange.BCType.DIRICHLET, 0.0)
           else:
-            bc_p[i][j] = (halo_exchange.BCType.NEUMANN_2, 0.0)
+            bc_p[dim][face] = (halo_exchange.BCType.NEUMANN_2, 0.0)
 
-        elif self._params.bc_type[i][j] in (
-            boundary_condition_utils.BoundaryType.SLIP_WALL,
-            boundary_condition_utils.BoundaryType.NON_SLIP_WALL,
-            boundary_condition_utils.BoundaryType.SHEAR_WALL,
+        elif self._params.bc_type[dim][face] in (
+            BoundaryType.SLIP_WALL,
+            BoundaryType.NON_SLIP_WALL,
+            BoundaryType.SHEAR_WALL,
         ):
           first_last_grid_spacing = _get_first_last_grid_spacing_for_wall_bc(
-              self._params, i
+              self._params, dim
           )
 
-          if i == self.g_dim:
-            # Ensures the pressure balances with the buoyancy at the first fluid
-            # layer by assigning values to the pressure in halos adjacent to the
-            # fluid domain. Note that 'zz' in the `additionall_states` here
-            # refers to the vertical coordinates instead of the z coordinates.
-            rho_0 = self._thermodynamics.rho_ref(
-                additional_states.get('zz', None), additional_states
-            )
-            b = eq_utils.buoyancy_source(
-                states['rho_thermal'], rho_0, self._params, i, additional_states
-            )
-            bc_value = tf.nest.map_structure(
-                common_ops.average,
-                common_ops.get_face(
-                    b,
-                    i,
-                    j,
-                    self._params.halo_width,
-                    first_last_grid_spacing[j],
-                )[0],
-                common_ops.get_face(
-                    b,
-                    i,
-                    j,
-                    self._params.halo_width - 1,
-                    first_last_grid_spacing[j],
-                )[0],
-            )
+          if dim == self.g_dim:
+            vertical_bc = self._pressure_params.vertical_bc_treatment
+            if vertical_bc == VerticalBCTreatment.PRESSURE_BUOYANCY_BALANCING:
+              bc_p[dim][face] = self._pressure_bc_balanced_vertical(
+                  states, additional_states, face
+              )
+            elif vertical_bc == VerticalBCTreatment.APPROXIMATE:
+              bc_p[dim][face] = self._pressure_bc_approximate_vertical(
+                  states, additional_states, face
+              )
+            else:
+              raise ValueError(
+                  'Unknown vertical BC treatment:'
+                  f' {self._pressure_params.vertical_bc_treatment}'
+              )
           else:
             bc_value = common_ops.get_face(
                 tf.nest.map_structure(tf.zeros_like, states['p']),
-                i,
-                j,
+                dim,
+                face,
                 self._params.halo_width - 1,
-                first_last_grid_spacing[j],
+                first_last_grid_spacing[face],
             )[0]
 
-          # The boundary condition for pressure is applied at the interface
-          # between the boundary and fluid only. Assuming everything is
-          # homogeneous behind the halo layer that's closest to the fluid, a
-          # homogeneous Neumann BC is applied to all other layers for pressure.
-          zeros = [tf.nest.map_structure(tf.zeros_like, bc_value)] * (
-              self._params.halo_width - 1)
-
-          bc_planes = zeros + [bc_value] if j == 0 else [bc_value] + zeros
-
-          bc_p[i][j] = (halo_exchange.BCType.NEUMANN, bc_planes)
+            # The boundary condition for pressure is applied at the interface
+            # between the boundary and fluid only. Assuming everything is
+            # homogeneous behind the halo layer that's closest to the fluid, a
+            # homogeneous Neumann BC is applied to all other layers for
+            # pressure.
+            zeros = [tf.nest.map_structure(tf.zeros_like, bc_value)] * (
+                self._params.halo_width - 1
+            )
+            bc_planes = zeros + [bc_value] if face == 0 else [bc_value] + zeros
+            bc_p[dim][face] = (halo_exchange.BCType.NEUMANN, bc_planes)
         else:
-          raise ValueError('{} is not defined for pressure boundary.'.format(
-              self._params.bc_type[i][j]))
+          raise ValueError(
+              '{} is not defined for pressure boundary.'.format(
+                  self._params.bc_type[dim][face]
+              )
+          )
 
     self._bc['p'] = bc_p
+
+  def _pressure_bc_approximate_vertical(
+      self,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
+      face: Literal[0, 1],
+  ) -> tuple[halo_exchange.BCType, list[tf.Tensor]]:
+    """Sets the vertical pressure boundary condition, using approximate balance.
+
+    This function is the original implementation of the vertical boundary
+    condition for pressure. The pressure and buoyancy are approximately
+    balanced, which can sometimes lead to spurious forcing of the fluid at the
+    boundaries. For new simulations, prefer the balanced vertical boundary
+    condition instead; this function is retained (for now) but will eventually
+    be removed.
+
+    See `update_pressure_bc` for more details.
+
+    Args:
+      states: A dictionary that holds flow field variables from the latest
+        prediction.
+      additional_states: A dictionary that holds helper variables.
+      face: Which face to get BC for: bottom (`face==0`) or top (`face==1`).
+
+    Returns:
+      A dictionary that specifies the boundary condition of pressure.
+    """
+    dim = self.g_dim
+    first_last_grid_spacing = _get_first_last_grid_spacing_for_wall_bc(
+        self._params, dim
+    )
+    # Default treatment for vertical boundary condition.
+    # Ensures the pressure balances with the buoyancy at the first fluid
+    # layer by assigning values to the pressure in halos adjacent to the
+    # fluid domain. Note that 'zz' in the `additional_states` here refers to the
+    # vertical coordinates instead of the z coordinates.
+    rho_0 = self._thermodynamics.rho_ref(
+        additional_states.get('zz', None), additional_states
+    )
+    b = eq_utils.buoyancy_source(
+        states['rho_thermal'],
+        rho_0,
+        self._params,
+        dim,
+        additional_states,
+    )
+    bc_value = tf.nest.map_structure(
+        common_ops.average,
+        common_ops.get_face(
+            b,
+            dim,
+            face,
+            self._params.halo_width,
+            first_last_grid_spacing[face],
+        )[0],
+        common_ops.get_face(
+            b,
+            dim,
+            face,
+            self._params.halo_width - 1,
+            first_last_grid_spacing[face],
+        )[0],
+    )
+
+    # The boundary condition for pressure is applied at the interface
+    # between the boundary and fluid only. Assuming everything is
+    # homogeneous behind the halo layer that's closest to the fluid, a
+    # homogeneous Neumann BC is applied to all other layers for pressure.
+    zeros = [tf.nest.map_structure(tf.zeros_like, bc_value)] * (
+        self._params.halo_width - 1
+    )
+    bc_planes = zeros + [bc_value] if face == 0 else [bc_value] + zeros
+    bc_p_dim_face = (halo_exchange.BCType.NEUMANN, bc_planes)
+    return bc_p_dim_face
+
+  def _pressure_bc_balanced_vertical(
+      self,
+      states: FlowFieldMap,
+      additional_states: FlowFieldMap,
+      face: Literal[0, 1],
+  ) -> tuple[halo_exchange.BCType, list[tf.Tensor]]:
+    """Updates the boundary condition of pressure based on the flow field.
+
+    Similar to `_update_pressure_bc`, but this function handles the vertical
+    boundary condition in an alternate way, which avoids spurious forcing of the
+    fluid and should be more stable in the presence of buoyancy.  See comments
+    in that function for more detail.
+
+    Args:
+      states: A dictionary that holds flow field variables from the latest
+        prediction.
+      additional_states: A dictionary that holds helper variables.
+      face: Which face to get BC for: bottom (`face==0`) or top (`face==1`).
+
+    Returns:
+      A dictionary that specifies the boundary condition of pressure.
+    """
+    dim = self.g_dim
+    first_last_grid_spacing = _get_first_last_grid_spacing_for_wall_bc(
+        self._params, dim
+    )
+
+    # Ensures the pressure balances with the buoyancy at the first fluid layer
+    # by assigning values to the pressure in halos adjacent to the fluid domain.
+    rho_0 = self._thermodynamics.rho_ref(
+        additional_states.get('zz', None), additional_states
+    )
+    bbar = eq_utils.buoyancy_source(
+        states['rho_thermal'],
+        rho_0,
+        self._params,
+        dim,
+        additional_states,
+    )
+    if (
+        self._thermodynamics.solver_mode
+        == thermodynamics_pb2.Thermodynamics.ANELASTIC
+    ):
+      b = tf.nest.map_structure(tf.divide, bbar, rho_0)
+    else:
+      b = bbar
+    b_first_interior = common_ops.get_face(
+        b, dim, face, self._params.halo_width
+    )[0]
+    b_second_interior = common_ops.get_face(
+        b, dim, face, self._params.halo_width + 1
+    )[0]
+    if face == 0:
+      # If the wall is at index -1/2, use the values of b on the first
+      # two interior nodes to extrapolate to the wall, using formula
+      #   b_{-1/2} = (3*b_0 - b_1) / 2
+      b_wall = tf.nest.map_structure(
+          lambda b0, b1: (3 * b0 - b1) / 2,
+          b_first_interior,
+          b_second_interior,
+      )
+      # Multiply by the grid spacing at the wall, which is required when using
+      # Neumann boundary conditions. E.g., for the lower face, use grid spacing
+      # z_0 - z_{-1}.
+      bc_value = first_last_grid_spacing[face] * b_wall
+      # The boundary condition for pressure is applied at the interface
+      # between the boundary and fluid only. Assuming everything is
+      # homogeneous behind the halo layer that's closest to the fluid, a
+      # homogeneous Neumann BC is applied to all other layers for
+      # pressure.
+      zeros = [tf.nest.map_structure(tf.zeros_like, bc_value)] * (
+          self._params.halo_width - 1
+      )
+      bc_planes = zeros + [bc_value]
+      bc_p_dim_face = (halo_exchange.BCType.NEUMANN, bc_planes)
+    else:  # face == 1.
+      # N is first halo node, N-1 is last interior, N-2 is second last
+      # interior. Set p in the first halo node using:
+      #   p_N = p_{N-2} + 2 h_{N-1} b_{N-1}
+      p_second_interior = common_ops.get_face(
+          states['p'], dim, face, self._params.halo_width + 1
+      )[0]
+      if self._params.use_stretched_grid[dim]:
+        halo_width = self._params.halo_width
+        coord = self._params.global_xyz_with_halos[dim]
+        dz_last = (
+            coord[-(halo_width - 1)] - coord[-(halo_width + 1)]
+        ) / 2
+      else:
+        dz_last = self._params.grid_spacings[dim]
+
+      def compute_bc_value(p, dz, b):
+        return tf.nest.map_structure(
+            lambda p_, b_: p_ + 2 * dz * b_, p, b
+        )
+
+      bc_value = compute_bc_value(
+          p_second_interior, dz_last, b_first_interior
+      )
+      bc_planes = [bc_value] * self._params.halo_width
+      bc_p_dim_face = (halo_exchange.BCType.DIRICHLET, bc_planes)
+    return bc_p_dim_face
 
   def update_pressure_halos(
       self,

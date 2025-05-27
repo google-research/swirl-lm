@@ -28,6 +28,7 @@ from swirl_lm.physics import constants
 from swirl_lm.physics.thermodynamics import thermodynamics_pb2
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
+from swirl_lm.utility import stretched_grid_util
 from swirl_lm.utility import types
 import tensorflow as tf
 
@@ -452,6 +453,26 @@ def shear_flux(
     }
 
   return shear_flux_fn
+
+
+def bound_viscosity(
+    nu: float | FlowFieldVal,
+    additional_states: FlowFieldMap,
+    params: parameters_lib.SwirlLMParameters,
+) -> float | FlowFieldVal:
+  """Sets an upper bound to `nu` following the stability constraint."""
+  if params.diff_stab_crit is None:
+    return nu
+
+  for dim in (0, 1, 2):
+    if params.use_stretched_grid[dim]:
+      h = additional_states[stretched_grid_util.h_face_key(dim)]
+    else:
+      h = tf.constant(params.grid_spacings[dim], dtype=types.TF_DTYPE)
+    nu_max = params.diff_stab_crit * (h**2 / params.dt)
+    nu = tf.math.minimum(nu, nu_max)
+
+  return nu
 
 
 def subsidence_velocity_stevens(zz: FlowFieldVal) -> FlowFieldVal:

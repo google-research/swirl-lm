@@ -127,7 +127,7 @@ message PrePostProcessInfo {
 }
 
 // Stores information about a sub-grid scale model.
-// Next id: 8
+// Next id: 9
 message SubGridScaleModel {
   // Parameters required by the constant Smagorinsky model.
   message SmagorinskyModel {
@@ -199,8 +199,11 @@ message SubGridScaleModel {
     VremanModel vreman = 4;
   }
 
+  // An upper bound of the turbulent viscosity.
+  optional float nu_t_max = 8;
+
   // An upper bound of the turbulent diffusivity.
-  optional float diff_t_max = 5 [default = 1.0];
+  optional float diff_t_max = 5;
 
   // A lower bound of the turbulent viscosity.
   optional float nu_t_min = 6 [default = 0.0];
@@ -229,7 +232,7 @@ message Microphysics {
 }
 
 // Stores the parameters required by an incompressible Navier-Stokes simulation.
-// Next id: 42
+// Next id: 43
 message SwirlLMParameters {
   // Deprecated/Removed fields.
   reserved 4;
@@ -291,6 +294,11 @@ message SwirlLMParameters {
   // The scheme used to discretize the diffusion term.
   optional DiffusionScheme diffusion_scheme = 25
       [default = DIFFUSION_SCHEME_CENTRAL_5];
+  // The stability limit of diffusion. It sets an upper bound for the viscosity
+  // and diffusivity, including those from both kinematic and sub-grid scale
+  // (if used), so that nu <= diff_stab_crit h^2 / dt, with h being the minimum
+  // of dx, dy, and dz. If it is not set, no upper bound is applied.
+  optional float diff_stab_crit = 42;
   // The scheme used for the time integration, which is shared for momentum/
   // velocity and scalars' time advancement by default.
   //

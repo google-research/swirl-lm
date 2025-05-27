@@ -22,6 +22,7 @@ from swirl_lm.equations import utils as eq_utils
 from swirl_lm.equations.source_function import scalar_generic
 from swirl_lm.physics.atmosphere import microphysics_generic
 from swirl_lm.physics.thermodynamics import thermodynamics_manager
+from swirl_lm.physics.thermodynamics import thermodynamics_pb2
 from swirl_lm.physics.thermodynamics import water
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import types
@@ -291,7 +292,7 @@ class Humidity(scalar_generic.ScalarGeneric):
       phi: types.FlowFieldVal,
       states: types.FlowFieldMap,
       additional_states: types.FlowFieldMap,
-  ) -> types.FlowFieldVal:
+  ) -> types.ScalarSource:
     """Computes the source term in the humidity equation.
 
     Args:
@@ -314,6 +315,7 @@ class Humidity(scalar_generic.ScalarGeneric):
       )
 
     source = tf.nest.map_structure(tf.zeros_like, phi)
+    mass_source = tf.nest.map_structure(tf.zeros_like, phi)
 
     thermo_states = self._get_thermodynamic_variables(
         phi, states, additional_states
@@ -330,6 +332,14 @@ class Humidity(scalar_generic.ScalarGeneric):
       source = tf.nest.map_structure(
           tf.math.add, source, cloud_liquid_to_water_source
       )
+      if (
+          self._thermodynamics.solver_mode
+          == thermodynamics_pb2.Thermodynamics.LOW_MACH
+          and self._scalar_name == 'q_t'
+      ):
+        # Note that the sign of mass addition or drain should be the same as
+        # that of the total humidity.
+        mass_source = cloud_liquid_to_water_source
 
     # Compute source terms
     if self._scalar_name == 'q_t':
@@ -441,4 +451,4 @@ class Humidity(scalar_generic.ScalarGeneric):
 
       source = tf.nest.map_structure(op, source, cond_source)
 
-    return source
+    return types.ScalarSource(total=source, mass=mass_source)

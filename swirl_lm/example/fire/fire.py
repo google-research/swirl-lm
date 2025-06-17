@@ -1327,6 +1327,7 @@ class Fire:
               coordinates,
               self.map_utils.ib_flow_field_mask_fn(coordinates),
               ib_boundary_fn,
+              self.map_utils.elevation_map,
           )
       )
       # Add an IB boundary field for the support of other modules in case it is

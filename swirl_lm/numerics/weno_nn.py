@@ -15,9 +15,10 @@
 """A library for the WENO schemes based on neural network."""
 
 import functools
-from typing import Sequence, Tuple
+from typing import Any, Mapping, Sequence, Tuple
 
-from swirl_dynamics.data import hdf5_utils
+import h5py
+import numpy as np
 from swirl_lm.numerics import interpolation
 from swirl_lm.utility import types
 import tensorflow as tf
@@ -32,6 +33,36 @@ _WENO_NN_PATH = (
     'swirl_lm/numerics/testdata/xid_94741459_model_113.hdf5'
 )
 _EPSILON = 1e-6
+
+
+def _read_group(
+    group: h5py.Group, array_dtype: Any = np.float32
+) -> Mapping[str, Any]:
+  """Recursively reads a hdf5 group."""
+  out = {}
+  for key in group.keys():
+    if isinstance(group[key], h5py.Group):
+      out[key] = _read_group(group[key])
+    elif isinstance(group[key], h5py.Dataset):
+      if group[key].shape:  # pytype: disable=attribute-error
+        out[key] = np.asarray(group[key], dtype=array_dtype)
+      else:
+        out[key] = group[key][()]
+    else:
+      raise ValueError(f'Unknown type for key {key}.')
+  return out
+
+
+def _read_all_arrays_as_dict(
+    file_path: str, array_dtype: Any = np.float32
+) -> Mapping[str, Any]:
+  """Reads the entire contents of a file as a (possibly nested) dictionary."""
+  if not tf.io.gfile.exists(file_path):
+    raise FileNotFoundError(f'No data file found at {file_path}.')
+
+  with tf.io.gfile.GFile(file_path, 'rb') as f:
+    with h5py.File(f, 'r') as hf:
+      return _read_group(hf, array_dtype)
 
 
 class WenoNN:
@@ -72,7 +103,7 @@ class WenoNN:
     self._kernel_op = interpolation._get_weno_kernel_op(k=k)  # pylint: disable=protected-access
     self._act_fun_out = tf.nn.softmax
     self._dense_layer_key = 'Dense'
-    hdf5_dict = hdf5_utils.read_all_arrays_as_dict(mlp_network_path)
+    hdf5_dict = _read_all_arrays_as_dict(mlp_network_path)
     self._feature_fun = hdf5_dict['config']['features_fun'].decode()
     self._act_fun_name = hdf5_dict['config']['act_fun'].decode()
     self._mlp_network = hdf5_dict['params']

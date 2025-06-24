@@ -847,7 +847,7 @@ def global_cumsum(
       iloc == 0,
       local_cumsum,
       local_cumsum
-      + jnp.expand_dims(replica_cumsum[plane_index(iloc - 1)], axis=axis_index),
+      + jnp.expand_dims(replica_cumsum[plane_index(iloc - 1)], axis=axis_index),  # pytype: disable=wrong-arg-types  # lax-types
   )
   cumsum_to_end = (
       jnp.expand_dims(replica_cumsum[plane_index(-1)], axis=axis_index)

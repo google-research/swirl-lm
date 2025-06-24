@@ -477,8 +477,8 @@ class DistFFT():
     def do_transform():
       core_coord = (lax.axis_index(self._axis_names[0]),
                     lax.axis_index(self._axis_names[1]), 0)
-      input_signal = input_fn((nx, ny, 1), core_coord)
-      kernel = kernel_fn((nx, ny, 1), core_coord)
+      input_signal = input_fn((nx, ny, 1), core_coord)  # pytype: disable=wrong-arg-types  # lax-types
+      kernel = kernel_fn((nx, ny, 1), core_coord)  # pytype: disable=wrong-arg-types  # lax-types
       out_signal = input_signal
       for _ in range(num):
         out_signal = self.partitioned_fft_1d(

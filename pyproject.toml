@@ -23,11 +23,11 @@ dependencies = [
     "attrs",
     "einops",
     "fancyflags",
+    "h5py",
     "jax",
     "numpy",
     "scipy",
     "six",
-    "swirl-dynamics@git+https://github.com/google-research/swirl-dynamics",
     "tensorflow",
 ]
 

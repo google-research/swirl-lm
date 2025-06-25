@@ -2,7 +2,9 @@
 name = "swirl_lm"
 description = "Swirl-LM is a computational fluid dynamics simulation framework for low Mach number turbulent flows with variable density implemented with TensorFlow."
 readme = "README.md"
-requires-python = ">=3.11"
+# python 3.10 is used because it is the latest version that is supported by
+# the public colab runtime.
+requires-python = ">=3.10"
 license = {file = "LICENSE"}
 authors = [
   {name = "wqing", email="wqing@google.com"},
@@ -25,10 +27,11 @@ dependencies = [
     "fancyflags",
     "h5py",
     "jax",
+    "netCDF4",
     "numpy",
     "scipy",
     "six",
-    "tensorflow",
+    "tensorflow-tpu",
 ]
 
 # This is set automatically by flit using `swirl_lm.__version__`

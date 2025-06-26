@@ -31,7 +31,7 @@ dependencies = [
     "numpy",
     "scipy",
     "six",
-    "tensorflow-tpu",
+    "tensorflow",
 ]
 
 # This is set automatically by flit using `swirl_lm.__version__`

@@ -111,7 +111,8 @@ class FieldExchange(lpt.LPT):
       )
 
     # TODO(ntricard): Add mass consumption rate function.
-    omegas = tf.zeros_like(lpt_field_floats[:, 0], dtype=lpt_types.LPT_FLOAT)
+    omega_const = tf.cast(self.params.lpt.omega_const, lpt_types.LPT_FLOAT)
+    omegas = tf.ones_like(lpt_field_floats[:, 0], dtype=lpt_types.LPT_FLOAT)*omega_const
 
     # Time step the particles, updating their attributes.
     with tf.name_scope("time_step_particles"):

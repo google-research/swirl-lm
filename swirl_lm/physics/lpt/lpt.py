@@ -147,6 +147,8 @@ class LPT:
 
     self.c_d = params.lpt.c_d
     self.tau_p = params.lpt.tau_p
+    self.density = params.lpt.density
+
     self.mass_threshold = params.lpt.mass_threshold
     self.n_max = params.lpt.n_max
     self.gravity_direction = np.array(
@@ -325,8 +327,15 @@ class LPT:
         dxdt = part_vels / grid_spacings
       else:
         dxdt = part_vels
+
+      particle_diamter = (part_masses*6/(self.density*3.14159))**(1/3)
+      if self.tau_p == -1.0:
+        tau_p = particle_diamter**2*self.density/(18*self.params.nu*self.params.rho)
+      else:
+        tau_p = self.tau_p
+        
       dvdt = (
-          self.c_d / self.tau_p * (fluid_speeds - part_vels)
+          self.c_d / tau_p * (fluid_speeds - part_vels)
           + tf.constant(self.gravity_direction) * constants.G
       )
       dmdt = -omegas

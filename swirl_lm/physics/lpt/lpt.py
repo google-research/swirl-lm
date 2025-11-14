@@ -334,9 +334,11 @@ class LPT:
       else:
         tau_p = self.tau_p
 
+      inverse_time_constant = tf.reshape(1/tau_p, (len(tau_p), 1))
+
       dvdt = (
-          self.c_d / tau_p * (fluid_speeds - part_vels)
-          + tf.constant(self.gravity_direction) * constants.G
+          tf.multiply( self.c_d * (fluid_speeds - part_vels)
+          + tf.constant(self.gravity_direction) * constants.G, inverse_time_constant )
       )
       dmdt = -omegas
       return (dxdt, dvdt, dmdt)

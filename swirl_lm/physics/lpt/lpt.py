@@ -313,7 +313,7 @@ class LPT:
     local_min_loc = self._get_local_min_loc(replicas, replica_id)
 
     def particle_evolution(part_locs, part_vels, part_masses):
-      del part_locs, part_masses
+      del part_locs
       # In a stretched grid, dxdt becomes mapped coordinates, while dvdt and
       # dmdt remain in physical domain.
       if np.any(self.use_stretched_grid_zxy):
@@ -333,7 +333,7 @@ class LPT:
         tau_p = particle_diamter**2*self.density/(18*self.params.nu*self.params.rho)
       else:
         tau_p = self.tau_p
-        
+
       dvdt = (
           self.c_d / tau_p * (fluid_speeds - part_vels)
           + tf.constant(self.gravity_direction) * constants.G

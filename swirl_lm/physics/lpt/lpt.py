@@ -287,6 +287,7 @@ class LPT:
       additional_states: FlowFieldMap,
       fluid_speeds: tf.Tensor,
       omegas: tf.Tensor,
+      fluid_densities: tf.Tensor,
   ) -> tuple[lpt_types.LptFieldInts, lpt_types.LptFieldFloats]:
     """Updates the particles states through time integration.
 
@@ -299,6 +300,8 @@ class LPT:
       fluid_speeds: A tensor (n, 3) of fluid speeds at the n particle locations
         [m/s].
       omegas: Mass consumption rates for each particle [kg/s].
+      fluid_densities: A tensor (n, 1) of fluid densities at the n particle
+        locations [kg/m^3].
 
     Returns:
       lpt_field_ints: Integer particle parameters, the 2 columns are particle
@@ -328,18 +331,26 @@ class LPT:
       else:
         dxdt = part_vels
 
-      particle_diamter = (part_masses*6/(self.density*3.14159))**(1/3)
-      if self.tau_p == -1.0:
-        tau_p = particle_diamter**2*self.density/(18*self.params.nu*self.params.rho)
+      if self.tau_p == -1.0 and fluid_densities != None:
+        particle_diamter = (part_masses*6/(self.density*3.14159))**(1/3)
+        inverse_density = tf.reshape(1/fluid_densities, (len(fluid_densities), 1))
+        tau_p = tf.multiply(particle_diamter**2*self.density/(18*self.params.nu)
+                            , inverse_density
+        )
+        inverse_time_constant = tf.reshape(1/tau_p, (len(tau_p), 1))
+
+        dvdt = (
+            tf.multiply( self.c_d * (fluid_speeds - part_vels)
+            + tf.constant(self.gravity_direction) * constants.G, inverse_time_constant)
+        )
+
       else:
         tau_p = self.tau_p
+        dvdt = (
+            self.c_d/tau_p * (fluid_speeds - part_vels)
+            + tf.constant(self.gravity_direction) * constants.G
+        )
 
-      inverse_time_constant = tf.reshape(1/tau_p, (len(tau_p), 1))
-
-      dvdt = (
-          tf.multiply( self.c_d * (fluid_speeds - part_vels)
-          + tf.constant(self.gravity_direction) * constants.G, inverse_time_constant )
-      )
       dmdt = -omegas
       return (dxdt, dvdt, dmdt)
 

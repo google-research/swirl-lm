@@ -68,6 +68,10 @@ class FieldExchange(lpt.LPT):
           f" {params.lpt.field_exchange.communication_mode} not supported."
       )
 
+    # determing whether to use constant density or density field for carrier phase
+    if params.solver_procedure == parameters_lib.SolverProcedure.VARIABLE_DENSITY:
+      FIELD_VALS += ['rho']
+
   def update_particles(
       self,
       replica_id: tf.Tensor,
@@ -97,7 +101,7 @@ class FieldExchange(lpt.LPT):
     # Exchange fluid data at particle locations with other replicas.
     with tf.name_scope("communicate_fluid_data"):
       local_min_loc = self._get_local_min_loc(replicas, replica_id)
-      fluid_vels = self.exchange_fluid_data_fn(
+      fluid_data = self.exchange_fluid_data_fn(
           locs,
           states,
           replica_id,
@@ -110,6 +114,12 @@ class FieldExchange(lpt.LPT):
           self.n_max,
       )
 
+    fluid_vels = fluid_data[:, :3]
+    if "rho" in FIELD_VALS and tf.shape(fluid_data)[-1] == 4:
+      fluid_dens = fluid_data[:, 3]
+    else:
+      fluid_dens == None
+
     # TODO(ntricard): Add mass consumption rate function.
     omega_const = tf.cast(self.params.lpt.omega_const, lpt_types.LPT_FLOAT)
     omegas = tf.ones_like(lpt_field_floats[:, 0], dtype=lpt_types.LPT_FLOAT)*omega_const
@@ -117,7 +127,7 @@ class FieldExchange(lpt.LPT):
     # Time step the particles, updating their attributes.
     with tf.name_scope("time_step_particles"):
       lpt_field_ints, lpt_field_floats = self.increment_time(
-          replica_id, replicas, additional_states, fluid_vels, omegas
+          replica_id, replicas, additional_states, fluid_vels, omegas, fluid_dens
       )
 
     # TODO(ntricard): Account for particles influence on fluid motion.

@@ -35,8 +35,7 @@ import tensorflow as tf
 
 FlowFieldMap: TypeAlias = types.FlowFieldMap
 
-
-FIELD_VALS = ["w", "u", "v"]
+FIELD_VALS = ["w", "u", "v", "rho"]
 
 LPT_INTS_KEY = lpt_types.LPT_INTS_KEY
 LPT_FLOATS_KEY = lpt_types.LPT_FLOATS_KEY
@@ -68,9 +67,6 @@ class FieldExchange(lpt.LPT):
           f" {params.lpt.field_exchange.communication_mode} not supported."
       )
 
-    # determing whether to use constant density or density field for carrier phase
-    if params.solver_procedure == parameters_lib.SolverProcedure.VARIABLE_DENSITY:
-      FIELD_VALS += ['rho']
 
   def update_particles(
       self,

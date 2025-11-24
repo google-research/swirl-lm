@@ -370,6 +370,39 @@ class LPT:
 
     return lpt_field_ints, lpt_field_floats
 
+  def particle_forces(
+      self,
+      fluid_speeds: tf.Tensor,
+      fluid_densities: tf.Tensor,
+      part_locs: tf.Tensor,
+      part_vels: tf.Tensor,
+      part_masses: tf.Tensor
+  ) -> tf.Tensor:
+
+      del part_locs
+
+      if self.tau_p == -1.0 and fluid_densities != None:
+        particle_diamter = (part_masses*6/(self.density*3.14159))**(1/3)
+        inverse_density = tf.reshape(1/fluid_densities, (len(fluid_densities), 1))
+        tau_p = tf.multiply(particle_diamter**2*self.density/(18*self.params.nu)
+                            , inverse_density
+        )
+        inverse_time_constant = tf.reshape(1/tau_p, (len(tau_p), 1))
+
+        dvdt = (
+            tf.multiply( self.c_d * (fluid_speeds - part_vels)
+            + tf.constant(self.gravity_direction) * constants.G, inverse_time_constant)
+        )
+
+      else:
+        tau_p = self.tau_p
+        dvdt = (
+            self.c_d/tau_p * (fluid_speeds - part_vels)
+            + tf.constant(self.gravity_direction) * constants.G
+        )
+
+      return tf.multiply(dvdt, part_masses)
+
   def _get_local_min_loc(
       self, replicas: np.ndarray, replica_id: tf.Tensor
   ) -> tf.Tensor:

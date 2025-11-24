@@ -14,7 +14,7 @@
 
 """Communication library for the lagrangian particles."""
 
-from typing import Sequence, TypeAlias
+from typing import Sequence, TypeAlias, Tuple
 import numpy as np
 from swirl_lm.communication import send_recv
 from swirl_lm.physics.lpt import lpt_types
@@ -232,5 +232,115 @@ def one_shuffle(
 
       # Preparing joint location-field data tensor.
       loc_and_fluid_data = tf.concat([locs, fluid_data], axis=1)
+
+  return loc_and_fluid_data[:, 3:]
+
+
+def one_shuffle_two_way_coupling(
+    locs: tf.Tensor,
+    forces: FlowFieldMap,
+    states: FlowFieldMap,
+    replica_id: tf.Tensor,
+    replicas: np.ndarray,
+    variables: Sequence[str],
+    grid_spacings: tf.Tensor,
+    core_spacings: tf.Tensor,
+    local_min_pt: tf.Tensor,
+    global_min_pt: tf.Tensor,
+    n_max: int,
+) -> Tuple[tf.Tensor, tf.Tensor]:
+  """Circular replica communication to get particle fluid data
+  and two way coupling forces.
+
+  This function conducts a single circular exchange for the `n` replicas.
+  Each replica sends data to the next replica in the circle and receives data
+  from the previous replica in the circle. Every iteration, each replica
+  interpolates the incoming particle locations that are physically located
+  within that replicas domain, and inserts the data into the circulating data.
+  After this process is repeated `n` times, each replica will receive the fluid
+  data for all of its particle locations.
+
+  Args:
+    locs: An (n, 3) floating point tensor of `n` physical locations that the
+      current replica is requesting fluid data at in z, x, y order.
+    states: A `FlowFieldMap` containing the fluid data.
+    replica_id: The replica id of the local replica.
+    replicas: A numpy array of shape `(cx, cy, cz)` containing the replica id of
+      each core.
+    variables: A sequence of variables to be exchanged (e.g., ["w", "u", "v"]).
+      These should exist in `states`.
+    grid_spacings: A tensor of the grid spacings in order z, x, y. If a
+      non-uniform grid is used, these grid spacings correspond to the values in
+      the mapped space which should be a tensor of ones.
+    core_spacings: A tensor of the core's partial domain size in the z, x, y
+      directions.
+    local_min_pt: The minimum point of the local grid in z, x, y including
+      halos. This should correspond to the location of the grid point located at
+      (0, 0, 0) in the states tensors.
+    global_min_pt: The global minimum point of the simulation domain in order z,
+      x, y excluding halos.
+    n_max: The maximum number of elements that any given replica can send to
+      another replica. This value should be assigned to be the number of rows in
+      the `lpt_field_` tensors.
+
+  Returns:
+    A tensor of size `(k)` containing k replica physical coordinate indices
+    where two way coupling forces are applied
+
+    A tensor of size `(k, len(variables))` containing the two way coupling force
+
+  """
+  # Construct the circular exchange.
+  num_replicas = replicas.size
+  source = np.arange(num_replicas, dtype=lpt_types.LPT_NP_INT)
+  dest = np.roll(source, 1, axis=0).astype(lpt_types.LPT_NP_INT)
+  source_dest_pairs = np.stack([source, dest], axis=1)
+
+  # Preparing joint location and field data tensor.
+  fluid_data = tf.zeros((n_max, len(variables)), dtype=tf.float32)
+  loc_and_fluid_data = tf.concat([locs, fluid_data], axis=1)
+
+  # preparing coupling force for data
+  particle_to_fluid_data = tf.zeros((0, len(variables)), dtype=tf.float32)
+  particle_to_fluid_index = tf.zeros((0, len(variables)), dtype=tf.int32)
+
+  for _ in range(num_replicas):
+
+    with tf.name_scope("exchange_fluid_data"):
+      # Processing the exchange with the neighbors in the circle.
+      loc_and_fluid_data = tf.raw_ops.CollectivePermute(
+          input=loc_and_fluid_data, source_target_pairs=source_dest_pairs
+      )
+
+    with tf.name_scope("extract_fluid_data"):
+      locs = loc_and_fluid_data[:, :3]
+      fluid_data = loc_and_fluid_data[:, 3:]
+
+      # Gathering particles that are located on this replica.
+      loc_replicas = lpt_utils.get_particle_replica_id(
+          locs, core_spacings, replicas, global_min_pt
+      )
+      loc_indices_local = tf.reshape(tf.where(loc_replicas == replica_id), [-1])
+      locs_local = tf.einsum(
+          "qj,ji->qi", tf.one_hot(loc_indices_local, n_max), locs
+      )
+
+    # Interpolating at dest locations.
+    with tf.name_scope("interpolating_fluid_data"):
+      fluid_data_at_locs, weights, fluid_origins = \
+        lpt_utils.fluid_data_linear_interpolation_with_weights(
+          locs_local, states, variables, grid_spacings, local_min_pt
+      )
+
+    with tf.name_scope("update_fluid_data"):
+      fluid_data = lpt_utils.tensor_scatter_update(
+          fluid_data, loc_indices_local, fluid_data_at_locs
+      )
+
+      # Preparing joint location-field data tensor.
+      loc_and_fluid_data = tf.concat([locs, fluid_data], axis=1)
+
+    # with tf.name_scope("gathering particle force data"):
+
 
   return loc_and_fluid_data[:, 3:]

@@ -35,7 +35,7 @@ import tensorflow as tf
 
 FlowFieldMap: TypeAlias = types.FlowFieldMap
 
-FIELD_VALS = ["w", "u", "v", "rho"]
+FIELD_VALS = ["w", "u", "v"]
 
 LPT_INTS_KEY = lpt_types.LPT_INTS_KEY
 LPT_FLOATS_KEY = lpt_types.LPT_FLOATS_KEY
@@ -67,6 +67,9 @@ class FieldExchange(lpt.LPT):
           f" {params.lpt.field_exchange.communication_mode} not supported."
       )
 
+    self.exchange_fluid_vars = FIELD_VALS
+    if params.solver_procedure == parameters_lib.SolverProcedure.VARIABLE_DENSITY:
+      self.exchange_fluid_vars += ['rho']
 
   def update_particles(
       self,
@@ -102,7 +105,7 @@ class FieldExchange(lpt.LPT):
           states,
           replica_id,
           replicas,
-          FIELD_VALS,
+          self.exchange_fluid_vars,
           self.grid_spacings_zxy,
           self.core_spacings,
           local_min_loc,
@@ -111,10 +114,13 @@ class FieldExchange(lpt.LPT):
       )
 
     fluid_vels = fluid_data[:, :3]
-    if "rho" in FIELD_VALS and tf.shape(fluid_data)[-1] == 4:
+
+    if 'rho' in self.exchange_fluid_vars:
+      print("fluid data exhanging shape : ")
+      print(tf.shape(fluid_data))
       fluid_dens = fluid_data[:, 3]
     else:
-      fluid_dens == None
+      fluid_dens = tf.ones_like(fluid_data[:, 3], dtype=lpt_types.LPT_FLOAT)*self.params.rho
 
     # TODO(ntricard): Add mass consumption rate function.
     omega_const = tf.cast(self.params.lpt.omega_const, lpt_types.LPT_FLOAT)

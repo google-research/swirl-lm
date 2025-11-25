@@ -300,7 +300,7 @@ class LPT:
       fluid_speeds: A tensor (n, 3) of fluid speeds at the n particle locations
         [m/s].
       omegas: Mass consumption rates for each particle [kg/s].
-      fluid_densities: A tensor (n, 1) of fluid densities at the n particle
+      fluid_densities: A tensor (n,) of fluid densities at the n particle
         locations [kg/m^3].
 
     Returns:
@@ -333,7 +333,7 @@ class LPT:
 
       if self.tau_p == -1.0 and fluid_densities != None:
         particle_diamter = (part_masses*6/(self.density*3.14159))**(1/3)
-        inverse_density = tf.reshape(1/fluid_densities, (len(fluid_densities), 1))
+        inverse_density = tf.reshape(1/fluid_densities, (len(fluid_densities),))
         tau_p = tf.multiply(particle_diamter**2*self.density/(18*self.params.nu)
                             , inverse_density
         )

@@ -116,8 +116,6 @@ class FieldExchange(lpt.LPT):
     fluid_vels = fluid_data[:, :3]
 
     if 'rho' in self.exchange_fluid_vars:
-      print("fluid data exhanging shape : ")
-      print(tf.shape(fluid_data))
       fluid_dens = fluid_data[:, 3]
     else:
       fluid_dens = tf.ones_like(fluid_data[:, 3], dtype=lpt_types.LPT_FLOAT)*self.params.rho

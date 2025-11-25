@@ -35,7 +35,6 @@ import tensorflow as tf
 
 FlowFieldMap: TypeAlias = types.FlowFieldMap
 
-
 FIELD_VALS = ["w", "u", "v"]
 
 LPT_INTS_KEY = lpt_types.LPT_INTS_KEY
@@ -68,9 +67,9 @@ class FieldExchange(lpt.LPT):
           f" {params.lpt.field_exchange.communication_mode} not supported."
       )
 
-    # determing whether to use constant density or density field for carrier phase
+    self.exchange_fluid_vars = FIELD_VALS
     if params.solver_procedure == parameters_lib.SolverProcedure.VARIABLE_DENSITY:
-      FIELD_VALS += ['rho']
+      self.exchange_fluid_vars += ['rho']
 
   def update_particles(
       self,
@@ -106,7 +105,7 @@ class FieldExchange(lpt.LPT):
           states,
           replica_id,
           replicas,
-          FIELD_VALS,
+          self.exchange_fluid_vars,
           self.grid_spacings_zxy,
           self.core_spacings,
           local_min_loc,
@@ -115,10 +114,11 @@ class FieldExchange(lpt.LPT):
       )
 
     fluid_vels = fluid_data[:, :3]
-    if "rho" in FIELD_VALS and tf.shape(fluid_data)[-1] == 4:
+
+    if 'rho' in self.exchange_fluid_vars:
       fluid_dens = fluid_data[:, 3]
     else:
-      fluid_dens == None
+      fluid_dens = tf.ones_like(fluid_data[:, 3], dtype=lpt_types.LPT_FLOAT)*self.params.rho
 
     # TODO(ntricard): Add mass consumption rate function.
     omega_const = tf.cast(self.params.lpt.omega_const, lpt_types.LPT_FLOAT)

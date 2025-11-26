@@ -14,13 +14,14 @@
 
 """Communication library for the lagrangian particles."""
 
-from typing import Sequence, TypeAlias, Tuple
+from typing import Sequence, TypeAlias, Tuple, Callable
 import numpy as np
 from swirl_lm.communication import send_recv
 from swirl_lm.physics.lpt import lpt_types
 from swirl_lm.physics.lpt import lpt_utils
 from swirl_lm.utility import types
 import tensorflow as tf
+import itertools
 
 FlowFieldMap: TypeAlias = types.FlowFieldMap
 
@@ -236,9 +237,12 @@ def one_shuffle(
   return loc_and_fluid_data[:, 3:]
 
 
-def one_shuffle_two_way_coupling(
+def one_shuffle_fluid_data_and_two_way_forces(
     locs: tf.Tensor,
-    forces: FlowFieldMap,
+    vels: tf.Tensor,
+    masses: tf.Tensor,
+    active: tf.Tensor,
+    force_fn : Callable[[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor], tf.Tensor],
     states: FlowFieldMap,
     replica_id: tf.Tensor,
     replicas: np.ndarray,
@@ -248,7 +252,7 @@ def one_shuffle_two_way_coupling(
     local_min_pt: tf.Tensor,
     global_min_pt: tf.Tensor,
     n_max: int,
-) -> Tuple[tf.Tensor, tf.Tensor]:
+) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
   """Circular replica communication to get particle fluid data
   and two way coupling forces.
 
@@ -261,34 +265,57 @@ def one_shuffle_two_way_coupling(
   data for all of its particle locations.
 
   Args:
-    locs: An (n, 3) floating point tensor of `n` physical locations that the
+    locs: An (n, 3) floating point tensor of `n` particle locations that the
       current replica is requesting fluid data at in z, x, y order.
+
+    vels: An (n, 3) floating point tensor of `n` particle velocities
+      in z, x, y order.
+
+    masses: An (n, ) floating point tensor of `n` particle masses
+
+    active: An (n, ) floating tensor 0.0 if inactive 1.0 if active
+
+    force_fn: A function that takes tensors fluid_speeds (k, 3), fluid_densities
+      (k, ) , particle_locs (k, 3), particle_vels (k, 3), particle_masses (k, 3)
+      as ordered arguments and outputs a (k,) tensor of forces
+
     states: A `FlowFieldMap` containing the fluid data.
+
     replica_id: The replica id of the local replica.
+
     replicas: A numpy array of shape `(cx, cy, cz)` containing the replica id of
       each core.
-    variables: A sequence of variables to be exchanged (e.g., ["w", "u", "v"]).
-      These should exist in `states`.
+
+    variables: A sequence of variables to be exchanged
+      must be ["w", "u", "v", "rho"]. These should exist in `states`.
+
     grid_spacings: A tensor of the grid spacings in order z, x, y. If a
       non-uniform grid is used, these grid spacings correspond to the values in
       the mapped space which should be a tensor of ones.
+
     core_spacings: A tensor of the core's partial domain size in the z, x, y
       directions.
+
     local_min_pt: The minimum point of the local grid in z, x, y including
       halos. This should correspond to the location of the grid point located at
       (0, 0, 0) in the states tensors.
+
     global_min_pt: The global minimum point of the simulation domain in order z,
       x, y excluding halos.
+
     n_max: The maximum number of elements that any given replica can send to
       another replica. This value should be assigned to be the number of rows in
       the `lpt_field_` tensors.
 
   Returns:
-    A tensor of size `(k)` containing k replica physical coordinate indices
-    where two way coupling forces are applied
+    A tensor of size `(n, len(variables))` containing the fluid data requested
+      from remote locations.
 
-    A tensor of size `(k, len(variables))` containing the two way coupling force
+    A tensor of size `(k, 3)` containing k replica physical coordinate indices
+      where two way coupling forces are applied. Each index is unique.
 
+    A tensor of size `(k, 3)` containing the two way coupling force along each
+     direction. These forces are cumulative across all particles.
   """
   # Construct the circular exchange.
   num_replicas = replicas.size
@@ -298,31 +325,49 @@ def one_shuffle_two_way_coupling(
 
   # Preparing joint location and field data tensor.
   fluid_data = tf.zeros((n_max, len(variables)), dtype=tf.float32)
-  loc_and_fluid_data = tf.concat([locs, fluid_data], axis=1)
+
+  loc_vels_masses_active_and_fluid_data = tf.concat(
+    [locs, vels, masses, active, fluid_data], axis=1)
+
+  if variables != ['w', 'u', 'v', 'rho']:
+    raise ValueError("variables must be ['w', 'u', 'v', 'rho']")
 
   # preparing coupling force for data
-  particle_to_fluid_data = tf.zeros((0, len(variables)), dtype=tf.float32)
-  particle_to_fluid_index = tf.zeros((0, len(variables)), dtype=tf.int32)
+  particle_force_data = tf.zeros((0, 3), dtype=tf.float32)
+  particle_to_carrier_index = tf.zeros((0,3), dtype=tf.int32)
 
   for _ in range(num_replicas):
 
     with tf.name_scope("exchange_fluid_data"):
       # Processing the exchange with the neighbors in the circle.
-      loc_and_fluid_data = tf.raw_ops.CollectivePermute(
-          input=loc_and_fluid_data, source_target_pairs=source_dest_pairs
+      loc_vels_masses_active_and_fluid_data = tf.raw_ops.CollectivePermute(
+          input=loc_vels_masses_active_and_fluid_data, source_target_pairs=source_dest_pairs
       )
 
     with tf.name_scope("extract_fluid_data"):
-      locs = loc_and_fluid_data[:, :3]
-      fluid_data = loc_and_fluid_data[:, 3:]
+      locs = loc_vels_masses_active_and_fluid_data[:, :3]
+      vels = loc_vels_masses_active_and_fluid_data[:, 3:6]
+      masses = loc_vels_masses_active_and_fluid_data[:, 6]
+      active = loc_vels_masses_active_and_fluid_data[:, 7]
+      fluid_data = loc_vels_masses_active_and_fluid_data[:, 8:]
 
       # Gathering particles that are located on this replica.
       loc_replicas = lpt_utils.get_particle_replica_id(
           locs, core_spacings, replicas, global_min_pt
       )
       loc_indices_local = tf.reshape(tf.where(loc_replicas == replica_id), [-1])
+
       locs_local = tf.einsum(
           "qj,ji->qi", tf.one_hot(loc_indices_local, n_max), locs
+      )
+      masses_local = tf.einsum(
+          "qj,j->q", tf.one_hot(loc_indices_local, n_max), masses
+      )
+      vels_local = tf.einsum(
+          "qj,ji->qi", tf.one_hot(loc_indices_local, n_max), vels
+      )
+      active_local = tf.einsum(
+          "qj,j->q", tf.one_hot(loc_indices_local, n_max), active
       )
 
     # Interpolating at dest locations.
@@ -338,9 +383,76 @@ def one_shuffle_two_way_coupling(
       )
 
       # Preparing joint location-field data tensor.
-      loc_and_fluid_data = tf.concat([locs, fluid_data], axis=1)
+      loc_vels_masses_active_and_fluid_data = tf.concat(
+        [locs, vels, masses, active, fluid_data], axis=1
+      )
 
-    # with tf.name_scope("gathering particle force data"):
+    with tf.name_scope("calculating particle forces at particle locations"):
+      forces_local = force_fn(fluid_data_at_locs[:, :3],
+                     fluid_data_at_locs[:, 3],
+                     locs_local,
+                     vels_local,
+                     masses_local
+              )*tf.reshape(active_local, shape = (len(active_local), 1))
 
+      # we multiply the result by the active local to remote zero forces
 
-  return loc_and_fluid_data[:, 3:]
+    with tf.name_scope("creating arrays (particles_in_replica*8, ...)"):
+      weights = tf.reshape(weights, shape=(-1))
+
+      carrier_index = tf.stack(
+      [
+          fluid_origins + tf.constant([p,q,l])
+          for p, q, l in itertools.product(range(2), range(2), range(2))
+      ],
+      axis=-1,
+      )
+      carrier_index = tf.einsum("ijk->ikj",carrier_index)
+      carrier_index = tf.reshape(carrier_index, shape = (-1,3))
+
+      forces_repeated = tf.stack(
+      [
+          forces_local
+          for p, q, l in itertools.product(range(2), range(2), range(2))
+      ],
+      axis=-1,
+      )
+      forces_repeated = tf.einsum("ijk->ikj",forces_repeated)
+      forces_repeated = tf.reshape(forces_repeated, shape = (-1,3))
+
+    with tf.name_scope("calculating weighted forces "):
+      weighted_forces = tf.einsum("kj,k->kj",forces_repeated,weights)
+
+    with tf.name_scope("appending weighted forces physically in the replica"):
+      particle_force_data = tf.concat(
+        (particle_force_data, weighted_forces), axis = 0
+      )
+      particle_to_carrier_index = tf.concat(
+        (particle_to_carrier_index, carrier_index), axis = 0
+      )
+
+    with tf.name_scope("summing forces with the same indices"):
+      # linear index for finding unique cases
+      N0, N1, N2 = tf.shape(states[variables[0]])[:3]
+      carrier_index_linear = particle_to_carrier_index[:,0] \
+        + particle_to_carrier_index[:,1]*N0 \
+        +particle_to_carrier_index[:,2]*N0*N1
+
+      # finding unique cases
+      y, idx = tf.unique(carrier_index_linear)
+      len_of_data = tf.shape(particle_force_data)[0]
+      len_of_uniques = tf.shape(y)[0]
+      unique_sorter = tf.math.unsorted_segment_min(
+        tf.range(len_of_data), idx, len_of_uniques
+      )
+
+      # summing weighted forces
+      particle_force_data = tf.einsum(
+        "kl,kj->jl", particle_force_data, tf.one_hot(idx, depth=len_of_uniques)
+      )
+      particle_to_carrier_index = tf.gather(
+        particle_to_carrier_index, unique_sorter
+      )
+
+  return loc_vels_masses_active_and_fluid_data[:, 8:], \
+    particle_to_carrier_index, particle_force_data

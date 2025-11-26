@@ -57,6 +57,7 @@ from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import thermodynamics_pb2
 from swirl_lm.physics.thermodynamics import water
 from swirl_lm.physics.turbulence import sgs_model
+from swirl_lm.physics.lpt import lpt_types, lpt_pb2
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import monitor
@@ -596,6 +597,23 @@ class Velocity(object):
     self._source.update(
         self._src_manager.update_helper_variable_from_additional_states(
             additional_states))
+
+    # adding on the lpt force to the source for velocity
+    if self._params.lpt is not None \
+      and self._params.lpt.coupling == lpt_pb2.LagrangianParticleTracking.CouplingType.TWO_WAY:
+
+      update_source = {_KEY_U: additional_states[lpt_types.LPT_FORCE_U_KEY],
+                       _KEY_V: additional_states[lpt_types.LPT_FORCE_V_KEY],
+                       _KEY_W: additional_states[lpt_types.LPT_FORCE_W_KEY]}
+
+      for key, value in self._source.items():
+        if value != None and type(value) == type(tf.zeros((1,2))) \
+          and tf.shape(value) == tf.shape(update_source[key]):
+          self._source[key] = tf.nest.map_structure(
+            tf.math.add, update_source[key], value
+          )
+        else:
+          self._source[key] = update_source[key]
 
   def _maybe_update_diagnostics(
       self, additional_states, states_0, template_state):

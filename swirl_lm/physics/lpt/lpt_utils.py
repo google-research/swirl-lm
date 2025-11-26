@@ -148,14 +148,14 @@ def fluid_data_linear_interpolation_with_weights(
 
   Returns:
     The an (n, m) tensor containing fluid data at the `n` locations for the `m`
-    variables.
+      variables.
 
     A tensor of shape `(n, 8)` containing the interpolation weights, where 8 is
-    the number of interpolation weighting functions. Each one corresponds
-    an offset index from the interpolation origin.
+      the number of interpolation weighting functions. Each one corresponds
+      an offset index from the interpolation origin.
 
     A tensor of shape `(n, 3)` containing index of the origin locations for the
-    interpolation.
+      interpolation.
 
   """
   return interpolation.trilinear_interpolation_with_weights(

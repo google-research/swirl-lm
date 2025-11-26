@@ -28,6 +28,7 @@ from swirl_lm.physics.lpt import lpt_types
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import stretched_grid_util
 from swirl_lm.utility import types
+from swirl_lm.utility import tpu_util
 import tensorflow as tf
 
 FlowFieldMap: TypeAlias = types.FlowFieldMap
@@ -153,7 +154,7 @@ class LPT:
     self.c_d = params.lpt.c_d
     self.tau_p = params.lpt.tau_p
     self.density = params.lpt.density
-    self.omega_const = self.params.lpt.omega_const
+    self.omega_const = params.lpt.omega_const
 
     if params.lpt.coupling == (
         lpt_pb2.LagrangianParticleTracking.CouplingType.ONE_WAY
@@ -659,7 +660,9 @@ class LPT:
     pass
 
 
-def init_fn(params: parameters_lib.SwirlLMParameters) -> types.FlowFieldMap:
+def init_fn(params: parameters_lib.SwirlLMParameters,
+            coordinates: types.ReplicaCoordinates
+            ) -> types.FlowFieldMap:
   """Allocates space for the `params.lpt.n_max` particles.
 
   Args:
@@ -674,32 +677,35 @@ def init_fn(params: parameters_lib.SwirlLMParameters) -> types.FlowFieldMap:
 
   n_max = params.lpt.n_max
 
-  coordinates = (params.cx, params.cy, params.cz)
+  if params.lpt.coupling == lpt_pb2.LagrangianParticleTracking.CouplingType.TWO_WAY:
+    def init_fn_zeros(xx: tf.Tensor, yy: tf.Tensor, zz: tf.Tensor, lx: float,
+                      ly: float, lz: float, coord: initializer.ThreeIntTuple) -> tf.Tensor:
+      """Creates a 3D tensor with value 0 that has the same size as `xx`."""
+      del yy, zz, lx, ly, lz, coord
+      return tf.zeros_like(xx, dtype=xx.dtype)
 
-  def init_fn_zeros(xx: tf.Tensor, yy: tf.Tensor, zz: tf.Tensor, lx: float,
-                    ly: float, lz: float, coord: initializer.ThreeIntTuple) -> tf.Tensor:
-    """Creates a 3D tensor with value 0 that has the same size as `xx`."""
-    del yy, zz, lx, ly, lz, coord
-    return tf.zeros_like(xx, dtype=xx.dtype)
-
-  force_u = initializer.partial_mesh_for_core(
-          params,
-          coordinates,
-          init_fn_zeros,
-          mesh_choice=initializer.MeshChoice.PARAMS,
-      )
-  force_v = initializer.partial_mesh_for_core(
-          params,
-          coordinates,
-          init_fn_zeros,
-          mesh_choice=initializer.MeshChoice.PARAMS,
-      )
-  force_w = initializer.partial_mesh_for_core(
-          params,
-          coordinates,
-          init_fn_zeros,
-          mesh_choice=initializer.MeshChoice.PARAMS,
-      )
+    force_u = initializer.partial_mesh_for_core(
+            params,
+            coordinates,
+            init_fn_zeros,
+            mesh_choice=initializer.MeshChoice.PARAMS,
+        )
+    force_v = initializer.partial_mesh_for_core(
+            params,
+            coordinates,
+            init_fn_zeros,
+            mesh_choice=initializer.MeshChoice.PARAMS,
+        )
+    force_w = initializer.partial_mesh_for_core(
+            params,
+            coordinates,
+            init_fn_zeros,
+            mesh_choice=initializer.MeshChoice.PARAMS,
+        )
+  else:
+    force_u = tf.zeros((), lpt_types.LPT_FLOAT)
+    force_v = tf.zeros((), lpt_types.LPT_FLOAT)
+    force_w = tf.zeros((), lpt_types.LPT_FLOAT)
 
   return {
       lpt_types.LPT_INTS_KEY: tf.zeros((n_max, 2), lpt_types.LPT_INT),
@@ -720,7 +726,7 @@ def required_keys(lpt_config: lpt_pb2.LagrangianParticleTracking) -> list[str]:
         lpt_types.LPT_INTS_KEY,
         lpt_types.LPT_FLOATS_KEY,
         lpt_types.LPT_COUNTER_KEY,
-        lpt_types.LPT_FORCE_U,
-        lpt_types.LPT_FORCE_V,
-        lpt_types.LPT_FORCE_W
+        lpt_types.LPT_FORCE_U_KEY,
+        lpt_types.LPT_FORCE_V_KEY,
+        lpt_types.LPT_FORCE_W_KEY
     ]

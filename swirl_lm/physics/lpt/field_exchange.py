@@ -189,13 +189,6 @@ class FieldExchange(lpt.LPT):
         shape= tf.shape(states["v"]),
         dtype=types.TF_DTYPE
       )
-    else:
-      # lpt_force_w = tf.zeros_like(states["w"])
-      # lpt_force_v = tf.zeros_like(states["v"])
-      # lpt_force_u = tf.zeros_like(states["u"])
-      lpt_force_w = None
-      lpt_force_v = None
-      lpt_force_u = None
 
     # Modulus the locations across periodic boundaries.
     with tf.name_scope("apply_periodic_boundary_conditions"):

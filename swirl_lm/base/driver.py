@@ -261,7 +261,7 @@ def _init_fn(
     states[TIME_VARNAME] = tf.convert_to_tensor(0, dtype=tf.float64)
 
     if params.lpt is not None:
-      states.update(lpt.init_fn(params))
+      states.update(lpt.init_fn(params, coordinates))
 
     # Apply the user defined `init_fn` in the end to allow it to override
     # default initializations.

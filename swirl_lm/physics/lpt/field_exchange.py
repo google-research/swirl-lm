@@ -77,7 +77,8 @@ class FieldExchange(lpt.LPT):
 
     self.exchange_fluid_vars = FIELD_VALS
     if params.solver_procedure == parameters_lib.SolverProcedure.VARIABLE_DENSITY:
-      self.exchange_fluid_vars += ['rho']
+      self.exchange_fluid_vars += ["rho"]
+
 
   def update_particles(
       self,
@@ -110,9 +111,9 @@ class FieldExchange(lpt.LPT):
     vels = lpt_field_floats[:, 3:6]
     masses = lpt_field_floats[:, 6]
 
-    lpt_force_u = additional_states[LPT_FORCE_U_KEY]
-    lpt_force_v = additional_states[LPT_FORCE_V_KEY]
-    lpt_force_w = additional_states[LPT_FORCE_W_KEY]
+    # lpt_force_u = additional_states[LPT_FORCE_U_KEY]
+    # lpt_force_v = additional_states[LPT_FORCE_V_KEY]
+    # lpt_force_w = additional_states[LPT_FORCE_W_KEY]
 
     # Exchange fluid data at particle locations with other replicas.
     with tf.name_scope("communicate_fluid_data"):
@@ -175,6 +176,7 @@ class FieldExchange(lpt.LPT):
             shape= tf.shape(states["w"]),
             dtype=types.TF_DTYPE
       )
+      lpt_force_w = tf.reshape(lpt_force_w, tf.shape(states["w"]))
 
       lpt_force_u = common_ops.scatter(
         x = fluid_forces[:, 1],
@@ -182,6 +184,7 @@ class FieldExchange(lpt.LPT):
         shape= tf.shape(states["u"]),
         dtype=types.TF_DTYPE
       )
+      lpt_force_u = tf.reshape(lpt_force_u, tf.shape(states["u"]))
 
       lpt_force_v = common_ops.scatter(
         x = fluid_forces[:, 2],
@@ -189,6 +192,11 @@ class FieldExchange(lpt.LPT):
         shape= tf.shape(states["v"]),
         dtype=types.TF_DTYPE
       )
+      lpt_force_v = tf.reshape(lpt_force_v, tf.shape(states["v"]))
+    else:
+      lpt_force_w = tf.zeros_like(states["w"])
+      lpt_force_v = tf.zeros_like(states["v"])
+      lpt_force_u = tf.zeros_like(states["u"])
 
     # Modulus the locations across periodic boundaries.
     with tf.name_scope("apply_periodic_boundary_conditions"):

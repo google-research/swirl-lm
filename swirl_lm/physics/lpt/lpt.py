@@ -359,11 +359,25 @@ class LPT:
         tau_p = tf.multiply(particle_diamter**2*self.density/(18*self.params.nu)
                             , inverse_density
         )
+
+        particles_terminating = tf.reshape(
+            tf.where(
+                part_masses < self.mass_threshold
+            ),
+            [-1],
+        )
+        indices = tf.reshape(particles_terminating, [len(particles_terminating), 1])
+        tau_p = tf.tensor_scatter_nd_update(
+            tau_p,
+            indices,
+            tf.ones_like(particles_terminating, dtype=lpt_types.LPT_FLOAT),
+        )
+
         inverse_time_constant = tf.reshape(1/tau_p, (len(tau_p), 1))
 
         dvdt = (
-            tf.multiply( self.c_d * (fluid_speeds - part_vels)
-            + tf.constant(self.gravity_direction) * constants.G, inverse_time_constant)
+            tf.multiply( self.c_d * (fluid_speeds - part_vels), inverse_time_constant)
+            + tf.constant(self.gravity_direction) * constants.G
         )
 
       else:
@@ -415,11 +429,25 @@ class LPT:
           tau_p = tf.multiply(particle_diamter**2*self.density/(18*self.params.nu)
                               , inverse_density
           )
+
+          particles_terminating = tf.reshape(
+              tf.where(
+                  part_masses < self.mass_threshold
+              ),
+              [-1],
+          )
+          indices = tf.reshape(particles_terminating, [len(particles_terminating), 1])
+          tau_p = tf.tensor_scatter_nd_update(
+              tau_p,
+              indices,
+              tf.ones_like(particles_terminating, dtype=lpt_types.LPT_FLOAT),
+          )
+
           inverse_time_constant = tf.reshape(1/tau_p, (len(tau_p), 1))
 
           dvdt = (
-              tf.multiply( self.c_d * (fluid_speeds - part_vels)
-              + tf.constant(self.gravity_direction) * constants.G, inverse_time_constant)
+              tf.multiply( self.c_d * (fluid_speeds - part_vels), inverse_time_constant)
+              + tf.constant(self.gravity_direction) * constants.G
           )
 
         else:
@@ -429,7 +457,7 @@ class LPT:
               + tf.constant(self.gravity_direction) * constants.G
           )
 
-        return tf.multiply(dvdt, part_masses)
+        return tf.multiply(dvdt, tf.reshape(part_masses, [len(part_masses), 1]))
 
       return particle_force
 
@@ -677,35 +705,35 @@ def init_fn(params: parameters_lib.SwirlLMParameters,
 
   n_max = params.lpt.n_max
 
-  if params.lpt.coupling == lpt_pb2.LagrangianParticleTracking.CouplingType.TWO_WAY:
-    def init_fn_zeros(xx: tf.Tensor, yy: tf.Tensor, zz: tf.Tensor, lx: float,
-                      ly: float, lz: float, coord: initializer.ThreeIntTuple) -> tf.Tensor:
-      """Creates a 3D tensor with value 0 that has the same size as `xx`."""
-      del yy, zz, lx, ly, lz, coord
-      return tf.zeros_like(xx, dtype=xx.dtype)
+  # if params.lpt.coupling == lpt_pb2.LagrangianParticleTracking.CouplingType.TWO_WAY:
+  def init_fn_zeros(xx: tf.Tensor, yy: tf.Tensor, zz: tf.Tensor, lx: float,
+                    ly: float, lz: float, coord: initializer.ThreeIntTuple) -> tf.Tensor:
+    """Creates a 3D tensor with value 0 that has the same size as `xx`."""
+    del yy, zz, lx, ly, lz, coord
+    return tf.zeros_like(xx, dtype=xx.dtype)
 
-    force_u = initializer.partial_mesh_for_core(
-            params,
-            coordinates,
-            init_fn_zeros,
-            mesh_choice=initializer.MeshChoice.PARAMS,
-        )
-    force_v = initializer.partial_mesh_for_core(
-            params,
-            coordinates,
-            init_fn_zeros,
-            mesh_choice=initializer.MeshChoice.PARAMS,
-        )
-    force_w = initializer.partial_mesh_for_core(
-            params,
-            coordinates,
-            init_fn_zeros,
-            mesh_choice=initializer.MeshChoice.PARAMS,
-        )
-  else:
-    force_u = tf.zeros((), lpt_types.LPT_FLOAT)
-    force_v = tf.zeros((), lpt_types.LPT_FLOAT)
-    force_w = tf.zeros((), lpt_types.LPT_FLOAT)
+  force_u = initializer.partial_mesh_for_core(
+          params,
+          coordinates,
+          init_fn_zeros,
+          mesh_choice=initializer.MeshChoice.PARAMS,
+      )
+  force_v = initializer.partial_mesh_for_core(
+          params,
+          coordinates,
+          init_fn_zeros,
+          mesh_choice=initializer.MeshChoice.PARAMS,
+      )
+  force_w = initializer.partial_mesh_for_core(
+          params,
+          coordinates,
+          init_fn_zeros,
+          mesh_choice=initializer.MeshChoice.PARAMS,
+      )
+  # else:
+    # force_u = tf.zeros((), lpt_types.LPT_FLOAT)
+    # force_v = tf.zeros((), lpt_types.LPT_FLOAT)
+    # force_w = tf.zeros((), lpt_types.LPT_FLOAT)
 
   return {
       lpt_types.LPT_INTS_KEY: tf.zeros((n_max, 2), lpt_types.LPT_INT),

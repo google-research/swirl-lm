@@ -606,14 +606,47 @@ class Velocity(object):
                        _KEY_V: additional_states[lpt_types.LPT_FORCE_V_KEY],
                        _KEY_W: additional_states[lpt_types.LPT_FORCE_W_KEY]}
 
-      for key, value in self._source.items():
-        if value != None and type(value) == type(tf.zeros((1,2))) \
-          and tf.shape(value) == tf.shape(update_source[key]):
-          self._source[key] = tf.nest.map_structure(
-            tf.math.add, update_source[key], value
-          )
-        else:
-          self._source[key] = update_source[key]
+      # does not account for there being a source already
+      self._source.update(update_source)
+
+      # key = _KEY_U
+      # value = self._source[key]
+      # if value is not None and type(value) == type(tf.zeros((1,2))) \
+      #   and tf.reduce_all(tf.shape(value) == tf.shape(update_source[key])):
+      #   self._source[key] = tf.nest.map_structure(
+      #     tf.math.add, update_source[key], value
+      #   )
+      # else:
+      #   self._source[key] = update_source[key]
+
+      # key = _KEY_V
+      # value = self._source[key]
+      # if value is not None and type(value) == type(tf.zeros((1,2))) \
+      #   and tf.reduce_all(tf.shape(value) == tf.shape(update_source[key])):
+      #   self._source[key] = tf.nest.map_structure(
+      #     tf.math.add, update_source[key], value
+      #   )
+      # else:
+      #   self._source[key] = update_source[key]
+
+      # key = _KEY_W
+      # value = self._source[key]
+      # if value is not None and type(value) == type(tf.zeros((1,2))) \
+      #   and tf.reduce_all(tf.shape(value) == tf.shape(update_source[key])):
+      #   self._source[key] = tf.nest.map_structure(
+      #     tf.math.add, update_source[key], value
+      #   )
+      # else:
+      #   self._source[key] = update_source[key]
+
+      # for key, value in self._source.items():
+      #   if value is not None and type(value) == type(tf.zeros((1,2))) \
+      #     and tf.reduce_all(tf.shape(value) == tf.shape(update_source[key])):
+      #     self._source[key] = tf.nest.map_structure(
+      #       tf.math.add, update_source[key], value
+      #     )
+      #   else:
+      #     self._source[key] = update_source[key]
 
   def _maybe_update_diagnostics(
       self, additional_states, states_0, template_state):
@@ -686,6 +719,7 @@ class Velocity(object):
     mu = common_ops.map_structure_3d(tf.math.multiply, nu, states_0[_KEY_RHO])
 
     forces = [self._source[_KEY_U], self._source[_KEY_V], self._source[_KEY_W]]
+
 
     momentum_rhs = self._momentum_update(
         replica_id,

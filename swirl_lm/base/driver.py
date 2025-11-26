@@ -30,6 +30,7 @@ from swirl_lm.core import simulation
 from swirl_lm.linalg import poisson_solver
 from swirl_lm.physics.lpt import lpt
 from swirl_lm.physics.lpt import lpt_manager
+from swirl_lm.physics.lpt import lpt_types
 from swirl_lm.physics.radiation import rrtmgp_common
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import debug_output
@@ -537,6 +538,8 @@ def _one_cycle(
     cycle_step_id = 0
     prev_state = state
     has_non_finite = False
+
+
     for _ in tf.range(num_steps):
       step_id = init_step_id + cycle_step_id
       # Split the state into essential states and additional states. Note that

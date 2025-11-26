@@ -327,14 +327,24 @@ def one_shuffle_fluid_data_and_two_way_forces(
   fluid_data = tf.zeros((n_max, len(variables)), dtype=tf.float32)
 
   loc_vels_masses_active_and_fluid_data = tf.concat(
-    [locs, vels, masses, active, fluid_data], axis=1)
+    [locs,
+     vels,
+     tf.reshape(masses, shape = (n_max, 1)),
+     tf.reshape(active, shape = (n_max, 1)),
+     fluid_data
+     ],
+    axis=1
+  )
 
-  if variables != ['w', 'u', 'v', 'rho']:
-    raise ValueError("variables must be ['w', 'u', 'v', 'rho']")
+  if len(variables) >= 4 and variables[0] == 'w' and variables[1] == 'u'  \
+        and variables[2] == 'v' and  variables[3] == 'rho':
+    pass
+  else:
+    raise ValueError("variables must be ['w', 'u', 'v', 'rho', ...]")
 
   # preparing coupling force for data
-  particle_force_data = tf.zeros((0, 3), dtype=tf.float32)
-  particle_to_carrier_index = tf.zeros((0,3), dtype=tf.int32)
+  particle_force_data = tf.zeros((1, 3), dtype=tf.float32)
+  particle_to_carrier_index = tf.zeros((1,3), dtype=tf.int32)
 
   for _ in range(num_replicas):
 
@@ -384,75 +394,82 @@ def one_shuffle_fluid_data_and_two_way_forces(
 
       # Preparing joint location-field data tensor.
       loc_vels_masses_active_and_fluid_data = tf.concat(
-        [locs, vels, masses, active, fluid_data], axis=1
+        [locs,
+         vels,
+         tf.reshape(masses, shape = (n_max, 1)),
+         tf.reshape(active, shape = (n_max, 1)),
+         fluid_data
+        ],
+        axis=1
       )
 
-    with tf.name_scope("calculating particle forces at particle locations"):
-      forces_local = force_fn(fluid_data_at_locs[:, :3],
-                     fluid_data_at_locs[:, 3],
-                     locs_local,
-                     vels_local,
-                     masses_local
-              )*tf.reshape(active_local, shape = (len(active_local), 1))
+    if tf.shape(weights)[0] > 0:
+      with tf.name_scope("calculating_particle_forces_at_particle_locations"):
+        forces_local = force_fn(fluid_data_at_locs[:, :3],
+                      fluid_data_at_locs[:, 3],
+                      locs_local,
+                      vels_local,
+                      masses_local
+                )*tf.reshape(active_local, shape = (len(active_local), 1))
 
-      # we multiply the result by the active local to remote zero forces
 
-    with tf.name_scope("creating arrays (particles_in_replica*8, ...)"):
-      weights = tf.reshape(weights, shape=(-1))
+      with tf.name_scope("creating_weights_forces_and_index_arrays"):
+        weights = tf.reshape(weights, shape=(-1,))
 
-      carrier_index = tf.stack(
-      [
-          fluid_origins + tf.constant([p,q,l])
-          for p, q, l in itertools.product(range(2), range(2), range(2))
-      ],
-      axis=-1,
-      )
-      carrier_index = tf.einsum("ijk->ikj",carrier_index)
-      carrier_index = tf.reshape(carrier_index, shape = (-1,3))
+        carrier_index = tf.stack(
+        [
+            fluid_origins + tf.constant([p,q,l])
+            for p, q, l in itertools.product(range(2), range(2), range(2))
+        ],
+        axis=-1,
+        )
+        carrier_index = tf.einsum("ijk->ikj",carrier_index)
+        carrier_index = tf.reshape(carrier_index, shape = (-1,3))
 
-      forces_repeated = tf.stack(
-      [
-          forces_local
-          for p, q, l in itertools.product(range(2), range(2), range(2))
-      ],
-      axis=-1,
-      )
-      forces_repeated = tf.einsum("ijk->ikj",forces_repeated)
-      forces_repeated = tf.reshape(forces_repeated, shape = (-1,3))
+        forces_repeated = tf.stack(
+        [
+            forces_local
+            for p, q, l in itertools.product(range(2), range(2), range(2))
+        ],
+        axis=-1,
+        )
+        forces_repeated = tf.einsum("ijk->ikj",forces_repeated)
+        forces_repeated = tf.reshape(forces_repeated, shape = (-1,3))
 
-    with tf.name_scope("calculating weighted forces "):
-      weighted_forces = tf.einsum("kj,k->kj",forces_repeated,weights)
+      with tf.name_scope("calculating_weighted_forces"):
+        weighted_forces = tf.einsum("kj,k->kj",forces_repeated,weights)
 
-    with tf.name_scope("appending weighted forces physically in the replica"):
-      particle_force_data = tf.concat(
-        (particle_force_data, weighted_forces), axis = 0
-      )
-      particle_to_carrier_index = tf.concat(
-        (particle_to_carrier_index, carrier_index), axis = 0
-      )
+      with tf.name_scope("appending_weighted_forces_physically_in_the_replica"):
+        particle_force_data = tf.concat(
+          (particle_force_data, weighted_forces), axis = 0
+        )
+        particle_to_carrier_index = tf.concat(
+          (particle_to_carrier_index, carrier_index), axis = 0
+        )
 
-    with tf.name_scope("summing forces with the same indices"):
-      # linear index for finding unique cases
-      N0, N1, N2 = tf.shape(states[variables[0]])[:3]
-      carrier_index_linear = particle_to_carrier_index[:,0] \
-        + particle_to_carrier_index[:,1]*N0 \
-        +particle_to_carrier_index[:,2]*N0*N1
+      # with tf.name_scope("summing_forces_with_the_same_indices"):
+      #   # linear index for finding unique cases
+      #   state_shape = tf.shape(states[variables[0]])
 
-      # finding unique cases
-      y, idx = tf.unique(carrier_index_linear)
-      len_of_data = tf.shape(particle_force_data)[0]
-      len_of_uniques = tf.shape(y)[0]
-      unique_sorter = tf.math.unsorted_segment_min(
-        tf.range(len_of_data), idx, len_of_uniques
-      )
+      #   carrier_index_linear = particle_to_carrier_index[:,0] \
+      #     + particle_to_carrier_index[:,1]*state_shape[0] \
+      #     +particle_to_carrier_index[:,2]*state_shape[0]*state_shape[1]
 
-      # summing weighted forces
-      particle_force_data = tf.einsum(
-        "kl,kj->jl", particle_force_data, tf.one_hot(idx, depth=len_of_uniques)
-      )
-      particle_to_carrier_index = tf.gather(
-        particle_to_carrier_index, unique_sorter
-      )
+      #   # finding unique cases
+      #   y, idx = tf.unique(carrier_index_linear)
+      #   len_of_data = tf.shape(particle_force_data)[0]
+      #   len_of_uniques = tf.shape(y)[0]
+      #   unique_sorter = tf.math.unsorted_segment_min(
+      #     tf.range(len_of_data), idx, len_of_uniques
+      #   )
+
+      #   # summing weighted forces
+      #   particle_force_data = tf.einsum(
+      #     "kl,kj->jl", particle_force_data, tf.one_hot(idx, depth=len_of_uniques)
+      #   )
+      #   particle_to_carrier_index = tf.gather(
+      #     particle_to_carrier_index, unique_sorter
+      #   )
 
   return loc_vels_masses_active_and_fluid_data[:, 8:], \
     particle_to_carrier_index, particle_force_data

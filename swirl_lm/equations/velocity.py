@@ -609,37 +609,7 @@ class Velocity(object):
       # does not account for there being a source already
       self._source.update(update_source)
 
-      # key = _KEY_U
-      # value = self._source[key]
-      # if value is not None and type(value) == type(tf.zeros((1,2))) \
-      #   and tf.reduce_all(tf.shape(value) == tf.shape(update_source[key])):
-      #   self._source[key] = tf.nest.map_structure(
-      #     tf.math.add, update_source[key], value
-      #   )
-      # else:
-      #   self._source[key] = update_source[key]
-
-      # key = _KEY_V
-      # value = self._source[key]
-      # if value is not None and type(value) == type(tf.zeros((1,2))) \
-      #   and tf.reduce_all(tf.shape(value) == tf.shape(update_source[key])):
-      #   self._source[key] = tf.nest.map_structure(
-      #     tf.math.add, update_source[key], value
-      #   )
-      # else:
-      #   self._source[key] = update_source[key]
-
-      # key = _KEY_W
-      # value = self._source[key]
-      # if value is not None and type(value) == type(tf.zeros((1,2))) \
-      #   and tf.reduce_all(tf.shape(value) == tf.shape(update_source[key])):
-      #   self._source[key] = tf.nest.map_structure(
-      #     tf.math.add, update_source[key], value
-      #   )
-      # else:
-      #   self._source[key] = update_source[key]
-
-      # for key, value in self._source.items():
+      # for key, value in update_source.items():
       #   if value is not None and type(value) == type(tf.zeros((1,2))) \
       #     and tf.reduce_all(tf.shape(value) == tf.shape(update_source[key])):
       #     self._source[key] = tf.nest.map_structure(

@@ -354,7 +354,7 @@ class LPT:
         dxdt = part_vels
 
       if self.tau_p == -1.0 and fluid_densities != None:
-        particle_diamter = (part_masses*6/(self.density*3.14159))**(1/3)
+        particle_diamter = (tf.abs(part_masses)*6/(self.density*3.14159))**(1/3)
         inverse_density = tf.reshape(1/fluid_densities, (len(fluid_densities),))
         tau_p = tf.multiply(particle_diamter**2*self.density/(18*self.params.nu)
                             , inverse_density
@@ -372,7 +372,6 @@ class LPT:
             indices,
             tf.ones_like(particles_terminating, dtype=lpt_types.LPT_FLOAT),
         )
-
         inverse_time_constant = tf.reshape(1/tau_p, (len(tau_p), 1))
 
         dvdt = (
@@ -424,7 +423,7 @@ class LPT:
         del part_locs
 
         if self.tau_p == -1.0 and fluid_densities != None:
-          particle_diamter = (part_masses*6/(self.density*3.14159))**(1/3)
+          particle_diamter = (tf.abs(part_masses)*6/(self.density*3.14159))**(1/3)
           inverse_density = tf.reshape(1/fluid_densities, (len(fluid_densities),))
           tau_p = tf.multiply(particle_diamter**2*self.density/(18*self.params.nu)
                               , inverse_density

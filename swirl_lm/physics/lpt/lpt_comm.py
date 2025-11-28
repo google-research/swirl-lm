@@ -277,7 +277,7 @@ def one_shuffle_fluid_data_and_two_way_forces(
 
     force_fn: A function that takes tensors fluid_speeds (k, 3), fluid_densities
       (k, ) , particle_locs (k, 3), particle_vels (k, 3), particle_masses (k, 3)
-      as ordered arguments and outputs a (k,) tensor of forces
+      as ordered arguments and outputs a (k,3) tensor of forces.
 
     states: A `FlowFieldMap` containing the fluid data.
 
@@ -312,10 +312,10 @@ def one_shuffle_fluid_data_and_two_way_forces(
       from remote locations.
 
     A tensor of size `(k, 3)` containing k replica physical coordinate indices
-      where two way coupling forces are applied. Each index is unique.
+      where two way coupling forces are applied.
 
     A tensor of size `(k, 3)` containing the two way coupling force along each
-     direction. These forces are cumulative across all particles.
+     direction.
   """
   # Construct the circular exchange.
   num_replicas = replicas.size
@@ -403,7 +403,10 @@ def one_shuffle_fluid_data_and_two_way_forces(
         axis=1
       )
 
+    # only append particles if there are particles physically on this replica
+    # this happens when the first dimension of loc_local/weights is greater than 0
     if tf.shape(weights)[0] > 0:
+
       with tf.name_scope("calculating_particle_forces_at_particle_locations"):
         forces_local = force_fn(fluid_data_at_locs[:, :3],
                       fluid_data_at_locs[:, 3],
@@ -411,6 +414,7 @@ def one_shuffle_fluid_data_and_two_way_forces(
                       vels_local,
                       masses_local
                 )*tf.reshape(active_local, shape = (len(active_local), 1))
+
 
 
       with tf.name_scope("creating_weights_forces_and_index_arrays"):
@@ -447,29 +451,7 @@ def one_shuffle_fluid_data_and_two_way_forces(
           (particle_to_carrier_index, carrier_index), axis = 0
         )
 
-      # with tf.name_scope("summing_forces_with_the_same_indices"):
-      #   # linear index for finding unique cases
-      #   state_shape = tf.shape(states[variables[0]])
 
-      #   carrier_index_linear = particle_to_carrier_index[:,0] \
-      #     + particle_to_carrier_index[:,1]*state_shape[0] \
-      #     +particle_to_carrier_index[:,2]*state_shape[0]*state_shape[1]
-
-      #   # finding unique cases
-      #   y, idx = tf.unique(carrier_index_linear)
-      #   len_of_data = tf.shape(particle_force_data)[0]
-      #   len_of_uniques = tf.shape(y)[0]
-      #   unique_sorter = tf.math.unsorted_segment_min(
-      #     tf.range(len_of_data), idx, len_of_uniques
-      #   )
-
-      #   # summing weighted forces
-      #   particle_force_data = tf.einsum(
-      #     "kl,kj->jl", particle_force_data, tf.one_hot(idx, depth=len_of_uniques)
-      #   )
-      #   particle_to_carrier_index = tf.gather(
-      #     particle_to_carrier_index, unique_sorter
-      #   )
 
   return loc_vels_masses_active_and_fluid_data[:, 8:], \
     particle_to_carrier_index, particle_force_data

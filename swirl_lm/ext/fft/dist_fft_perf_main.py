@@ -37,8 +37,12 @@ _NUM_TRANSFORMS = flags.DEFINE_integer(
 )
 _CX = flags.DEFINE_integer('cx', 1, 'number of partitions in x')
 _CY = flags.DEFINE_integer('cy', 1, 'number of partitions in y')
+_CZ = flags.DEFINE_integer('cz', 1, 'number of partitions in z')
 _NX = flags.DEFINE_integer('nx', 128, 'global grid size in x')
 _NY = flags.DEFINE_integer('ny', 128, 'global grid size in y')
+_NZ = flags.DEFINE_integer('nz', 1, 'global grid size in z, if `1`, '
+                           'the 2D performance test will be run. If > 1'
+                           'the 3D performanace test will be run.')
 _BACKEND = flags.DEFINE_string('backend', 'tpu', '`tpu` or `gpu`')
 
 FLAGS = flags.FLAGS
@@ -57,7 +61,10 @@ def gen_random(local_shape, core_index, seeds):
 
 
 def main(_):
-  partition = (_CX.value, _CY.value, 1)
+  jax.config.update(
+      'jax_default_matmul_precision', 'highest'
+  )
+  partition = (_CX.value, _CY.value, _CZ.value)
   def input_fn(local_shape, core_index):
     return gen_random(local_shape, core_index, (10061, 23399))
 
@@ -69,17 +76,25 @@ def main(_):
   transformer = dist_fft.DistFFT(('x', 'y', 'z'), partition,
                                  backend=_BACKEND.value)
 
-  global_shape = (_NX.value, _NY.value, 1)
+  global_shape = (_NX.value, _NY.value, _NZ.value)
 
   @functools.partial(jax.jit, static_argnums=(0))
   def run_fft_2d_jit(num):
     return transformer.fft_2d_perf(global_shape, input_fn, kernel_fn, num=num)
 
+  @functools.partial(jax.jit, static_argnums=(0))
+  def run_fft_3d_jit(num):
+    return transformer.fft_3d_perf(global_shape, input_fn, kernel_fn, num=num)
+
   num_transforms = _NUM_TRANSFORMS.value
   for cycle in range(_NUM_CYCLES.value):
     logging.info('starting FFT cycle %d, for %d transforms',
                  cycle, num_transforms)
-    run_fft_2d_jit(num=num_transforms)
+    if global_shape[2] == 1:
+      run_fft_2d_jit(num=num_transforms)
+    else:
+      run_fft_3d_jit(num=num_transforms)
+
     logging.info('FFT cycle %d done.', cycle)
 
 

@@ -19,6 +19,7 @@ from absl.testing import parameterized
 from absl import logging
 import numpy as np
 import tensorflow as tf
+from tensorflow_testcase import TensorflowTestCase
 
 import itertools
 from swirl_lm.base import parameters as parameters_lib
@@ -309,6 +310,7 @@ def get_expected_carrier_index_and_forces(logical_coordinate : tf.Tensor,
   )
 
   def case_true():
+    # before the update
     if tf.reduce_all(logical_coordinate == tf.constant([0,0,0],dtype = tf.int32)):
       # gives carrier indices and forces expected for 0, 0, 0
       # in this case because the inactive particles were initialized with 0, 0, 0
@@ -392,6 +394,30 @@ def get_expected_carrier_index_and_forces(logical_coordinate : tf.Tensor,
       )
 
       return carrier_expected, forces_expected
+
+    # after the update
+    # carrier_expected = tf.concat(
+    #       [
+    #         tf.zeros((1,3), dtype=tf.int32),
+    #         tf.stack(
+    #         [
+    #             tf.cast(particle_loc[0], dtype=tf.int32) + tf.constant([p,q,l])
+    #             for p, q, l in itertools.product(range(2), range(2), range(2))
+    #         ]
+    #         )
+    #       ],
+    #       axis = 0
+    #     )
+
+    # forces_expected = tf.concat(
+    #     [
+    #       tf.constant([[0.        , 0.      , 0.]],dtype = tf.float32),
+    #       nonzer_force_replica,
+    #       tf.zeros((7, 3), dtype=tf.float32)
+    #     ],
+    #     axis=0,
+    # )
+    # return carrier_expected, forces_expected
 
   def case_false():
     tf.Assert(False, ["Unexpected Logical Coordinate"])
@@ -589,56 +615,6 @@ def initialize_tpu(params):
 
   return tpu_strategy, logical_coordinates, logical_replicas
 
-class TensorflowTestCase(parameterized.TestCase):
-  def assertAllClose(self,
-                     tensor_A : tf.Tensor,
-                     tensor_B : tf.Tensor,
-                     atol : tf.Tensor = tf.constant(1e-7)
-      ) -> None:
-    """Checks if two tensors have values near each other.
-
-      Args:
-          tensor_A: first tensor to test
-          tensor_B: second tensor to test
-          atol: absolute tolerance of the test. The difference must be less than
-            this
-
-    """
-    abs_diff = tf.math.abs(tensor_A - tensor_B)
-    within_tol = tf.less_equal(abs_diff, atol)
-    if not tf.reduce_all(within_tol):
-      print("tensor_A", tensor_A)
-      print("tensor_B", tensor_B)
-    self.assertTrue(tf.reduce_all(within_tol))
-
-  def assertAllEqual(self,
-                     tensor_A : tf.Tensor,
-                     tensor_B : tf.Tensor
-      ) -> None:
-    """Checks if two tensors have equal values.
-
-      Args:
-          tensor_A: first tensor to test
-          tensor_B: second tensor to test
-    """
-    if tensor_B.dtype is not tensor_A.dtype:
-      raise TypeError("Tensor argument types should be the same, tensor A type : " \
-                      + tensor_A.dtype.name \
-                      + ", tensor B type: " + tensor_B.dtype.name)
-    within_tol = tf.equal(tensor_A, tensor_B)
-    self.assertTrue(tf.reduce_all(within_tol))
-
-  def assertAllNonzero(self,
-                       tensor : tf.Tensor
-      ) -> None:
-    """Checks if the input tensor has all nonzero values.
-
-      Args:
-          tensor: tensor to test
-    """
-    within_tol = tf.greater(tf.abs(tensor), tf.constant(0.0))
-    self.assertTrue(tf.reduce_all(within_tol))
-
 class SimpleForceFunction:
   """Simple force function for testing - returns (k, 3) tensor."""
 
@@ -820,13 +796,7 @@ class OneShuffleFluidDataAndTwoWayForcesTestMulticore(TensorflowTestCase):
 
     # Verify for each replica
     for i_rep in range(len(fluid_data_rep)):
-      print(f"replica {i_rep}")
-
       self.assertEqual(fluid_data_rep[i_rep].shape, (self.n_max, len(self.variables)))
-
-      # carrier_indices and forces should have matching dimensions
-      # for a single replica case, all particles are on this replica.
-
 
       # Verify the values in the outputs
       # Verify fluid data

@@ -415,6 +415,69 @@ def one_shuffle_fluid_data_and_two_way_forces(
                       masses_local
                 )*tf.reshape(active_local, shape = (len(active_local), 1))
 
+      # with tf.name_scope("testing_new_method"):
+      #   # calculate forces for all particles stored on the replica
+      #   forces_total = force_fn(fluid_data[:, :3],
+      #                 fluid_data[:, 3],
+      #                 locs,
+      #                 vels,
+      #                 masses
+      #           )*tf.reshape(active, shape = (n_max, 1))
+
+      #   # create new weight and index arrays and update them
+      #   weights_new = tf.zeros((n_max, 8), dtype = lpt_types.LPT_FLOAT)
+      #   fluid_origins_new = tf.zeros((n_max, 3), dtype = lpt_types.LPT_INT)
+
+      #   fluid_origins_new = lpt_utils.tensor_scatter_update_ints(
+      #     fluid_origins_new, loc_indices_local, fluid_origins
+      #   )
+
+      #   weights_new = lpt_utils.tensor_scatter_update(
+      #     weights_new, loc_indices_local, weights
+      #   )
+
+      #   # get boolean array for nonzero forces
+      #   is_zero = tf.reduce_all(
+      #           tf.stack(
+      #             (
+      #               forces_total[:, 0] == tf.constant(0, dtype = lpt_types.LPT_FLOAT),
+      #               forces_total[:, 1] == tf.constant(0, dtype = lpt_types.LPT_FLOAT),
+      #               forces_total[:, 2] == tf.constant(0, dtype = lpt_types.LPT_FLOAT)
+      #             )
+      #             , axis = 1
+      #           )
+      #           ,
+      #           axis = 1
+      #         )
+      #   nonzero_bool = is_zero == False
+
+      #   bool_array = tf.math.logical_and(nonzero_bool,
+      #                                    loc_replicas == replica_id)
+
+      #   # find where index is both in the replica and has nonzero force
+      #   nonzero_and_loc_indices_local = \
+      #       tf.reshape(tf.where(bool_array), [-1])
+
+      #   # eliminate the other cases
+      #   forces_reduced = tf.einsum(
+      #       "qj,ji->qi",tf.one_hot(nonzero_and_loc_indices_local, n_max),
+      #       forces_total
+      #   )
+
+      #   weights_reduced = tf.einsum(
+      #       "qj,ji->qi",tf.one_hot(nonzero_and_loc_indices_local, n_max),
+      #       weights_new
+      #   )
+      #   fluid_origins_reduced = tf.einsum(
+      #       "qj,ji->qi",
+      #       tf.one_hot(nonzero_and_loc_indices_local,
+      #                   n_max, dtype=lpt_types.LPT_INT),
+      #       fluid_origins_new
+      #   )
+
+      #   weights = weights_reduced
+      #   fluid_origins = fluid_origins_reduced
+      #   forces_local = forces_reduced
 
 
       with tf.name_scope("creating_weights_forces_and_index_arrays"):

@@ -18,6 +18,7 @@ from absl.testing import absltest
 from absl.testing import parameterized
 import numpy as np
 import tensorflow as tf
+from tensorflow_testcase import TensorflowTestCase
 
 import itertools
 from swirl_lm.base import parameters as parameters_lib
@@ -130,53 +131,6 @@ def create_constant_velocity_states(
       ),
   }
   return states
-
-class TensorflowTestCase(parameterized.TestCase):
-  def assertAllClose(self,
-                     tensor_A : tf.Tensor,
-                     tensor_B : tf.Tensor,
-                     atol : tf.Tensor = tf.constant(1e-7)
-      ) -> None:
-    """Checks if two tensors have values near each other.
-
-      Args:
-          tensor_A: first tensor to test
-          tensor_B: second tensor to test
-          atol: absolute tolerance of the test. The difference must be less than
-            this
-
-    """
-    abs_diff = tf.math.abs(tensor_A - tensor_B)
-    within_tol = tf.less_equal(abs_diff, atol)
-    self.assertTrue(tf.reduce_all(within_tol))
-
-  def assertAllEqual(self,
-                     tensor_A : tf.Tensor,
-                     tensor_B : tf.Tensor
-      ) -> None:
-    """Checks if two tensors have equal values.
-
-      Args:
-          tensor_A: first tensor to test
-          tensor_B: second tensor to test
-    """
-    if tensor_B.dtype is not tensor_A.dtype:
-      raise TypeError("Tensor argument types should be the same, tensor A type : " \
-                      + tensor_A.dtype.name \
-                      + ", tensor B type: " + tensor_B.dtype.name)
-    within_tol = tf.equal(tensor_A, tensor_B)
-    self.assertTrue(tf.reduce_all(within_tol))
-
-  def assertAllNonzero(self,
-                       tensor : tf.Tensor
-      ) -> None:
-    """Checks if the input tensor has all nonzero values.
-
-      Args:
-          tensor: tensor to test
-    """
-    within_tol = tf.greater(tf.abs(tensor), tf.constant(0.0))
-    self.assertTrue(tf.reduce_all(within_tol))
 
 class SimpleForceFunction:
   """Simple force function for testing - returns (k, 3) tensor."""
@@ -483,10 +437,18 @@ class OneShuffleFluidDataAndTwoWayForcesTest(TensorflowTestCase):
     self.assertEqual(fluid_data.shape, (self.n_max, len(self.variables)))
 
     # carrier_indices and forces should have matching dimensions
-    # for a single replica case, all particles are on this replica.
+
+    # before the update
+    # for a single replica case, all particles (including inactive)
+    # are on this replica.
     # so that means that the size of the array will be 8*nmax + 1
     self.assertEqual(carrier_indices.shape, (8*self.n_max + 1, 3))
     self.assertEqual(forces.shape, (8*self.n_max + 1, 3))
+
+    # after the update
+    # self.assertEqual(carrier_indices.shape, (8 + 1, 3))
+    # self.assertEqual(forces.shape, (8 + 1, 3))
+
 
     # Verify the values in the outputs
     # Verify fluid data
@@ -495,6 +457,7 @@ class OneShuffleFluidDataAndTwoWayForcesTest(TensorflowTestCase):
     self.assertAllClose(fluid_data[:, 2], tf.constant(v_val, dtype = fluid_data.dtype))
     self.assertAllClose(fluid_data[:, 3], tf.constant(rho_val, dtype = fluid_data.dtype))
 
+    # before the update
     # Verify force data
     carrier_indices_expected = tf.concat(
       [
@@ -539,6 +502,40 @@ class OneShuffleFluidDataAndTwoWayForcesTest(TensorflowTestCase):
         axis=0,
     )
     self.assertAllClose(forces, forces_expected)
+
+    # After the update
+    # Verify force data
+    # carrier_indices_expected = tf.concat(
+    #   [
+    #     tf.zeros((1,3), dtype=tf.int32),
+    #     tf.constant(
+    #       [
+    #         [4, 4, 4],
+    #         [4, 4, 5],
+    #         [4, 5, 4],
+    #         [4, 5, 5],
+    #         [5, 4, 4],
+    #         [5, 4, 5],
+    #         [5, 5, 4],
+    #         [5, 5, 5]
+    #       ],
+    #       dtype = tf.int32
+    #     )
+    #   ],
+    #   axis = 0
+    # )
+
+    # self.assertAllEqual(carrier_indices, carrier_indices_expected)
+
+    # forces_expected = tf.concat(
+    #     [
+    #       tf.constant([[0.        , 0.      , 0.]],dtype = tf.float32),
+    #       tf.constant([[0.        , 0.12      , 0.24]],dtype = tf.float32),
+    #       tf.zeros((7, 3), dtype=tf.float32)
+    #     ],
+    #     axis=0,
+    # )
+    # self.assertAllClose(forces, forces_expected)
 
   # add an additional test for if the particle is slightly shifted off
 
@@ -612,8 +609,13 @@ class OneShuffleFluidDataAndTwoWayForcesTest(TensorflowTestCase):
     self.assertEqual(fluid_data.shape, (self.n_max, len(self.variables)))
 
     # carrier_indices and forces should have matching dimensions
+    # before the update
     self.assertEqual(carrier_indices.shape, (8*self.n_max + 1, 3))
     self.assertEqual(forces.shape, (8*self.n_max + 1, 3))
+    # after the update
+    # self.assertEqual(carrier_indices.shape, (8 + 1, 3))
+    # self.assertEqual(forces.shape, (8 + 1, 3))
+
 
     # Verify the values in the outputs
     # Verify fluid data
@@ -622,6 +624,7 @@ class OneShuffleFluidDataAndTwoWayForcesTest(TensorflowTestCase):
     self.assertAllClose(fluid_data[:, 2], tf.constant(3.0, dtype = fluid_data.dtype))
     self.assertAllClose(fluid_data[:, 3], tf.constant(1.2, dtype = fluid_data.dtype))
 
+    # before the update
     # Verify force data
     carrier_indices_expected = tf.concat(
       [
@@ -667,6 +670,39 @@ class OneShuffleFluidDataAndTwoWayForcesTest(TensorflowTestCase):
     )
     self.assertAllClose(forces, forces_expected, atol = tf.constant(1e-5))
 
+    # after the update
+    # carrier_indices_expected = tf.concat(
+    #   [
+    #     tf.zeros((1,3), dtype=tf.int32),
+    #     tf.constant(
+    #       [
+    #         [4, 4, 4],
+    #         [4, 4, 5],
+    #         [4, 5, 4],
+    #         [4, 5, 5],
+    #         [5, 4, 4],
+    #         [5, 4, 5],
+    #         [5, 5, 4],
+    #         [5, 5, 5]
+    #       ],
+    #       dtype = tf.int32
+    #     )
+    #   ],
+    #   axis = 0
+    # )
+
+    # self.assertAllEqual(carrier_indices, carrier_indices_expected)
+
+    # forces_expected = tf.concat(
+    #     [
+    #       tf.constant([[0.        , 0.      , 0.]],dtype = tf.float32),
+    #       tf.constant([[0.       , 0.5857132, 1.1714264]],dtype = tf.float32),
+    #       tf.zeros((7, 3), dtype=tf.float32)
+    #     ],
+    #     axis=0,
+    # )
+    # self.assertAllClose(forces, forces_expected, atol = tf.constant(1e-5))
+
   def test_output_shapes_are_correct(self):
     """Test that output shapes are correct."""
     states = create_constant_velocity_states(grid_shape=self.grid_shape)
@@ -700,8 +736,13 @@ class OneShuffleFluidDataAndTwoWayForcesTest(TensorflowTestCase):
     self.assertEqual(fluid_data.shape, (self.n_max, len(self.variables)))
 
     # carrier_indices and forces should have matching dimensions
+    # before the update
     self.assertEqual(carrier_indices.shape, (8*self.n_max + 1,3))
     self.assertEqual(forces.shape, (8*self.n_max + 1,3))
+
+    # after the update
+    # self.assertEqual(carrier_indices.shape, (8*self.n_max + 1,3))
+    # self.assertEqual(forces.shape, (8*self.n_max + 1,3))
 
   def test_multiple_particles_on_fluid_point(self):
     """Test with multiple particles."""
@@ -766,8 +807,12 @@ class OneShuffleFluidDataAndTwoWayForcesTest(TensorflowTestCase):
     self.assertEqual(fluid_data.shape, (self.n_max, len(self.variables)))
 
     # carrier_indices and forces should have matching dimensions
+    # before the update
     self.assertEqual(carrier_indices.shape, (8*self.n_max + 1, 3))
     self.assertEqual(forces.shape, (8*self.n_max + 1, 3))
+    # after the update
+    # self.assertEqual(carrier_indices.shape, (8*3 + 1, 3))
+    # self.assertEqual(forces.shape, (8*3 + 1, 3))
 
     # Verify the values in the outputs
     # Verify fluid data
@@ -776,6 +821,7 @@ class OneShuffleFluidDataAndTwoWayForcesTest(TensorflowTestCase):
     self.assertAllClose(fluid_data[:, 2], tf.constant(2.5, dtype = fluid_data.dtype))
     self.assertAllClose(fluid_data[:, 3], tf.constant(1.0, dtype = fluid_data.dtype))
 
+    # before the update
     # Verify carrier index
     carrier_indices_expected = tf.concat(
       [
@@ -865,6 +911,83 @@ class OneShuffleFluidDataAndTwoWayForcesTest(TensorflowTestCase):
         axis=0,
     )
     self.assertAllClose(forces, forces_expected)
+
+    # after the update
+    # carrier_indices_expected = tf.concat(
+    #   [
+    #     tf.zeros((1,3), dtype=tf.int32),
+    #     tf.constant(
+    #       [
+    #         [2, 2, 2],
+    #         [2, 2, 3],
+    #         [2, 3, 2],
+    #         [2, 3, 3],
+    #         [3, 2, 2],
+    #         [3, 2, 3],
+    #         [3, 3, 2],
+    #         [3, 3, 3],
+    #         [4, 4, 4],
+    #         [4, 4, 5],
+    #         [4, 5, 4],
+    #         [4, 5, 5],
+    #         [5, 4, 4],
+    #         [5, 4, 5],
+    #         [5, 5, 4],
+    #         [5, 5, 5],
+    #         [6, 6, 6],
+    #         [6, 6, 7],
+    #         [6, 7, 6],
+    #         [6, 7, 7],
+    #         [7, 6, 6],
+    #         [7, 6, 7],
+    #         [7, 7, 6],
+    #         [7, 7, 7]
+    #       ],
+    #       dtype = tf.int32
+    #     )
+    #   ],
+    #   axis = 0
+    # )
+    # self.assertAllEqual(carrier_indices, carrier_indices_expected)
+
+    # # verify force data
+    # forces_expected = tf.concat(
+    #     [
+    #       tf.constant([[0.        , 0.      , 0.]],dtype = tf.float32),
+    #       tf.constant(
+    #         [
+    #           [-0.05,  0.05,  0.15],
+    #           [0., 0., 0.],
+    #           [0., 0., 0.],
+    #           [0., 0., 0.],
+    #           [0., 0., 0.],
+    #           [0., 0., 0.],
+    #           [0., 0., 0.],
+    #           [0., 0., 0.],
+    #           [-0.15, -0.05,  0.05],
+    #           [0., 0., 0.],
+    #           [0., 0., 0.],
+    #           [0., 0., 0.],
+    #           [0., 0., 0.],
+    #           [0., 0., 0.],
+    #           [0., 0., 0.],
+    #           [0., 0., 0.],
+    #           [-0.25, -0.15, -0.05],
+    #           [0., 0., 0.],
+    #           [0., 0., 0.],
+    #           [0., 0., 0.],
+    #           [0., 0., 0.],
+    #           [0., 0., 0.],
+    #           [0., 0., 0.],
+    #           [0., 0., 0.],
+    #         ]
+    #         ,
+    #         dtype = tf.float32
+    #       )
+    #     ],
+    #     axis=0,
+    # )
+    # self.assertAllClose(forces, forces_expected)
 
 class SimpleForceFunctionTest(TensorflowTestCase):
   """Tests for SimpleForceFunction."""

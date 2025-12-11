@@ -231,3 +231,44 @@ def tensor_scatter_update(
       dtype=lpt_types.LPT_FLOAT,
   )
   return tensor * inverted + substitute
+
+def tensor_scatter_update_ints(
+    tensor: tf.Tensor,
+    indices: tf.Tensor,
+    updates: tf.Tensor,
+) -> tf.Tensor:
+  """Updates the rows in a 2D tensor with the updates at the given indices.
+
+  This function is similar to tf.tensor_scatter_nd_update, but works
+  successfully with the XLA compiler when `updates` is of dynamic sizing.
+
+  Args:
+    tensor: A two dimensional tensor of shape (n, m) that will be updated.
+    indices: A one_dimensional tensor of shape (q,) containing the indices of
+      the rows to update in `tensor`.
+    updates: A tensor of shape (q, m) containing the rows that will overwrite
+      the rows in `tensor` at `indices`.
+
+  Returns:
+    `Tensor` with the `updates` applied at the rows denoted by `indices`. If
+    `indices` is length zero, the `tensor` is returned unchanged.
+  """
+  type_to_use = lpt_types.LPT_INT
+  tolerance = 0
+
+  one_hot = tf.cast(
+      tf.one_hot(indices, depth=tf.shape(tensor)[0]),
+      dtype=type_to_use,
+  )
+  substitute = tf.cast(
+      tf.einsum("qj,qi->ij", updates, one_hot), dtype=type_to_use
+  )
+  inverted = tf.cast(
+      tf.where(
+          tf.greater(tf.abs(substitute), tolerance),
+          tf.zeros_like(substitute),
+          tf.ones_like(substitute),
+      ),
+      dtype=type_to_use,
+  )
+  return tensor * inverted + substitute

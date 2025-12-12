@@ -369,12 +369,14 @@ class LPT:
             [-1],
         )
 
-        tau_p = tf.extend_dims(tau_p, axis = 1)
+        tau_p = tf.expand_dims(tau_p, axis = 1)
 
         tau_p = tensor_scatter_update(
             tau_p,
             particles_terminating,
-            tf.ones_like(particles_terminating, dtype=lpt_types.LPT_FLOAT),
+            tf.expand_dims(
+              tf.ones_like(particles_terminating, dtype=lpt_types.LPT_FLOAT),
+              axis = 1)
         )
 
         inverse_time_constant = 1/tau_p
@@ -442,12 +444,14 @@ class LPT:
               [-1],
           )
 
-          tau_p = tf.extend_dims(tau_p, axis = 1)
+          tau_p = tf.expand_dims(tau_p, axis = 1)
 
           tau_p = tensor_scatter_update(
-              tau_p,
-              particles_terminating,
+            tau_p,
+            particles_terminating,
+            tf.expand_dims(
               tf.ones_like(particles_terminating, dtype=lpt_types.LPT_FLOAT),
+              axis = 1)
           )
 
           inverse_time_constant = 1/tau_p

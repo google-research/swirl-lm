@@ -25,6 +25,7 @@ from swirl_lm.physics import constants
 from swirl_lm.physics.lpt import injector
 from swirl_lm.physics.lpt import lpt_pb2
 from swirl_lm.physics.lpt import lpt_types
+from swirl_lm.physics.lpt.lpt_utils import tensor_scatter_update
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import stretched_grid_util
 from swirl_lm.utility import types
@@ -355,7 +356,7 @@ class LPT:
 
       if self.tau_p == -1.0 and fluid_densities != None:
         particle_diamter = (tf.abs(part_masses)*6/(self.density*3.14159))**(1/3)
-        inverse_density = tf.reshape(1/fluid_densities, (len(fluid_densities),))
+        inverse_density = 1/fluid_densities
 
         tau_p = tf.multiply(particle_diamter**2*self.density/(18*self.params.nu)
                             , inverse_density
@@ -367,15 +368,16 @@ class LPT:
             ),
             [-1],
         )
-        indices = tf.reshape(particles_terminating, [len(particles_terminating), 1])
 
-        tau_p = tf.tensor_scatter_nd_update(
+        tau_p = tf.extend_dims(tau_p, axis = 1)
+
+        tau_p = tensor_scatter_update(
             tau_p,
-            indices,
+            particles_terminating,
             tf.ones_like(particles_terminating, dtype=lpt_types.LPT_FLOAT),
         )
-        inverse_time_constant = tf.reshape(1/tau_p, (len(tau_p), 1))
 
+        inverse_time_constant = 1/tau_p
 
         dvdt = (
             tf.multiply( self.c_d * (fluid_speeds - part_vels), inverse_time_constant)
@@ -427,7 +429,7 @@ class LPT:
 
         if self.tau_p == -1.0 and fluid_densities != None:
           particle_diamter = (tf.abs(part_masses)*6/(self.density*3.14159))**(1/3)
-          inverse_density = tf.reshape(1/fluid_densities, (len(fluid_densities),))
+          inverse_density = 1/fluid_densities
 
           tau_p = tf.multiply(particle_diamter**2*self.density/(18*self.params.nu)
                               , inverse_density
@@ -439,15 +441,16 @@ class LPT:
               ),
               [-1],
           )
-          indices = tf.reshape(particles_terminating, [len(particles_terminating), 1])
 
-          tau_p = tf.tensor_scatter_nd_update(
+          tau_p = tf.extend_dims(tau_p, axis = 1)
+
+          tau_p = tensor_scatter_update(
               tau_p,
-              indices,
+              particles_terminating,
               tf.ones_like(particles_terminating, dtype=lpt_types.LPT_FLOAT),
           )
-          inverse_time_constant = tf.reshape(1/tau_p, (len(tau_p), 1))
 
+          inverse_time_constant = 1/tau_p
 
           dvdt = (
               tf.multiply( self.c_d * (fluid_speeds - part_vels), inverse_time_constant)

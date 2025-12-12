@@ -438,16 +438,11 @@ class OneShuffleFluidDataAndTwoWayForcesTest(TensorflowTestCase):
 
     # carrier_indices and forces should have matching dimensions
 
-    # before the update
     # for a single replica case, all particles (including inactive)
     # are on this replica.
     # so that means that the size of the array will be 8*nmax + 1
     self.assertEqual(carrier_indices.shape, (8*self.n_max + 1, 3))
     self.assertEqual(forces.shape, (8*self.n_max + 1, 3))
-
-    # after the update
-    # self.assertEqual(carrier_indices.shape, (8 + 1, 3))
-    # self.assertEqual(forces.shape, (8 + 1, 3))
 
 
     # Verify the values in the outputs
@@ -457,7 +452,6 @@ class OneShuffleFluidDataAndTwoWayForcesTest(TensorflowTestCase):
     self.assertAllClose(fluid_data[:, 2], tf.constant(v_val, dtype = fluid_data.dtype))
     self.assertAllClose(fluid_data[:, 3], tf.constant(rho_val, dtype = fluid_data.dtype))
 
-    # before the update
     # Verify force data
     carrier_indices_expected = tf.concat(
       [
@@ -503,39 +497,6 @@ class OneShuffleFluidDataAndTwoWayForcesTest(TensorflowTestCase):
     )
     self.assertAllClose(forces, forces_expected)
 
-    # After the update
-    # Verify force data
-    # carrier_indices_expected = tf.concat(
-    #   [
-    #     tf.zeros((1,3), dtype=tf.int32),
-    #     tf.constant(
-    #       [
-    #         [4, 4, 4],
-    #         [4, 4, 5],
-    #         [4, 5, 4],
-    #         [4, 5, 5],
-    #         [5, 4, 4],
-    #         [5, 4, 5],
-    #         [5, 5, 4],
-    #         [5, 5, 5]
-    #       ],
-    #       dtype = tf.int32
-    #     )
-    #   ],
-    #   axis = 0
-    # )
-
-    # self.assertAllEqual(carrier_indices, carrier_indices_expected)
-
-    # forces_expected = tf.concat(
-    #     [
-    #       tf.constant([[0.        , 0.      , 0.]],dtype = tf.float32),
-    #       tf.constant([[0.        , 0.12      , 0.24]],dtype = tf.float32),
-    #       tf.zeros((7, 3), dtype=tf.float32)
-    #     ],
-    #     axis=0,
-    # )
-    # self.assertAllClose(forces, forces_expected)
 
   # add an additional test for if the particle is slightly shifted off
 
@@ -609,12 +570,8 @@ class OneShuffleFluidDataAndTwoWayForcesTest(TensorflowTestCase):
     self.assertEqual(fluid_data.shape, (self.n_max, len(self.variables)))
 
     # carrier_indices and forces should have matching dimensions
-    # before the update
     self.assertEqual(carrier_indices.shape, (8*self.n_max + 1, 3))
     self.assertEqual(forces.shape, (8*self.n_max + 1, 3))
-    # after the update
-    # self.assertEqual(carrier_indices.shape, (8 + 1, 3))
-    # self.assertEqual(forces.shape, (8 + 1, 3))
 
 
     # Verify the values in the outputs
@@ -670,38 +627,6 @@ class OneShuffleFluidDataAndTwoWayForcesTest(TensorflowTestCase):
     )
     self.assertAllClose(forces, forces_expected, atol = tf.constant(1e-5))
 
-    # after the update
-    # carrier_indices_expected = tf.concat(
-    #   [
-    #     tf.zeros((1,3), dtype=tf.int32),
-    #     tf.constant(
-    #       [
-    #         [4, 4, 4],
-    #         [4, 4, 5],
-    #         [4, 5, 4],
-    #         [4, 5, 5],
-    #         [5, 4, 4],
-    #         [5, 4, 5],
-    #         [5, 5, 4],
-    #         [5, 5, 5]
-    #       ],
-    #       dtype = tf.int32
-    #     )
-    #   ],
-    #   axis = 0
-    # )
-
-    # self.assertAllEqual(carrier_indices, carrier_indices_expected)
-
-    # forces_expected = tf.concat(
-    #     [
-    #       tf.constant([[0.        , 0.      , 0.]],dtype = tf.float32),
-    #       tf.constant([[0.       , 0.5857132, 1.1714264]],dtype = tf.float32),
-    #       tf.zeros((7, 3), dtype=tf.float32)
-    #     ],
-    #     axis=0,
-    # )
-    # self.assertAllClose(forces, forces_expected, atol = tf.constant(1e-5))
 
   def test_output_shapes_are_correct(self):
     """Test that output shapes are correct."""
@@ -736,13 +661,8 @@ class OneShuffleFluidDataAndTwoWayForcesTest(TensorflowTestCase):
     self.assertEqual(fluid_data.shape, (self.n_max, len(self.variables)))
 
     # carrier_indices and forces should have matching dimensions
-    # before the update
     self.assertEqual(carrier_indices.shape, (8*self.n_max + 1,3))
     self.assertEqual(forces.shape, (8*self.n_max + 1,3))
-
-    # after the update
-    # self.assertEqual(carrier_indices.shape, (8*self.n_max + 1,3))
-    # self.assertEqual(forces.shape, (8*self.n_max + 1,3))
 
   def test_multiple_particles_on_fluid_point(self):
     """Test with multiple particles."""
@@ -807,12 +727,8 @@ class OneShuffleFluidDataAndTwoWayForcesTest(TensorflowTestCase):
     self.assertEqual(fluid_data.shape, (self.n_max, len(self.variables)))
 
     # carrier_indices and forces should have matching dimensions
-    # before the update
     self.assertEqual(carrier_indices.shape, (8*self.n_max + 1, 3))
     self.assertEqual(forces.shape, (8*self.n_max + 1, 3))
-    # after the update
-    # self.assertEqual(carrier_indices.shape, (8*3 + 1, 3))
-    # self.assertEqual(forces.shape, (8*3 + 1, 3))
 
     # Verify the values in the outputs
     # Verify fluid data
@@ -912,82 +828,6 @@ class OneShuffleFluidDataAndTwoWayForcesTest(TensorflowTestCase):
     )
     self.assertAllClose(forces, forces_expected)
 
-    # after the update
-    # carrier_indices_expected = tf.concat(
-    #   [
-    #     tf.zeros((1,3), dtype=tf.int32),
-    #     tf.constant(
-    #       [
-    #         [2, 2, 2],
-    #         [2, 2, 3],
-    #         [2, 3, 2],
-    #         [2, 3, 3],
-    #         [3, 2, 2],
-    #         [3, 2, 3],
-    #         [3, 3, 2],
-    #         [3, 3, 3],
-    #         [4, 4, 4],
-    #         [4, 4, 5],
-    #         [4, 5, 4],
-    #         [4, 5, 5],
-    #         [5, 4, 4],
-    #         [5, 4, 5],
-    #         [5, 5, 4],
-    #         [5, 5, 5],
-    #         [6, 6, 6],
-    #         [6, 6, 7],
-    #         [6, 7, 6],
-    #         [6, 7, 7],
-    #         [7, 6, 6],
-    #         [7, 6, 7],
-    #         [7, 7, 6],
-    #         [7, 7, 7]
-    #       ],
-    #       dtype = tf.int32
-    #     )
-    #   ],
-    #   axis = 0
-    # )
-    # self.assertAllEqual(carrier_indices, carrier_indices_expected)
-
-    # # verify force data
-    # forces_expected = tf.concat(
-    #     [
-    #       tf.constant([[0.        , 0.      , 0.]],dtype = tf.float32),
-    #       tf.constant(
-    #         [
-    #           [-0.05,  0.05,  0.15],
-    #           [0., 0., 0.],
-    #           [0., 0., 0.],
-    #           [0., 0., 0.],
-    #           [0., 0., 0.],
-    #           [0., 0., 0.],
-    #           [0., 0., 0.],
-    #           [0., 0., 0.],
-    #           [-0.15, -0.05,  0.05],
-    #           [0., 0., 0.],
-    #           [0., 0., 0.],
-    #           [0., 0., 0.],
-    #           [0., 0., 0.],
-    #           [0., 0., 0.],
-    #           [0., 0., 0.],
-    #           [0., 0., 0.],
-    #           [-0.25, -0.15, -0.05],
-    #           [0., 0., 0.],
-    #           [0., 0., 0.],
-    #           [0., 0., 0.],
-    #           [0., 0., 0.],
-    #           [0., 0., 0.],
-    #           [0., 0., 0.],
-    #           [0., 0., 0.],
-    #         ]
-    #         ,
-    #         dtype = tf.float32
-    #       )
-    #     ],
-    #     axis=0,
-    # )
-    # self.assertAllClose(forces, forces_expected)
 
 class SimpleForceFunctionTest(TensorflowTestCase):
   """Tests for SimpleForceFunction."""

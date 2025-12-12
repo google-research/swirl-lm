@@ -111,9 +111,6 @@ class FieldExchange(lpt.LPT):
     vels = lpt_field_floats[:, 3:6]
     masses = lpt_field_floats[:, 6]
 
-    # lpt_force_u = additional_states[LPT_FORCE_U_KEY]
-    # lpt_force_v = additional_states[LPT_FORCE_V_KEY]
-    # lpt_force_w = additional_states[LPT_FORCE_W_KEY]
 
     # Exchange fluid data at particle locations with other replicas.
     with tf.name_scope("communicate_fluid_data"):

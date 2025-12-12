@@ -735,10 +735,7 @@ def init_fn(params: parameters_lib.SwirlLMParameters,
           init_fn_zeros,
           mesh_choice=initializer.MeshChoice.PARAMS,
       )
-  # else:
-    # force_u = tf.zeros((), lpt_types.LPT_FLOAT)
-    # force_v = tf.zeros((), lpt_types.LPT_FLOAT)
-    # force_w = tf.zeros((), lpt_types.LPT_FLOAT)
+
 
   return {
       lpt_types.LPT_INTS_KEY: tf.zeros((n_max, 2), lpt_types.LPT_INT),

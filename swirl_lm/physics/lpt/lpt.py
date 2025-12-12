@@ -362,22 +362,17 @@ class LPT:
                             , inverse_density
         )
 
-        particles_terminating = tf.reshape(
+        # when the mass is less than a threshold set tau_p to one
+        tau_p = tf.cast(
             tf.where(
-                part_masses < self.mass_threshold
+                tf.greater(tf.abs(part_masses), self.mass_threshold)
+                ,
+                tau_p,
+                tf.ones_like(tau_p),
             ),
-            [-1],
+            dtype=tf.float32,
         )
-
         tau_p = tf.expand_dims(tau_p, axis = 1)
-
-        tau_p = tensor_scatter_update(
-            tau_p,
-            particles_terminating,
-            tf.expand_dims(
-              tf.ones_like(particles_terminating, dtype=lpt_types.LPT_FLOAT),
-              axis = 1)
-        )
 
         inverse_time_constant = 1/tau_p
 
@@ -437,22 +432,17 @@ class LPT:
                               , inverse_density
           )
 
-          particles_terminating = tf.reshape(
+          # when the mass is less than a threshold set tau_p to one
+          tau_p = tf.cast(
               tf.where(
-                  part_masses < self.mass_threshold
+                  tf.greater(tf.abs(part_masses), self.mass_threshold)
+                  ,
+                  tau_p,
+                  tf.ones_like(tau_p),
               ),
-              [-1],
+              dtype=tf.float32,
           )
-
           tau_p = tf.expand_dims(tau_p, axis = 1)
-
-          tau_p = tensor_scatter_update(
-            tau_p,
-            particles_terminating,
-            tf.expand_dims(
-              tf.ones_like(particles_terminating, dtype=lpt_types.LPT_FLOAT),
-              axis = 1)
-          )
 
           inverse_time_constant = 1/tau_p
 

@@ -31,7 +31,6 @@ from swirl_lm.utility import stretched_grid_util
 from swirl_lm.utility import types
 from swirl_lm.utility import tpu_util
 import tensorflow as tf
-from tensorflow.python.ops import array_ops
 
 FlowFieldMap: TypeAlias = types.FlowFieldMap
 
@@ -357,9 +356,7 @@ class LPT:
 
       if self.tau_p == -1.0 and fluid_densities != None:
         particle_diamter = (tf.abs(part_masses)*6/(self.density*3.14159))**(1/3)
-
-        inverse_density = tf.reshape(1/fluid_densities,
-                                     (len(fluid_densities),))
+        inverse_density = tf.reshape(1/fluid_densities, (len(fluid_densities),))
 
         tau_p = tf.multiply(particle_diamter**2*self.density/(18*self.params.nu)
                             , inverse_density
@@ -371,18 +368,15 @@ class LPT:
             ),
             [-1],
         )
-
-        indices = tf.reshape(particles_terminating,
-                              [len(particles_terminating), 1])
+        indices = tf.reshape(particles_terminating, [len(particles_terminating), 1])
 
         tau_p = tf.tensor_scatter_nd_update(
             tau_p,
             indices,
             tf.ones_like(particles_terminating, dtype=lpt_types.LPT_FLOAT),
         )
+        inverse_time_constant = tf.reshape(1/tau_p, (len(tau_p), 1))
 
-        inverse_time_constant = tf.reshape(1/tau_p,
-                                           (len(tau_p), 1))
 
         dvdt = (
             tf.multiply( self.c_d * (fluid_speeds - part_vels), inverse_time_constant)
@@ -434,9 +428,7 @@ class LPT:
 
         if self.tau_p == -1.0 and fluid_densities != None:
           particle_diamter = (tf.abs(part_masses)*6/(self.density*3.14159))**(1/3)
-
-          inverse_density = tf.reshape(1/fluid_densities,
-                                      (len(fluid_densities),))
+          inverse_density = tf.reshape(1/fluid_densities, (len(fluid_densities),))
 
           tau_p = tf.multiply(particle_diamter**2*self.density/(18*self.params.nu)
                               , inverse_density
@@ -448,18 +440,15 @@ class LPT:
               ),
               [-1],
           )
-
-          indices = tf.reshape(particles_terminating,
-                                [len(particles_terminating), 1])
+          indices = tf.reshape(particles_terminating, [len(particles_terminating), 1])
 
           tau_p = tf.tensor_scatter_nd_update(
               tau_p,
               indices,
               tf.ones_like(particles_terminating, dtype=lpt_types.LPT_FLOAT),
           )
+          inverse_time_constant = tf.reshape(1/tau_p, (len(tau_p), 1))
 
-          inverse_time_constant = tf.reshape(1/tau_p,
-                                            (len(tau_p), 1))
 
           dvdt = (
               tf.multiply( self.c_d * (fluid_speeds - part_vels), inverse_time_constant)

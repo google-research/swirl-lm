@@ -608,18 +608,29 @@ class Velocity(object):
                        _KEY_W: additional_states[lpt_types.LPT_FORCE_W_KEY]}
 
       new_source = {}
-      for key, value in update_source.items():
-        if isinstance(val, tf.Tensor) and key in source_updates.keys() and isinstance(source_updates[key], tf.Tensor):
-          new_source[key] = tf.nest.map_structure(
-            tf.math.add, source_updates[key], value
-          )
-        # if the lpt update is a tensor and either the existing source is not or the key is not found
-        elif isinstance(val, tf.Tensor) and key not in source_updates.keys():
-          # reshape is so that a new tensor is created
-          new_source[key] = tf.reshape(value, shape = tf.shape(value))
+      for vel_key, lpt_src_dim in update_source.items():
+        if isinstance(lpt_src_dim, tf.Tensor) \
+          and vel_key in source_updates.keys() \
+          and isinstance(source_updates[vel_key], tf.Tensor):
 
-        elif not isinstance(val, tf.Tensor) and key in source_updates.keys():
-          new_source[key] = tf.reshape(source_updates[key], shape = tf.shape(source_updates[key]))
+          new_source[vel_key] = tf.nest.map_structure(
+            tf.math.add, source_updates[vel_key], lpt_src_dim
+          )
+        # if the lpt update is a tensor and either the existing source is not
+        # or the key is not found
+        elif isinstance(lpt_src_dim, tf.Tensor) \
+          and vel_key not in source_updates.keys():
+
+          # reshape is so that a new tensor is created
+          new_source[vel_key] = tf.reshape(lpt_src_dim,
+                                           shape = tf.shape(lpt_src_dim))
+
+        elif not isinstance(lpt_src_dim, tf.Tensor) \
+          and vel_key in source_updates.keys():
+
+          new_source[vel_key] = tf.reshape(source_updates[vel_key],
+                                           shape = tf.shape(
+                                             source_updates[vel_key]))
 
 
       self._source.update(new_source)

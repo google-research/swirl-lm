@@ -14,7 +14,7 @@
 
 """Utilities for working with Lagrangian particles."""
 
-from typing import Sequence, TypeAlias
+from typing import Sequence, TypeAlias, Tuple
 import numpy as np
 from swirl_lm.numerics import interpolation
 from swirl_lm.physics.lpt import lpt_types
@@ -112,6 +112,53 @@ def fluid_data_linear_interpolation(
     variables.
   """
   return interpolation.trilinear_interpolation(
+      field_data=tf.stack(
+          [states[variable] for variable in variables], axis=-1
+      ),
+      points=locations,
+      grid_spacing=grid_spacings,
+      local_grid_min_pt=local_grid_min_pt,
+  )
+
+
+def fluid_data_linear_interpolation_with_weights(
+    locations: tf.Tensor,
+    states: FlowFieldMap,
+    variables: Sequence[str],
+    grid_spacings: tf.Tensor,
+    local_grid_min_pt: tf.Tensor,
+) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+  """Interpolates local fluid data within the replica.
+
+  Calculates fluid variables for the particles in the local replica assuming a
+  uniform grid. The variables are trilinearly interpolated from the fluid grid
+  points. Any locations exceeding the replica domain will give invalid
+  solutions.
+
+  Args:
+    locations: An (n, 3) tensor containing `n` locations at (`z`, `x`, `y`).
+    states: A FlowFieldMap containing the fluid states.
+    variables: A tuple containing the names of the fluid variables to
+      interpolate. This is used to query the `states` dictionary. Example, ("w",
+      "u", "v").
+    grid_spacings: The grid spacings in the `z`, `x`, and `y` dimensions.
+    local_grid_min_pt: The minimum point of the local grid including halos. This
+      should correspond to the location of the grid point located at (0, 0, 0)
+      in the states tensors.
+
+  Returns:
+    The an (n, m) tensor containing fluid data at the `n` locations for the `m`
+      variables.
+
+    A tensor of shape `(n, 8)` containing the interpolation weights, where 8 is
+      the number of interpolation weighting functions. Each one corresponds
+      an offset index from the interpolation origin.
+
+    A tensor of shape `(n, 3)` containing index of the origin locations for the
+      interpolation.
+
+  """
+  return interpolation.trilinear_interpolation_with_weights(
       field_data=tf.stack(
           [states[variable] for variable in variables], axis=-1
       ),

@@ -339,7 +339,6 @@ class LPT:
     local_min_loc = self._get_local_min_loc(replicas, replica_id)
 
     def particle_evolution(part_locs, part_vels, part_masses):
-      del part_locs
       # In a stretched grid, dxdt becomes mapped coordinates, while dvdt and
       # dmdt remain in physical domain.
       if np.any(self.use_stretched_grid_zxy):
@@ -353,6 +352,55 @@ class LPT:
         dxdt = part_vels / grid_spacings
       else:
         dxdt = part_vels
+
+      dvdt = self.particle_acceleration(
+                    fluid_speeds,
+                    fluid_densities,
+                    part_locs,
+                    part_vels,
+                    part_masses
+                    )
+
+      dmdt = -omegas
+      return (dxdt, dvdt, dmdt)
+
+    locs = lpt_field_floats[:, 0:3]
+    vels = lpt_field_floats[:, 3:6]
+    masses = lpt_field_floats[:, 6]
+
+    locs, vels, masses = time_integration.time_advancement_explicit(
+        particle_evolution,
+        self.dt,
+        time_integration.TimeIntegrationScheme.TIME_SCHEME_RK3,
+        (locs, vels, masses),
+        (locs, vels, masses),
+    )
+
+    lpt_field_floats = tf.concat([locs, vels, masses[:, tf.newaxis]], axis=1)
+
+    return lpt_field_ints, lpt_field_floats
+
+  def particle_acceleration(
+      self,
+      fluid_speeds : tf.Tensor,
+      fluid_densities : tf.Tensor,
+      part_locs : tf.Tensor,
+      part_vels : tf.Tensor,
+      part_masses: tf.Tensor) -> tf.Tensor:
+      """Finds the particle acceleration .
+
+      Args:
+        fluid_speeds: (k, 3) float tensor of fluid speeds at particle locs
+        fluid_densities: (k, ) float tensor of fluid densities
+        particle_locs (k, 3) float tensor of particle locations
+        particle_vels (k, 3) float tensor of particle velocities,
+        particle_masses (k,)
+          as ordered arguments and outputs a
+
+      Returns:
+        particle_force: (k, 3) tensor of particle accelerations
+      """
+      del part_locs
 
       if self.tau_p == -1.0 and fluid_densities != None:
         particle_diamter = (tf.abs(part_masses)*6/(self.density*3.14159))**(1/3)
@@ -381,31 +429,15 @@ class LPT:
             + tf.constant(self.gravity_direction) * constants.G
         )
 
+
       else:
-        tau_p = self.tau_p
-        dvdt = (
-            self.c_d/tau_p * (fluid_speeds - part_vels)
-            + tf.constant(self.gravity_direction) * constants.G
-        )
+          tau_p = self.tau_p
+          dvdt = (
+              self.c_d/tau_p * (fluid_speeds - part_vels)
+              + tf.constant(self.gravity_direction) * constants.G
+          )
 
-      dmdt = -omegas
-      return (dxdt, dvdt, dmdt)
-
-    locs = lpt_field_floats[:, 0:3]
-    vels = lpt_field_floats[:, 3:6]
-    masses = lpt_field_floats[:, 6]
-
-    locs, vels, masses = time_integration.time_advancement_explicit(
-        particle_evolution,
-        self.dt,
-        time_integration.TimeIntegrationScheme.TIME_SCHEME_RK3,
-        (locs, vels, masses),
-        (locs, vels, masses),
-    )
-
-    lpt_field_floats = tf.concat([locs, vels, masses[:, tf.newaxis]], axis=1)
-
-    return lpt_field_ints, lpt_field_floats
+      return dvdt
 
   def particle_forces_function(
       self
@@ -420,43 +452,13 @@ class LPT:
           (k, ), particle_locs (k, 3), particle_vels (k, 3), particle_masses (k,)
           as ordered arguments and outputs a (k, 3) tensor of forces
       """
-
       def particle_force(fluid_speeds, fluid_densities, part_locs, part_vels, part_masses):
-        del part_locs
-
-        if self.tau_p == -1.0 and fluid_densities != None:
-          particle_diamter = (tf.abs(part_masses)*6/(self.density*3.14159))**(1/3)
-          inverse_density = 1/fluid_densities
-
-          tau_p = tf.multiply(particle_diamter**2*self.density/(18*self.params.nu)
-                              , inverse_density
-          )
-
-          # when the mass is less than a threshold set tau_p to one
-          tau_p = tf.cast(
-              tf.where(
-                  tf.greater(tf.abs(part_masses), self.mass_threshold)
-                  ,
-                  tau_p,
-                  tf.ones_like(tau_p),
-              ),
-              dtype=tf.float32,
-          )
-          tau_p = tf.expand_dims(tau_p, axis = 1)
-
-          inverse_time_constant = 1/tau_p
-
-          dvdt = (
-              tf.multiply( self.c_d * (fluid_speeds - part_vels), inverse_time_constant)
-              + tf.constant(self.gravity_direction) * constants.G
-          )
-
-        else:
-          tau_p = self.tau_p
-          dvdt = (
-              self.c_d/tau_p * (fluid_speeds - part_vels)
-              + tf.constant(self.gravity_direction) * constants.G
-          )
+        dvdt = self.particle_acceleration(fluid_speeds,
+                                          fluid_densities,
+                                          part_locs,
+                                          part_vels,
+                                          part_masses
+                                          )
 
         return tf.multiply(dvdt, tf.reshape(part_masses, [len(part_masses), 1]))
 

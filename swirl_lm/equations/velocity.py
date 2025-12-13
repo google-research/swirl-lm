@@ -626,7 +626,8 @@ class Velocity(object):
                                            shape = tf.shape(lpt_src_dim))
 
         elif not isinstance(lpt_src_dim, tf.Tensor) \
-          and vel_key in source_updates.keys():
+          and vel_key in source_updates.keys() \
+          and isinstance(source_updates[vel_key], tf.Tensor):
 
           new_source[vel_key] = tf.reshape(source_updates[vel_key],
                                            shape = tf.shape(

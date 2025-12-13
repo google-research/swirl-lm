@@ -25,7 +25,6 @@ from swirl_lm.physics import constants
 from swirl_lm.physics.lpt import injector
 from swirl_lm.physics.lpt import lpt_pb2
 from swirl_lm.physics.lpt import lpt_types
-from swirl_lm.physics.lpt.lpt_utils import tensor_scatter_update
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import stretched_grid_util
 from swirl_lm.utility import types

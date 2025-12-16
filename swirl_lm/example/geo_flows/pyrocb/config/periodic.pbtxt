@@ -1,0 +1,457 @@
+# proto-file: swirl_lm/base/parameters.proto
+# proto-message: SwirlLMParameters
+#
+# Flags used to run the simulation:
+#
+# apply_postprocess=False
+# apply_preprocess=True
+# black_saturday.sounding_csv_filename=swirl_lm/example/geo_flows/pyrocb/test_data/sounding_firex_aq_simplified_moist_bl.csv
+# black_saturday.velocity_from_sounding=True
+# black_saturday.apply_coriolis_force=False
+# c_d=0.01
+# config_filepath=swirl_lm/example/geo_flows/pyrocb/config/periodic.pbtxt
+# data_load_prefix=<DO NOT INCLUDE THIS FLAG IF NO RESTART FILE>
+# data_dump_prefix=<PATH TO OUTPUT>/output
+# fuel_layers=0.76,7.95,0.007547169811;18.04,0.68,0.0
+# ignition_center_x=5e3
+# ignition_center_y=0.0
+# ignition_center_z=0.76
+# ignition_radius=800.0
+# ignition_scale=0.05
+# const_heat_src.include_const_heat_src=True
+# const_heat_src.t_0=0.0
+# const_heat_src.t_1=10.0
+# const_heat_src.t_2=600.0
+# const_heat_src.t_3=610.0
+# const_heat_src.height=20.0
+# ignition_method=heat_source
+# ignition_option=SPHERE
+# init_mode=PHYSICAL
+# loading_step=0
+# num_cycles=240
+# num_steps=3000
+# postprocess_step_id=0
+# preprocess_step_id=0
+# save_last_valid_step=True
+# save_max_uvw_and_cfl=True
+# simulation_type=BLACK_SATURDAY
+# start_step=0
+# t_init=313.5843
+# use_geopotential=True
+# y_o_init=0.21
+
+convection_scheme: CONVECTION_SCHEME_QUICK
+diffusion_scheme: DIFFUSION_SCHEME_CENTRAL_3
+time_integration_scheme: TIME_SCHEME_CN_EXPLICIT_ITERATION
+enable_rhie_chow_correction: false
+grid_params {
+  computation_shape {
+    dim_0: 8
+    dim_1: 8
+    dim_2: 4
+  }
+  length {
+    dim_2: 15065
+  }
+  grid_size {
+    dim_0: 256
+    dim_1: 128
+    dim_2: 192
+  }
+  stretched_grid_files {
+    dim_0 {
+      path: "<STRETCHED GRID FILE PATH ALONG X AXIS>"
+    }
+    dim_1 {
+      path: "<STRETCHED GRID FILE PATH ALONG Y AXIS>"
+    }
+    dim_2 {
+      path: "<STRETCHED GRID FILE PATH ALONG Z AXIS>"
+    }
+  }
+  periodic {
+    dim_0: true
+    dim_1: true
+    dim_2: false
+  }
+  halo_width: 2
+  dt: 0.005
+  kernel_size: 16
+  input_chunk_size: 128
+  num_output_splits: 1
+}
+boundary_conditions {
+  name: "Y_O"
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+}
+boundary_conditions {
+  name: "p"
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+}
+boundary_conditions {
+  name: "q_r"
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+}
+boundary_conditions {
+  name: "q_s"
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+}
+boundary_conditions {
+  name: "q_t"
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+}
+boundary_conditions {
+  name: "theta_li"
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+}
+boundary_conditions {
+  name: "u"
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+}
+boundary_conditions {
+  name: "v"
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_NEUMANN
+    value: 0.0
+  }
+}
+boundary_conditions {
+  name: "w"
+  boundary_info {
+    dim: 2
+    location: 0
+    type: BC_TYPE_DIRICHLET
+    value: 0.0
+  }
+  boundary_info {
+    dim: 2
+    location: 1
+    type: BC_TYPE_DIRICHLET
+    value: 0.0
+  }
+}
+pressure {
+  solver {
+    jacobi {
+      max_iterations: 10
+      halo_width: 2
+      omega: 0.67
+    }
+  }
+  num_d_rho_filter: 4
+}
+density: 1.22
+kinematic_viscosity: 1e-5
+p_thermal: 101325.0
+solver_procedure: VARIABLE_DENSITY
+scalars {
+  name: "Y_O"
+  diffusivity: 1e-05
+  density: 0.017
+  molecular_weight: 0.032
+  solve_scalar: true
+  diffusive_flux {
+    dim: 2
+    face: 0
+    value: 0.0
+  }
+  diffusive_flux {
+    dim: 2
+    face: 1
+    value: 0.0
+  }
+}
+scalars {
+  name: "ambient"
+  diffusivity: 1e-05
+  density: 1.22
+  molecular_weight: 0.02875
+  solve_scalar: false
+}
+scalars {
+  name: "q_r"
+  diffusivity: 1e-05
+  density: 0.017
+  molecular_weight: 0.018
+  solve_scalar: true
+  scheme: CONVECTION_SCHEME_FLUX_LIMITER_VAN_LEER
+  diffusive_flux {
+    dim: 2
+    face: 0
+    value: 0.0
+  }
+  diffusive_flux {
+    dim: 2
+    face: 1
+    value: 0.0
+  }
+  humidity {
+    include_subsidence: false
+  }
+  override_bc_type {
+    dim: 2
+    face: 0
+  }
+}
+scalars {
+  name: "q_s"
+  diffusivity: 1e-05
+  density: 0.017
+  molecular_weight: 0.018
+  solve_scalar: true
+  scheme: CONVECTION_SCHEME_FLUX_LIMITER_VAN_LEER
+  diffusive_flux {
+    dim: 2
+    face: 0
+    value: 0.0
+  }
+  diffusive_flux {
+    dim: 2
+    face: 1
+    value: 0.0
+  }
+  humidity {
+    include_subsidence: false
+  }
+  override_bc_type {
+    dim: 2
+    face: 0
+  }
+}
+scalars {
+  name: "q_t"
+  diffusivity: 1e-05
+  density: 0.017
+  molecular_weight: 0.018
+  solve_scalar: true
+  scheme: CONVECTION_SCHEME_FLUX_LIMITER_VAN_LEER
+  diffusive_flux {
+    dim: 2
+    face: 0
+    value: 0.0
+  }
+  diffusive_flux {
+    dim: 2
+    face: 1
+    value: 0.0
+  }
+  humidity {
+    include_subsidence: false
+  }
+}
+scalars {
+  name: "theta_li"
+  diffusivity: 1e-05
+  scheme: CONVECTION_SCHEME_FLUX_LIMITER_VAN_LEER
+  diffusive_flux {
+    dim: 2
+    face: 0
+    value: 0.0
+  }
+  diffusive_flux {
+    dim: 2
+    face: 1
+    value: 0.0
+  }
+  potential_temperature {
+    include_radiation: false
+    include_subsidence: false
+  }
+}
+additional_state_keys: "T"
+additional_state_keys: "T_s"
+additional_state_keys: "ignition_kernel"
+additional_state_keys: "nu_t"
+additional_state_keys: "p_ref"
+additional_state_keys: "q_c"
+additional_state_keys: "q_t_init"
+additional_state_keys: "rho_f"
+additional_state_keys: "rho_m"
+additional_state_keys: "sponge_beta"
+additional_state_keys: "src_T"
+additional_state_keys: "src_Y_O"
+additional_state_keys: "src_rho"
+additional_state_keys: "src_theta_li"
+additional_state_keys: "src_q_t"
+additional_state_keys: "src_w"
+additional_state_keys: "theta_ref"
+additional_state_keys: "zz"
+gravity_direction {
+  dim_0: 0.0
+  dim_1: 0.0
+  dim_2: -1.0
+}
+use_sgs: true
+sgs_model {
+  smagorinsky {
+    c_s: 0.18
+    pr_t: 1.0
+    delta_formula: GEOMETRIC_MEAN
+  }
+}
+thermodynamics {
+  water {
+    r_v: 461.89
+    t_0: 273.16
+    t_min: 150.0
+    t_freeze: 273.15
+    t_triple: 273.16
+    p_triple: 611.657
+    e_int_v0: 2455758.8
+    e_int_i0: 333600.0
+    lh_v0: 2500800.0
+    lh_s0: 2834400.0
+    cv_d: 717.4664
+    cv_v: 1397.11
+    cv_l: 4181.0
+    cv_i: 2100.0
+    cp_v: 1859.0
+    cp_l: 4181.0
+    cp_i: 2100.0
+    max_temperature_iterations: 100
+    temperature_tolerance: 0.01
+    num_density_iterations: 10
+    user_defined_reference_state {
+    }
+  }
+  solver_mode: LOW_MACH
+}
+combustion {
+  biofuel_multistep {
+    dehydration {
+      arrhenius_factor: 6.05e5
+      activation_temperature: 5956.0
+    }
+    pyrolysis_char_oxidation {
+      wood {
+        s_b: 0.5
+        s_x: 0.01
+        h_conv: 50.0
+        a_v: 8.0
+        cp_g: 1200.0
+        h_f: 19600000.0
+        t_pyr: 600.0
+        n_step: 1
+        include_radiation: true
+        t_ambient: 400
+        efficiency: 1.0
+        c_f: 0.5
+        moist_wood {
+          h_w: 2256400.0
+          t_vap: 373.0
+          c_w: 1.0
+        }
+        tke {
+          turbulent_viscosity {
+          }
+        }
+        t_0_ivf: 320.0
+        t_1_ivf: 700.0
+      }
+    }
+  }
+}
+boundary_models {
+  sponge {
+    orientation {
+      dim: 2
+      face: 1
+      fraction: 0.3
+    }
+    variable_info {
+      name: "w"
+      target_value: 0.0
+    }
+    beta_name: "sponge_beta"
+  }
+}
+microphysics {
+  include_condensation: false
+  include_precipitation: true
+  one_moment {}
+}

@@ -30,17 +30,20 @@ from swirl_lm.physics.lpt import lpt_comm
 from swirl_lm.physics.lpt import lpt_pb2
 from swirl_lm.physics.lpt import lpt_types
 from swirl_lm.physics.lpt import lpt_utils
-from swirl_lm.utility import types
+from swirl_lm.utility import types, common_ops
 import tensorflow as tf
 
 FlowFieldMap: TypeAlias = types.FlowFieldMap
-
 
 FIELD_VALS = ["w", "u", "v"]
 
 LPT_INTS_KEY = lpt_types.LPT_INTS_KEY
 LPT_FLOATS_KEY = lpt_types.LPT_FLOATS_KEY
 LPT_COUNTER_KEY = lpt_types.LPT_COUNTER_KEY
+
+LPT_FORCE_U_KEY = lpt_types.LPT_FORCE_U_KEY
+LPT_FORCE_V_KEY = lpt_types.LPT_FORCE_V_KEY
+LPT_FORCE_W_KEY = lpt_types.LPT_FORCE_W_KEY
 
 
 class FieldExchange(lpt.LPT):
@@ -57,16 +60,25 @@ class FieldExchange(lpt.LPT):
         lpt_pb2.LagrangianParticleTracking.FieldExchange.ONE_SHUFFLE
     ):
       self.exchange_fluid_data_fn = lpt_comm.one_shuffle
+      self.exchange_fluid_data_fn_two_way = \
+        lpt_comm.one_shuffle_fluid_data_and_two_way_forces
     elif (
         params.lpt.field_exchange.communication_mode
         == lpt_pb2.LagrangianParticleTracking.FieldExchange.PAIRWISE
     ):
       self.exchange_fluid_data_fn = lpt_comm.pairwise
+      self.exchange_fluid_data_fn_two_way = \
+        lpt_comm.one_shuffle_fluid_data_and_two_way_forces
     else:
       raise NotImplementedError(
           "Field Exchange communication function"
           f" {params.lpt.field_exchange.communication_mode} not supported."
       )
+
+    self.exchange_fluid_vars = FIELD_VALS
+    if params.solver_procedure == parameters_lib.SolverProcedure.VARIABLE_DENSITY:
+      self.exchange_fluid_vars += ["rho"]
+
 
   def update_particles(
       self,
@@ -91,35 +103,97 @@ class FieldExchange(lpt.LPT):
     """
     particles_generated_per_replica = additional_states[LPT_COUNTER_KEY]
 
+    lpt_field_ints = additional_states[LPT_INTS_KEY]
+    active = tf.cast(lpt_field_ints[:, 0], dtype=lpt_types.LPT_FLOAT)
+
     lpt_field_floats = additional_states[LPT_FLOATS_KEY]
     locs = lpt_field_floats[:, :3]
+    vels = lpt_field_floats[:, 3:6]
+    masses = lpt_field_floats[:, 6]
+
 
     # Exchange fluid data at particle locations with other replicas.
     with tf.name_scope("communicate_fluid_data"):
       local_min_loc = self._get_local_min_loc(replicas, replica_id)
-      fluid_vels = self.exchange_fluid_data_fn(
+      if self.two_way_coupling:
+        fluid_data, fluid_indices, fluid_forces = self.exchange_fluid_data_fn_two_way(
           locs,
+          vels,
+          masses,
+          active,
+          self.particle_forces_function(),
           states,
           replica_id,
           replicas,
-          FIELD_VALS,
+          self.exchange_fluid_vars,
           self.grid_spacings_zxy,
           self.core_spacings,
           local_min_loc,
           self.global_min_pt,
           self.n_max,
-      )
+       )
+      else:
+        fluid_data = self.exchange_fluid_data_fn(
+          locs,
+          states,
+          replica_id,
+          replicas,
+          self.exchange_fluid_vars,
+          self.grid_spacings_zxy,
+          self.core_spacings,
+          local_min_loc,
+          self.global_min_pt,
+          self.n_max,
+        )
+
+    fluid_vels = fluid_data[:, :3]
+
+    if 'rho' in self.exchange_fluid_vars:
+      fluid_dens = fluid_data[:, 3]
+    else:
+      fluid_dens = tf.ones_like(fluid_data[:, 3], dtype=lpt_types.LPT_FLOAT)*self.params.rho
 
     # TODO(ntricard): Add mass consumption rate function.
-    omegas = tf.zeros_like(lpt_field_floats[:, 0], dtype=lpt_types.LPT_FLOAT)
+    omega_const = tf.cast(self.omega_const, lpt_types.LPT_FLOAT)
+    omegas = tf.ones_like(lpt_field_floats[:, 0], dtype=lpt_types.LPT_FLOAT)*omega_const
 
     # Time step the particles, updating their attributes.
     with tf.name_scope("time_step_particles"):
       lpt_field_ints, lpt_field_floats = self.increment_time(
-          replica_id, replicas, additional_states, fluid_vels, omegas
+          replica_id, replicas, additional_states, fluid_vels, omegas, fluid_dens
       )
 
     # TODO(ntricard): Account for particles influence on fluid motion.
+    # this is an explicit force based on the flow field and injected particles
+    # at timestep n (before they are moved)
+    if self.two_way_coupling:
+      lpt_force_w = common_ops.scatter(
+            x = fluid_forces[:, 0],
+            indices=fluid_indices,
+            shape= tf.shape(states["w"]),
+            dtype=types.TF_DTYPE
+      )
+      lpt_force_w = tf.reshape(lpt_force_w, tf.shape(states["w"]))
+
+      lpt_force_u = common_ops.scatter(
+        x = fluid_forces[:, 1],
+        indices=fluid_indices,
+        shape= tf.shape(states["u"]),
+        dtype=types.TF_DTYPE
+      )
+      lpt_force_u = tf.reshape(lpt_force_u, tf.shape(states["u"]))
+
+      lpt_force_v = common_ops.scatter(
+        x = fluid_forces[:, 2],
+        indices=fluid_indices,
+        shape= tf.shape(states["v"]),
+        dtype=types.TF_DTYPE
+      )
+      lpt_force_v = tf.reshape(lpt_force_v, tf.shape(states["v"]))
+    else:
+      lpt_force_w = tf.zeros_like(states["w"])
+      lpt_force_v = tf.zeros_like(states["v"])
+      lpt_force_u = tf.zeros_like(states["u"])
 
     # Modulus the locations across periodic boundaries.
     with tf.name_scope("apply_periodic_boundary_conditions"):
@@ -140,6 +214,9 @@ class FieldExchange(lpt.LPT):
         LPT_INTS_KEY: lpt_field_ints,
         LPT_FLOATS_KEY: lpt_field_floats,
         LPT_COUNTER_KEY: particles_generated_per_replica,
+        LPT_FORCE_U_KEY: lpt_force_u,
+        LPT_FORCE_V_KEY: lpt_force_v,
+        LPT_FORCE_W_KEY: lpt_force_w
     }
 
   def _apply_periodic_boundary_conditions(

@@ -57,6 +57,7 @@ from swirl_lm.physics.thermodynamics import thermodynamics_manager
 from swirl_lm.physics.thermodynamics import thermodynamics_pb2
 from swirl_lm.physics.thermodynamics import water
 from swirl_lm.physics.turbulence import sgs_model
+from swirl_lm.physics.lpt import lpt_types, lpt_pb2
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import get_kernel_fn
 from swirl_lm.utility import monitor
@@ -592,10 +593,49 @@ class Velocity(object):
               )
       })
 
+    source_updates = self._src_manager.update_helper_variable_from_additional_states(
+            additional_states)
+
     # Parse additional states to extract external source/forcing terms.
-    self._source.update(
-        self._src_manager.update_helper_variable_from_additional_states(
-            additional_states))
+    self._source.update(source_updates)
+
+    # adding on the lpt force to the source for velocity
+    if self._params.lpt is not None \
+      and self._params.lpt.coupling == lpt_pb2.LagrangianParticleTracking.CouplingType.TWO_WAY:
+
+      update_source = {_KEY_U: additional_states[lpt_types.LPT_FORCE_U_KEY],
+                       _KEY_V: additional_states[lpt_types.LPT_FORCE_V_KEY],
+                       _KEY_W: additional_states[lpt_types.LPT_FORCE_W_KEY]}
+
+      new_source = {}
+      for vel_key, lpt_src_dim in update_source.items():
+        if isinstance(lpt_src_dim, tf.Tensor) \
+          and vel_key in source_updates.keys() \
+          and isinstance(source_updates[vel_key], tf.Tensor):
+
+          new_source[vel_key] = tf.nest.map_structure(
+            tf.math.add, source_updates[vel_key], lpt_src_dim
+          )
+        # if the lpt update is a tensor and either the existing source is not
+        # or the key is not found
+        elif isinstance(lpt_src_dim, tf.Tensor) \
+          and vel_key not in source_updates.keys():
+
+          # reshape is so that a new tensor is created
+          new_source[vel_key] = tf.reshape(lpt_src_dim,
+                                           shape = tf.shape(lpt_src_dim))
+
+        elif not isinstance(lpt_src_dim, tf.Tensor) \
+          and vel_key in source_updates.keys() \
+          and isinstance(source_updates[vel_key], tf.Tensor):
+
+          new_source[vel_key] = tf.reshape(source_updates[vel_key],
+                                           shape = tf.shape(
+                                             source_updates[vel_key]))
+
+
+      self._source.update(new_source)
+
 
   def _maybe_update_diagnostics(
       self, additional_states, states_0, template_state):
@@ -668,6 +708,7 @@ class Velocity(object):
     mu = common_ops.map_structure_3d(tf.math.multiply, nu, states_0[_KEY_RHO])
 
     forces = [self._source[_KEY_U], self._source[_KEY_V], self._source[_KEY_W]]
+
 
     momentum_rhs = self._momentum_update(
         replica_id,

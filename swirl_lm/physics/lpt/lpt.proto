@@ -16,6 +16,23 @@ message LagrangianParticleTracking {
   // The maximum number of particles that a replica can have.
   optional int32 n_max = 4;
 
+  // The density of each particle assuming a spherical particle.
+  optional float density = 8 [default = 1.0];
+
+  // The constant mass consumption rate of particles. Default is zero
+  optional float omega_const = 9 [default = 0.0];
+
+  enum CouplingType {
+      // The coupling type is unspecified. This is an error.
+      UNSPECIFIED = 0;
+      // particles impact the carrier phase velocity
+      TWO_WAY = 1;
+      // particles do not impact the carrier phase velocity
+      ONE_WAY = 2;
+  }
+
+  optional CouplingType coupling = 10 [default = ONE_WAY];
+
   // A three dimensional method to inject particles into the field.
   message LptInjector {
     message LptVector {

@@ -30,6 +30,10 @@ LPT_FLOATS_KEY = lpt_types.LPT_FLOATS_KEY
 LPT_INTS_KEY = lpt_types.LPT_INTS_KEY
 LPT_COUNTER_KEY = lpt_types.LPT_COUNTER_KEY
 
+LPT_FORCE_U_KEY = lpt_types.LPT_FORCE_U_KEY
+LPT_FORCE_V_KEY = lpt_types.LPT_FORCE_V_KEY
+LPT_FORCE_W_KEY = lpt_types.LPT_FORCE_W_KEY
+
 ParticleAttributes = (
     lpt_pb2.LagrangianParticleTracking.LptInjector.ParticleAttributes
 )

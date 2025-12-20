@@ -27,6 +27,9 @@ LPT_NP_INT = np.int32
 LPT_INTS_KEY = "lpt_ints"
 LPT_FLOATS_KEY = "lpt_floats"
 LPT_COUNTER_KEY = "lpt_new_particle_counter"
+LPT_FORCE_U_KEY = "lpt_force_u"
+LPT_FORCE_V_KEY = "lpt_force_v"
+LPT_FORCE_W_KEY = "lpt_force_w"
 
 LptFieldInts = tf.Tensor
 LptFieldFloats = tf.Tensor

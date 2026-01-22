@@ -49,6 +49,7 @@ from jax.sharding import Mesh
 from jax.sharding import PartitionSpec as P
 import numpy as np
 
+
 SUPPORTED_BACKENDS = ['tpu', 'gpu', 'cpu']
 
 
@@ -131,13 +132,19 @@ class DistFFT():
     self._mesh = None
 
   def _create_mesh(self):
+    if self._mesh is not None:
+      return
+    num_devices_needed = np.prod(self._partition)
+    devices = jax.devices()[:num_devices_needed]
     self._devices = mesh_utils.create_device_mesh(
         (self._partition[0], self._partition[1], self._partition[2]),
-        allow_split_physical_axes=True)
+        devices=devices,
+        allow_split_physical_axes=True,
+    )
     self._mesh = Mesh(self._devices, axis_names=(
         self._axis_names[0], self._axis_names[1], self._axis_names[2]))
 
-  def _exp_itheta(self, theta: jnp.ndarray) -> jnp.ndarray:
+  def _exp_itheta(self, theta: jax.Array) -> jax.Array:
     """Calculates exp(i theta).
 
     Args:
@@ -155,7 +162,7 @@ class DistFFT():
       l: int,
       axis: int,
       margin_width: int = 0,
-  ) -> jnp.ndarray:
+  ) -> jax.Array:
     """Creates a shuffle operator to rearrange the elements on each core.
 
     This creates a 2D matrix that is used to contract the 3D partial input
@@ -230,7 +237,7 @@ class DistFFT():
       m: int,
       l: int,
       axis: int,
-  ) -> jnp.ndarray:
+  ) -> jax.Array:
     """Creates a 2D matrix that removes the padding in the gathered input.
 
     This is used to contract the partial input in the `axis` to remove
@@ -302,7 +309,7 @@ class DistFFT():
       m: int,
       axis: int,
       inverse: bool,
-  ) -> jnp.ndarray:
+  ) -> jax.Array:
     """Get the phase correction factors to adjust the local fft results.
 
     Args:
@@ -328,11 +335,11 @@ class DistFFT():
     return factor
 
   def fft_1d(self,
-             global_input: jnp.ndarray,
+             global_input: jax.Array,
              axis: int,
              inverse: bool = False,
              margin_width: int = 0,
-             merge_output: bool = True) -> jnp.ndarray:
+             merge_output: bool = True) -> jax.Array:
     """Performs a distributed 1D Fourier transform on an unpartitioned input.
 
     This operates on an unpartitioned input `global_input`. The input is
@@ -392,24 +399,37 @@ class DistFFT():
         y1=partition_y,
         z1=partition_z)
 
-    @functools.partial(
-        jax.pmap,
-        axis_name=self._axis_names[0],
-        static_broadcasted_argnums=[1, 2, 3])
-    @functools.partial(
-        jax.pmap,
-        axis_name=self._axis_names[1],
-        static_broadcasted_argnums=[1, 2, 3])
-    @functools.partial(
-        jax.pmap,
-        axis_name=self._axis_names[2],
-        static_broadcasted_argnums=[1, 2, 3])
-    def do_transform(global_input_reshaped, axis, inverse, margin_width):
-      return self.partitioned_fft_1d(global_input_reshaped, axis, inverse,
-                                     margin_width)
+    self._create_mesh()
 
-    split_output = do_transform(global_input_reshaped, axis, inverse,
-                                margin_width)
+    @functools.partial(
+        shard_map,
+        mesh=self._mesh,
+        in_specs=P(
+            self._axis_names[0],
+            self._axis_names[1],
+            self._axis_names[2],
+            None,
+            None,
+            None,
+        ),
+        out_specs=P(
+            self._axis_names[0],
+            self._axis_names[1],
+            self._axis_names[2],
+            None,
+            None,
+            None,
+        ),
+        check_rep=False,
+    )
+    def do_transform(partitioned_input):
+      if partitioned_input.ndim == 6:
+        partitioned_input = jnp.squeeze(partitioned_input, axis=(0, 1, 2))
+      output = self.partitioned_fft_1d(
+          partitioned_input, axis, inverse, margin_width
+      )
+      return jnp.expand_dims(output, axis=(0, 1, 2))
+    split_output = do_transform(global_input_reshaped)
     if merge_output:
       output = einops.rearrange(split_output,
                                 'x1 y1 z1 x y z -> (x1 x) (y1 y) (z1 z)')
@@ -421,10 +441,10 @@ class DistFFT():
   def fft_2d_perf(self,
                   global_shape: Tuple[int, int, int],
                   input_fn: Callable[[Tuple[int, int, int],
-                                      Tuple[int, int, int]], jnp.ndarray],
+                                      Tuple[int, int, int]], jax.Array],
                   kernel_fn: Callable[[Tuple[int, int, int],
-                                       Tuple[int, int, int]], jnp.ndarray],
-                  num: int = 1) -> jnp.ndarray:
+                                       Tuple[int, int, int]], jax.Array],
+                  num: int = 1) -> jax.Array:
     """Performs `num` sets of (1 FFT + 1 pointwise Mul + 1 iFFT) operations.
 
     This operates on input generated with `input_fn` and `kernel_fn`, both are
@@ -433,7 +453,7 @@ class DistFFT():
     (nx, ny, 1).
 
     Using the `input` and `kernel` as the initial values, this will perform
-    `num` sets of FFT + pointwise Mul + iFFT operations repetedly.
+    `num` sets of FFT + pointwise Mul + iFFT operations repeatedly.
 
     Args:
       global_shape: A 1D array specifing the unpartitioned 2D shape (Nx, Ny, 1):
@@ -494,13 +514,90 @@ class DistFFT():
 
     return split_output
 
+  def fft_3d_perf(self,
+                  global_shape: Tuple[int, int, int],
+                  input_fn: Callable[[Tuple[int, int, int],
+                                      Tuple[int, int, int]], jax.Array],
+                  kernel_fn: Callable[[Tuple[int, int, int],
+                                       Tuple[int, int, int]], jax.Array],
+                  num: int = 1) -> jax.Array:
+    """Performs `num` sets of (1 FFT + 1 pointwise Mul + 1 iFFT) operations.
+
+    This operates on input generated with `input_fn` and `kernel_fn`, both are
+    fucntions that takes local 3D shape (nx, ny, nz) and the local core
+    coordinate (cx, cy, cz) as input and returns a complex 3D array with shape
+    (nx, ny, nz).
+
+    Using the `input` and `kernel` as the initial values, this will perform
+    `num` sets of FFT + pointwise Mul + iFFT operations repetedly.
+
+    Args:
+      global_shape: A 1D array specifing the unpartitioned 2D shape (Nx, Ny, 1):
+        `Nx` must be divisible by the partition in the first dimension, `Ny`
+        must be divisible by the partition in the 2nd dimension. The partiaion
+        in the 3rd dimension and the 3rd dimension of the global_shape both has
+        to be 1.
+      input_fn: A function that takes the local shape (nx, ny, nz) and local
+        core coordinate (cx, cy, cz) as the input and returns a 3D array with
+        shape (nx, ny, nz). This is used as the initial input for the FFT.
+      kernel_fn:  A function that takes the local shape (nx, ny, nz) and local
+        core coordinate (cx, cy, cz) as the input and returns a 3D array with
+        shape (nx, ny, nz). This is used for the point-wise multiplication.
+      num: Number of cycles of the operation.
+
+    Returns:
+      A 3D array representing the transformed result.
+
+    """
+
+    partition_x = self._partition[0]
+    partition_y = self._partition[1]
+    partition_z = self._partition[2]
+    global_x = global_shape[0]
+    global_y = global_shape[1]
+    global_z = global_shape[2]
+    assert global_x % partition_x == 0
+    assert global_y % partition_y == 0
+    assert global_z % partition_z == 0
+
+    nx = int(global_x / partition_x)
+    ny = int(global_y / partition_y)
+    nz = int(global_z / partition_z)
+
+    self._create_mesh()
+
+    @functools.partial(
+        shard_map, mesh=self._mesh,
+        in_specs=(),
+        out_specs=P(None, None, None), check_rep=False)
+    def do_transform():
+      core_coord = (lax.axis_index(self._axis_names[0]),
+                    lax.axis_index(self._axis_names[1]),
+                    lax.axis_index(self._axis_names[2]))
+      input_signal = input_fn((nx, ny, nz), core_coord)  # pytype: disable=wrong-arg-types  # lax-types
+      kernel = kernel_fn((nx, ny, nz), core_coord)  # pytype: disable=wrong-arg-types  # lax-types
+      out_signal = input_signal
+      for _ in range(num):
+        forward_x = self.partitioned_fft_1d(out_signal, 0, False, 0)
+        forward_xy = self.partitioned_fft_1d(forward_x, 1, False, 0)
+        forward_xyz = self.partitioned_fft_1d(forward_xy, 2, False, 0)
+        forward_mul = forward_xyz * kernel
+        inverse_x = self.partitioned_fft_1d(forward_mul, 0, True, 0)
+        inverse_xy = self.partitioned_fft_1d(inverse_x, 1, True, 0)
+        out_signal = self.partitioned_fft_1d(inverse_xy, 2, True, 0)
+      return out_signal
+
+    split_output = do_transform()
+
+    return split_output
+
   def partitioned_fft_1d(
       self,
-      partitioned_input: jnp.ndarray,
+      partitioned_input: jax.Array,
       axis: int,
       inverse: bool = False,
       margin_width: int = 0,
-  ) -> jnp.ndarray:
+  ) -> jax.Array:
     """Performs a 1d fft or inverse fft on partitioned input.
 
 

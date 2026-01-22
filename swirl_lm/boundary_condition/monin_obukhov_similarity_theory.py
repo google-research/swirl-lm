@@ -1126,7 +1126,8 @@ class MoninObukhovSimilarityTheory(object):
     t_avg = tf.squeeze(
         common_ops.global_mean(t, replicas, axis=self.horizontal_dims)[0])
 
-    l = self._compute_obukhov_length(m_avg, t_avg, height_m)
+    height_m_tensor = tf.convert_to_tensor(height_m)
+    l = self._compute_obukhov_length(m_avg, t_avg, height_m_tensor)
 
     tau_s_avg = self._tau_s_average(height_m, m_avg, l)
 

@@ -85,7 +85,7 @@ def find_referred_files(msg: message.Message) -> list[file_pb2.File]:
       # use descriptor.type to check for message type instead of
       # isinstance(value, message.Message) because repeated fields are in
       # container classes that are not message.Messages.
-      if descriptor.label == descriptor.LABEL_REPEATED:
+      if descriptor.is_repeated:
         for element in value:
           assert isinstance(element, message.Message), (
               f'Expected type message.Message, got `{type(element)}` for '

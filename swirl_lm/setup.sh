@@ -38,6 +38,13 @@ function run_protoc() (
   done
 )
 
+function install_tensorflow() {
+  # This is required to avoid a dependency conflict between TensorFlow and
+  # libtpu.
+  echo "Installing TensorFlow for libtpu compatibility."
+  python3 -m pip install tensorflow-tpu  -f https://storage.googleapis.com/libtpu-tf-releases/index.html --force
+}
+
 function install_swirl_lm() {
   echo "Installing swirl-lm."
   python3 -m pip uninstall -y swirl-lm
@@ -48,3 +55,4 @@ cd $(dirname "$0")/..  # cd to parent of swirl_lm.
 install_protoc
 run_protoc
 install_swirl_lm
+install_tensorflow

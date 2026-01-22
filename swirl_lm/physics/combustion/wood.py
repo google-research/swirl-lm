@@ -735,7 +735,7 @@ class Wood(object):
 
       def reaction_rate(rho_f, rho, y_o, tke, t_s):
         """Computes the reaction rate."""
-        return self.reaction_rate(
+        return self.reaction_rate(  # pytype: disable=wrong-arg-types
             replica_id, replicas, rho_f, rho, y_o, tke, t_s
         )
 
@@ -938,7 +938,7 @@ class Wood(object):
 
       def reaction_rate(rho_f, rho, y_o, tke, t_s):
         """Computes the reaction rate of the fuel."""
-        return self.reaction_rate(
+        return self.reaction_rate(  # pytype: disable=wrong-arg-types
             replica_id, replicas, rho_f, rho, y_o, tke, t_s
         )
 

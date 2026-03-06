@@ -27,6 +27,7 @@ dependencies = [
     "fancyflags",
     "h5py",
     "jax",
+    "ml-collections",
     "netCDF4",
     "numpy",
     "scipy",

@@ -1,4 +1,4 @@
-# Copyright 2025 The swirl_lm Authors.
+# Copyright 2026 The swirl_lm Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -186,7 +186,10 @@ def boundary_conditions_all_one_type(
   if boundary_conditions is None:
     return False
   for bcs_per_dim in boundary_conditions:
-    for bc_type, _ in bcs_per_dim:
+    for bc_per_dim in bcs_per_dim:
+      if bc_per_dim is None:
+        raise ValueError('A Boundary condition is None.')
+      bc_type, _ = bc_per_dim
       if bc_type != boundary_condition_type:
         return False
   return True

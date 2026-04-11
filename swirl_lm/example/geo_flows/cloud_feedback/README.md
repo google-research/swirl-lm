@@ -29,8 +29,10 @@ The data is stored in 20-minute intervals and the 3-dimensional variables are
 vertically partitioned into 8 chunks, each having dimension
 (nx=124, ny=124, nz=60).
 
-  * **Post-processed Statistics:** [https://console.cloud.google.com/storage/browser/cloudbench-statistics](https://console.cloud.google.com/storage/browser/cloudbench-statistics)
-  * **Raw Simulation Output:** [https://console.cloud.google.com/storage/browser/cloudbench-simulation-output](https://console.cloud.google.com/storage/browser/cloudbench-simulation-output)
+  * **Post-processed Statistics:** [https://storage.googleapis.com/cloudbench-statistics/index.html](https://storage.googleapis.com/cloudbench-statistics/index.html) (Direct HTTP download)
+  * **Raw Simulation Output (Web Portal):** [https://storage.googleapis.com/cloudbench-simulation-output/index.html](https://storage.googleapis.com/cloudbench-simulation-output/index.html) (Interactive directory explorer for
+  manual browsing and file downloads; no login required)
+  * **Raw Simulation Output (Programmatic):** `gs://cloudbench-simulation-output` (Programmatic cloud storage access; usage example described below)
 
 -----
 
@@ -138,4 +140,27 @@ The following is an exhaustive table of all variables contained in both the raw
 | u                               | (t, x, y, z) | The zonal velocity.                                                                                                                                                                | m s<sup>-1</sup>        |
 | v                               | (t, x, y, z) | The meridional velocity.                                                                                                                                                           | m s<sup>-1</sup>        |
 | w                               | (t, x, y, z) | The vertical velocity.                                                                                                                                                             | m s<sup>-1</sup>        |
+
+## Usage Example: Streaming Raw Data
+
+Because the raw simulation output is stored in the chunked `zarr` format, you do
+not need to download the entire large dataset to your local machine. You can
+stream specific variables directly into a Python environment using `xarray`
+and `gcsfs`.
+
+```python
+import xarray as xr
+
+# Lazily load a specific raw simulation zarr store directly from GCS.
+# Example path: Site 0, Month 1 (January), AMIP baseline.
+zarr_path = 'gs://cloudbench-simulation-output/0/1/amip/data.zarr'
+
+# Open the dataset (requires gcsfs to be installed).
+ds_raw = xr.open_zarr(zarr_path, consolidated=True)
+print("Raw Simulation Dataset:", ds_raw)
+
+# Example computation: Lazily extract the mean temperature profile,
+# then call .compute() to pull only those required bytes into memory.
+mean_temp = ds_raw['T'].mean(dim=['x', 'y']).compute()
+```
 

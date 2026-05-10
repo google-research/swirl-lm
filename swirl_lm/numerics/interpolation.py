@@ -540,3 +540,114 @@ def trilinear_interpolation(
     )
 
   return vals
+
+
+def trilinear_interpolation_with_weights(
+    field_data: tf.Tensor,
+    points: tf.Tensor,
+    grid_spacing: tf.Tensor,
+    local_grid_min_pt: tf.Tensor,
+    fill_value: float = 0.0,
+) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+  """Linear interpolation on a 3-D orthogonal, uniform grid with halos.
+
+  Performs trilinear interpolation by determining the nearest surrounding field
+  data to the points and interpolating between them. The locations of the
+  field data are determined using `grid_spacing` and the shape of `field_data`.
+  Points provided outside of the domain return `fill_value`, which is `0.0` by
+  default. `field_data` should include either halos with size either 1 or 2.
+
+  Note that coordinates in this function follow the order of the dimensions of
+  `field_data` as a tensor instead of the physical-coordinates orientation in
+  Swirl-LM. For instance, the first element in `grid_spacing` and
+  `domain_min_pt`, as well as the first column in `points`, are associated with
+  the 0th dimensions of `field_data`, instead of the `x` axis in Swirl-LM.
+
+  Args:
+    field_data: A 3D or 4D tensor of field data including halos. The field data
+      can be a scalar or a vector of size `m` corresponding to its last
+      dimension.
+    points: An 2D tensor (n, 3) of n coordinate points in 3D space to
+      interpolate at.
+    grid_spacing: A three element tensor defining the grid spacing along the
+      three dimensions. The ordering should follow the `field_data` shape. If
+      `field_data` indexing is in order z, x, y, then `grid_spacing` should be
+      in order z, x, y.
+    local_grid_min_pt: A three element tensor defining the location of the  `0,
+      0, 0` coordinate in the `field_data` tensor. The dimension ordering should
+      follow that of `grid_spacing`.
+    fill_value: A scalar value to fill the points outside of the domain.
+
+  Returns:
+    A tensor containing interpolated data values at the `n` supplied points.
+    The output shape is a vector of length `n` for a 3-D `field_data` and tensor
+    of shape `(n, m)` for 4-D `field_data`, respectively.
+
+    A tensor of shape `(n, 8)` containing the interpolation weights, where 8 is
+    the number of interpolation weighting functions. Each one corresponds
+    an offset index from the interpolation origin.
+
+    A tensor of shape `(n, 3)` containing index of the origin locations for the
+    interpolation.
+  """
+  with tf.name_scope('preparing_trilinear_interpolation'):
+    points_norm = (points - local_grid_min_pt) / grid_spacing
+    ijk_unclipped = tf.floor(points_norm)
+    with tf.name_scope('preventing_error_for_out_of_bounds_indexing'):
+      ijk = tf.clip_by_value(
+          ijk_unclipped,
+          0.0,
+          # The -2 is appropriate and prevents out of bounds indexing in the
+          # gather_nd operation below.
+          tf.cast(tf.shape(field_data)[:3] - 2, tf.float32),
+      )
+    points_norm -= ijk
+    ijk = tf.cast(ijk, dtype=tf.int32)
+
+    i, j, k = ijk[:, 0], ijk[:, 1], ijk[:, 2]
+    x0, x1, x2 = points_norm[:, 0], points_norm[:, 1], points_norm[:, 2]
+
+  with tf.name_scope('indexing_field_data_for_interpolation'):
+    v = tf.stack(
+        [
+            tf.gather_nd(field_data, tf.stack([i + p, j + q, k + l], axis=-1))
+            for p, q, l in itertools.product(range(2), range(2), range(2))
+        ],
+        axis=-1,
+    )
+
+  with tf.name_scope('calculating_interpolation_weights'):
+    w = tf.stack(
+        [
+            ((1 - p) + (2 * p - 1) * x0)
+            * ((1 - q) + (2 * q - 1) * x1)
+            * ((1 - l) + (2 * l - 1) * x2)
+            for p, q, l in itertools.product(range(2), range(2), range(2))
+        ],
+        axis=-1,
+    )
+    #  indices associated with a weight = (i+p)(j+q)(k+l) + where origin nodes are ijk
+
+  with tf.name_scope('applying_interpolation_weights'):
+    vals = tf.einsum('i...k,ik->i...', v, w)
+
+  with tf.name_scope('filling_extrapolating_values'):
+    out_of_bounds_locs = tf.math.reduce_any(
+        tf.math.logical_or(
+            tf.math.less(ijk_unclipped, 0),
+            tf.math.greater_equal(
+                ijk_unclipped,
+                tf.cast(tf.shape(field_data)[:3], tf.float32) - 1,
+            ),
+        ),
+        axis=1,
+    )
+    vals = tf.where(
+        tf.tile(out_of_bounds_locs[:, tf.newaxis], (1, tf.shape(vals)[1]))
+        if len(tf.shape(vals)) > 1
+        else out_of_bounds_locs,
+        tf.fill(tf.shape(vals), tf.constant(fill_value, dtype=vals.dtype)),
+        vals,
+    )
+
+  return (vals, w, ijk)

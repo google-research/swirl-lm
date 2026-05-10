@@ -15,9 +15,10 @@
 """Lagrangian particle tracking models."""
 
 import abc
-from typing import TypeAlias
+from typing import TypeAlias, Callable
 import numpy as np
 import six
+from swirl_lm.base import initializer as initializer
 from swirl_lm.base import parameters as parameters_lib
 from swirl_lm.numerics import time_integration
 from swirl_lm.physics import constants
@@ -27,6 +28,7 @@ from swirl_lm.physics.lpt import lpt_types
 from swirl_lm.utility import common_ops
 from swirl_lm.utility import stretched_grid_util
 from swirl_lm.utility import types
+from swirl_lm.utility import tpu_util
 import tensorflow as tf
 
 FlowFieldMap: TypeAlias = types.FlowFieldMap
@@ -95,9 +97,13 @@ class LPT:
     gravity_direction: The gravity direction in the z, x, y directions.
     params: The grid and simulation parameters of type `SwirlLMParameters`.
     exchange_fluid_data_fn: The function used to exchange fluid data with other
-      replicas.
+      replicas when one way coupling is used.
     injectors: The LptInjector types that define regions where particles are
       injected.
+    exchange_fluid_data_fn_two_way: The function used to exchange fluid data with other
+      replicas when two way coupling is used.
+    omega_const: constant mass loss rate
+    two_way_coupling: True if 2 way coupling false otherwise
 
   Raises:
     ValueError if init is called but `lpt` is not set in `params`.
@@ -147,6 +153,24 @@ class LPT:
 
     self.c_d = params.lpt.c_d
     self.tau_p = params.lpt.tau_p
+    self.density = params.lpt.density
+    self.omega_const = params.lpt.omega_const
+
+    if params.lpt.coupling == (
+        lpt_pb2.LagrangianParticleTracking.CouplingType.ONE_WAY
+    ):
+      self.two_way_coupling = False
+    elif (
+        params.lpt.coupling
+        == lpt_pb2.LagrangianParticleTracking.CouplingType.TWO_WAY
+    ):
+      self.two_way_coupling = True
+    else:
+      raise NotImplementedError(
+          "Coupling type "
+          f" {params.lpt.coupling} not supported."
+      )
+
     self.mass_threshold = params.lpt.mass_threshold
     self.n_max = params.lpt.n_max
     self.gravity_direction = np.array(
@@ -285,6 +309,7 @@ class LPT:
       additional_states: FlowFieldMap,
       fluid_speeds: tf.Tensor,
       omegas: tf.Tensor,
+      fluid_densities: tf.Tensor,
   ) -> tuple[lpt_types.LptFieldInts, lpt_types.LptFieldFloats]:
     """Updates the particles states through time integration.
 
@@ -297,6 +322,8 @@ class LPT:
       fluid_speeds: A tensor (n, 3) of fluid speeds at the n particle locations
         [m/s].
       omegas: Mass consumption rates for each particle [kg/s].
+      fluid_densities: A tensor (n,) of fluid densities at the n particle
+        locations [kg/m^3].
 
     Returns:
       lpt_field_ints: Integer particle parameters, the 2 columns are particle
@@ -311,7 +338,6 @@ class LPT:
     local_min_loc = self._get_local_min_loc(replicas, replica_id)
 
     def particle_evolution(part_locs, part_vels, part_masses):
-      del part_locs, part_masses
       # In a stretched grid, dxdt becomes mapped coordinates, while dvdt and
       # dmdt remain in physical domain.
       if np.any(self.use_stretched_grid_zxy):
@@ -325,10 +351,15 @@ class LPT:
         dxdt = part_vels / grid_spacings
       else:
         dxdt = part_vels
-      dvdt = (
-          self.c_d / self.tau_p * (fluid_speeds - part_vels)
-          + tf.constant(self.gravity_direction) * constants.G
-      )
+
+      dvdt = self.particle_acceleration(
+                    fluid_speeds,
+                    fluid_densities,
+                    part_locs,
+                    part_vels,
+                    part_masses
+                    )
+
       dmdt = -omegas
       return (dxdt, dvdt, dmdt)
 
@@ -347,6 +378,90 @@ class LPT:
     lpt_field_floats = tf.concat([locs, vels, masses[:, tf.newaxis]], axis=1)
 
     return lpt_field_ints, lpt_field_floats
+
+  def particle_acceleration(
+      self,
+      fluid_speeds : tf.Tensor,
+      fluid_densities : tf.Tensor,
+      part_locs : tf.Tensor,
+      part_vels : tf.Tensor,
+      part_masses: tf.Tensor) -> tf.Tensor:
+      """Finds the particle acceleration .
+
+      Args:
+        fluid_speeds: (k, 3) float tensor of fluid speeds at particle locs
+        fluid_densities: (k, ) float tensor of fluid densities
+        particle_locs (k, 3) float tensor of particle locations
+        particle_vels (k, 3) float tensor of particle velocities,
+        particle_masses (k,)
+          as ordered arguments and outputs a
+
+      Returns:
+        particle_force: (k, 3) tensor of particle accelerations
+      """
+      del part_locs
+
+      if self.tau_p == -1.0 and fluid_densities != None:
+        particle_diamter = (tf.abs(part_masses)*6/(self.density*3.14159))**(1/3)
+        inverse_density = 1/fluid_densities
+
+        tau_p = tf.multiply(particle_diamter**2*self.density/(18*self.params.nu)
+                            , inverse_density
+        )
+
+        # when the mass is less than a threshold set tau_p to one
+        tau_p = tf.cast(
+            tf.where(
+                tf.greater(tf.abs(part_masses), self.mass_threshold)
+                ,
+                tau_p,
+                tf.ones_like(tau_p),
+            ),
+            dtype=tf.float32,
+        )
+        tau_p = tf.expand_dims(tau_p, axis = 1)
+
+        inverse_time_constant = 1/tau_p
+
+        dvdt = (
+            tf.multiply( self.c_d * (fluid_speeds - part_vels), inverse_time_constant)
+            + tf.constant(self.gravity_direction) * constants.G
+        )
+
+
+      else:
+          tau_p = self.tau_p
+          dvdt = (
+              self.c_d/tau_p * (fluid_speeds - part_vels)
+              + tf.constant(self.gravity_direction) * constants.G
+          )
+
+      return dvdt
+
+  def particle_forces_function(
+      self
+  ) -> Callable[[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor], tf.Tensor]:
+      """Returns a function for computing the particle forces.
+
+      Args:
+        None
+
+      Returns:
+        particle_force: A function that takes tensors fluid_speeds (k, 3), fluid_densities
+          (k, ), particle_locs (k, 3), particle_vels (k, 3), particle_masses (k,)
+          as ordered arguments and outputs a (k, 3) tensor of forces
+      """
+      def particle_force(fluid_speeds, fluid_densities, part_locs, part_vels, part_masses):
+        dvdt = self.particle_acceleration(fluid_speeds,
+                                          fluid_densities,
+                                          part_locs,
+                                          part_vels,
+                                          part_masses
+                                          )
+
+        return tf.multiply(dvdt, tf.reshape(part_masses, [len(part_masses), 1]))
+
+      return particle_force
 
   def _get_local_min_loc(
       self, replicas: np.ndarray, replica_id: tf.Tensor
@@ -575,7 +690,9 @@ class LPT:
     pass
 
 
-def init_fn(params: parameters_lib.SwirlLMParameters) -> types.FlowFieldMap:
+def init_fn(params: parameters_lib.SwirlLMParameters,
+            coordinates: types.ReplicaCoordinates
+            ) -> types.FlowFieldMap:
   """Allocates space for the `params.lpt.n_max` particles.
 
   Args:
@@ -589,10 +706,41 @@ def init_fn(params: parameters_lib.SwirlLMParameters) -> types.FlowFieldMap:
     raise ValueError("LPT init called but lpt params are None.")
 
   n_max = params.lpt.n_max
+
+  # if params.lpt.coupling == lpt_pb2.LagrangianParticleTracking.CouplingType.TWO_WAY:
+  def init_fn_zeros(xx: tf.Tensor, yy: tf.Tensor, zz: tf.Tensor, lx: float,
+                    ly: float, lz: float, coord: initializer.ThreeIntTuple) -> tf.Tensor:
+    """Creates a 3D tensor with value 0 that has the same size as `xx`."""
+    del yy, zz, lx, ly, lz, coord
+    return tf.zeros_like(xx, dtype=xx.dtype)
+
+  force_u = initializer.partial_mesh_for_core(
+          params,
+          coordinates,
+          init_fn_zeros,
+          mesh_choice=initializer.MeshChoice.PARAMS,
+      )
+  force_v = initializer.partial_mesh_for_core(
+          params,
+          coordinates,
+          init_fn_zeros,
+          mesh_choice=initializer.MeshChoice.PARAMS,
+      )
+  force_w = initializer.partial_mesh_for_core(
+          params,
+          coordinates,
+          init_fn_zeros,
+          mesh_choice=initializer.MeshChoice.PARAMS,
+      )
+
+
   return {
       lpt_types.LPT_INTS_KEY: tf.zeros((n_max, 2), lpt_types.LPT_INT),
       lpt_types.LPT_FLOATS_KEY: tf.zeros((n_max, 7), lpt_types.LPT_FLOAT),
       lpt_types.LPT_COUNTER_KEY: tf.constant(0, lpt_types.LPT_INT),
+      lpt_types.LPT_FORCE_W_KEY: force_w,
+      lpt_types.LPT_FORCE_U_KEY: force_u,
+      lpt_types.LPT_FORCE_V_KEY: force_v,
   }
 
 
@@ -605,4 +753,7 @@ def required_keys(lpt_config: lpt_pb2.LagrangianParticleTracking) -> list[str]:
         lpt_types.LPT_INTS_KEY,
         lpt_types.LPT_FLOATS_KEY,
         lpt_types.LPT_COUNTER_KEY,
+        lpt_types.LPT_FORCE_U_KEY,
+        lpt_types.LPT_FORCE_V_KEY,
+        lpt_types.LPT_FORCE_W_KEY
     ]

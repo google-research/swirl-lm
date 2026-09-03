@@ -151,7 +151,7 @@ class FieldExchange(lpt.LPT):
     if 'rho' in self.exchange_fluid_vars:
       fluid_dens = fluid_data[:, 3]
     else:
-      fluid_dens = tf.ones_like(fluid_data[:, 3], dtype=lpt_types.LPT_FLOAT)*self.params.rho
+      fluid_dens = tf.ones_like(fluid_data[:, 0], dtype=lpt_types.LPT_FLOAT)*self.params.rho
 
     # TODO(ntricard): Add mass consumption rate function.
     omega_const = tf.cast(self.omega_const, lpt_types.LPT_FLOAT)

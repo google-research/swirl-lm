@@ -27,11 +27,13 @@ dependencies = [
     "fancyflags",
     "h5py",
     "jax",
+    "ml-collections",
     "netCDF4",
     "numpy",
     "scipy",
     "six",
     "tensorflow",
+    "xarray",
 ]
 
 # This is set automatically by flit using `swirl_lm.__version__`

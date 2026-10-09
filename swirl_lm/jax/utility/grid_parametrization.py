@@ -906,6 +906,44 @@ class GridParametrization(object):
     size = n_local + 2 * include_halo * self.halo_width
     return jax.lax.dynamic_slice_in_dim(grid_full, start, size)
 
+  def global_axis_indices(
+      self,
+      axis_index: int,
+      include_halos: bool = False,
+  ) -> np.ndarray:
+    """Indices selecting the unique grid points of a global sharded axis.
+
+    A global 3D field is the concatenation of the per-replica arrays, each of
+    which carries `halo_width` halo cells on both sides, so its extent along
+    an axis is `num_cores * (core_n + 2 * halo_width)` and the halo slabs at
+    every interior seam are duplicates of the neighbour's interior. This
+    returns the indices that pick out the unique points, discarding those
+    duplicates, and is the host-side counterpart of
+    `grid_local_with_coord`: both use the `start = i_core * core_n`,
+    `size = core_n + 2 * halo_width` convention, and they must stay in sync.
+
+    Args:
+      axis_index: The array axis, i.e. an index into `data_axis_order`.
+      include_halos: If False, select the interior only, giving an array of
+        length `len(global_xyz[axis_index])`. If True, additionally keep the
+        halos at the two outer domain boundaries, giving an array of length
+        `len(global_xyz_with_halos[axis_index])`.
+
+    Returns:
+      A 1D array of indices into the global axis, in increasing order.
+    """
+    axis = self.data_axis_order[axis_index]
+    n = self.get_axis_entry(self.nx, self.ny, self.nz, axis)
+    num_cores = self.get_axis_entry(self.cx, self.cy, self.cz, axis)
+    hw = self.halo_width
+
+    indices = []
+    for i_core in range(num_cores):
+      low = 0 if (include_halos and i_core == 0) else hw
+      high = n if (include_halos and i_core == num_cores - 1) else n - hw
+      indices.append(i_core * n + np.arange(low, high))
+    return np.concatenate(indices)
+
   def x_local(self, mesh: jax.sharding.Mesh) -> jax.Array:
     """The local grid in dim x without halo."""
     return self.grid_local_with_coord('x', mesh, False)

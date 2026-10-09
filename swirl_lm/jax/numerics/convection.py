@@ -30,6 +30,7 @@
 
 from typing import Callable, Optional, TypeAlias
 
+import jax
 import jax.numpy as jnp
 from swirl_lm.jax.boundary_condition import boundary_condition_utils
 from swirl_lm.jax.numerics import derivatives
@@ -95,6 +96,10 @@ def _zero_wall_normal_flux(
 
   axis_idx = grid_params.get_axis_index(axis)
   n_grid = state_face.shape[axis_idx]  # pyrefly: ignore[bad-index]
+  # Number of devices along this axis, known statically from the config.
+  num_cores = grid_params.get_axis_entry(
+      grid_params.cx, grid_params.cy, grid_params.cz, axis
+  )
 
   for face in range(2):
     if bc_types[face] not in _WALL_TYPES:
@@ -104,13 +109,27 @@ def _zero_wall_normal_flux(
     # layer. The face value at index `halo_width` (for face=0) or
     # `n_grid - halo_width` (for face=1) must be zeroed.
     plane_idx = halo_width if face == 0 else n_grid - halo_width
-    zero_plane = jnp.zeros_like(
-        common_ops.get_face(
-            state_face, axis, face, halo_width, grid_params  # pyrefly: ignore[bad-argument-type]
-        )
-    )
+
+    if num_cores == 1:
+      new_plane = 0.0
+    else:
+      # `state_face` is this device's subdomain, so `plane_idx` locates the
+      # physical boundary only on the device that owns it. On every other
+      # device it is an interior seam between subdomains, and zeroing the
+      # flux there would block transport across the seam -- which shows up
+      # as a persistent velocity jump at each device boundary. This mirrors
+      # the `is_first`/`is_last` gating that
+      # `halo_exchange.inplace_halo_exchange` applies for the same reason.
+      owns_boundary = jax.lax.axis_index(axis) == (
+          0 if face == 0 else num_cores - 1
+      )
+      current_plane = jax.lax.dynamic_slice_in_dim(
+          state_face, plane_idx, 1, axis=axis_idx
+      )
+      new_plane = jnp.where(owns_boundary, 0.0, current_plane)
+
     state_face = common_ops.array_scatter_1d_update(
-        state_face, axis, plane_idx, zero_plane, grid_params
+        state_face, axis, plane_idx, new_plane, grid_params
     )
 
   return state_face

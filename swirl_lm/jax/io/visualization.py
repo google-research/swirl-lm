@@ -62,6 +62,7 @@ import jax
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
+from swirl_lm.jax.utility import global_layout
 from swirl_lm.jax.utility import grid_parametrization as gp_lib
 import xarray as xr
 
@@ -73,30 +74,50 @@ _DEFAULT_CMAP = 'RdBu_r'
 _MAGNITUDE_CMAP = 'viridis'
 
 
+def _to_interior(
+    arr: np.ndarray,
+    grid_params: gp_lib.GridParametrization | None,
+) -> np.ndarray:
+  """Converts a global sharded field to its contiguous interior points.
+
+  A global field is the concatenation of the per-replica arrays, each with
+  its own halos, so simply dropping `halo_width` points from each end would
+  leave the duplicated halo slabs at every interior device seam in place and
+  misreport the extent. `strip_halos_global` discards them, giving an array
+  whose axes line up with `global_xyz`.
+
+  Args:
+    arr: 3D array in data axis order, or any array when `grid_params` is
+      None.
+    grid_params: Grid parametrization, or None to leave `arr` untouched, for
+      callers that pass arrays which are already interior-only.
+
+  Returns:
+    The interior array. Axes that do not carry the sharded layout, including
+    those of an already-stripped array, are passed through.
+  """
+  if grid_params is None:
+    return arr
+  return global_layout.strip_halos_global(arr, grid_params)
+
+
 def _get_slice(
     arr: np.ndarray,
     axis: str,
     index: int,
     data_axis_order: tuple[str, ...],
-    halo_width: int = 0,
 ) -> np.ndarray:
   """Extracts a 2D slice from a 3D array.
 
   Args:
-    arr: 3D numpy array in data_axis_order.
+    arr: 3D numpy array in data_axis_order, interior only.
     axis: The axis to slice along ('x', 'y', or 'z').
-    index: The index along that axis (interior-relative if halo_width > 0).
+    index: The index along that axis.
     data_axis_order: Tuple like ('x', 'y', 'z') specifying array dim order.
-    halo_width: If > 0, strips halos and adjusts index to interior.
 
   Returns:
     2D numpy array.
   """
-  hw = halo_width
-  if hw > 0:
-    s = slice(hw, -hw)
-    arr = arr[s, s, s]
-
   axis_idx = list(data_axis_order).index(axis)
   return np.take(arr, index, axis=axis_idx)
 
@@ -162,22 +183,20 @@ def plot_slice(
   Returns:
     Matplotlib Figure object.
   """
-  arr = np.asarray(states[field_name])
+  # Strip first, so that the index is interpreted against the interior.
+  arr = _to_interior(np.asarray(states[field_name]), grid_params)
 
   if grid_params is not None:
     dao = tuple(grid_params.data_axis_order)
-    hw = grid_params.halo_width
   else:
     dao = ('x', 'y', 'z')
-    hw = 0
 
   # Default to midplane.
   axis_idx = list(dao).index(axis)
-  interior_size = arr.shape[axis_idx] - 2 * hw
   if index is None:
-    index = interior_size // 2
+    index = arr.shape[axis_idx] // 2
 
-  slice_2d = _get_slice(arr, axis, index, dao, hw)
+  slice_2d = _get_slice(arr, axis, index, dao)
 
   fig, ax = plt.subplots(1, 1, figsize=figsize)
 
@@ -310,10 +329,8 @@ def plot_overview(
 
   if grid_params is not None:
     dao = tuple(grid_params.data_axis_order)
-    hw = grid_params.halo_width
   else:
     dao = ('x', 'y', 'z')
-    hw = 0
 
   fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
 
@@ -321,12 +338,11 @@ def plot_overview(
     row, col = divmod(i, ncols)
     ax_plot = axes[row, col]
 
-    arr = np.asarray(states[fname])
+    arr = _to_interior(np.asarray(states[fname]), grid_params)
     axis_idx = list(dao).index(axis)
-    interior_size = arr.shape[axis_idx] - 2 * hw
-    idx = index if index is not None else interior_size // 2
+    idx = index if index is not None else arr.shape[axis_idx] // 2
 
-    slice_2d = _get_slice(arr, axis, idx, dao, hw)
+    slice_2d = _get_slice(arr, axis, idx, dao)
 
     if grid_params is not None:
       c0, c1, label0, label1 = _get_coords(grid_params, axis)

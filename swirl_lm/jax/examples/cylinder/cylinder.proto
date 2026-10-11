@@ -1,0 +1,90 @@
+// Copyright 2026 The swirl_lm Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto2";
+
+package research.simulation;
+
+// Flow past a circular cylinder: the validation case for the ghost-point
+// immersed boundary method, after Ghias, Mittal and Dong, J. Comput. Phys.
+// 225 (2007) 528-553, section 3.3.
+//
+// Unlike the other examples this describes the *case* rather than the solver.
+// `cylinder.Cylinder` expands it into a full `SwirlLMParameters`, which keeps
+// the quantities that have to agree in agreement: the viscosity follows from
+// the Reynolds number, the grid from the resolution, the time step from the
+// CFL number, and the immersed boundary geometry from the diameter and
+// centre. Writing the solver config by hand instead invites the classic
+// failure of changing the Reynolds number and leaving the viscosity behind,
+// which produces a plausible-looking run at the wrong Reynolds number.
+//
+// Lengths are in diameters and velocities in units of the inflow speed, so
+// the defaults describe a domain rather than a particular size.
+message CylinderCase {
+  // Re = u_inf * d / nu. Below about 47 the wake is steady and symmetric;
+  // above it sheds a Karman street. The validation points are 40 and 100.
+  optional float reynolds_number = 1 [default = 100.0];
+  // Cylinder diameter, in metres.
+  optional float diameter = 2 [default = 1.0];
+  // Free-stream speed, in metres per second.
+  optional float inflow_speed = 3 [default = 1.0];
+
+  // Domain extent, in diameters, measured from the cylinder centre.
+  optional float length_upstream = 4 [default = 8.0];
+  optional float length_downstream = 5 [default = 24.0];
+  optional float half_width = 6 [default = 10.0];
+  // Spanwise extent, in diameters. The cylinder is uniform along the span and
+  // the span is periodic, so a thin slab gives the two-dimensional flow the
+  // published results describe.
+  optional float span = 7 [default = 1.0];
+
+  // Grid points across one diameter. This is the number that decides whether
+  // the boundary layer is resolved; 20 is a reasonable minimum at Re = 100.
+  optional int32 cells_per_diameter = 8 [default = 20];
+  // Grid points across the span.
+  optional int32 spanwise_cells = 9 [default = 4];
+  optional int32 halo_width = 10 [default = 2];
+  // Width of the convolution kernel used for the finite-difference stencils.
+  // It must divide every per-core extent: a non-dividing extent silently
+  // drops into a slice fallback that disagrees with the convolution path for
+  // some kernels. See MEMORY.md, kernel-operator defects. `Cylinder` checks
+  // this and raises.
+  optional int32 kernel_size = 21 [default = 4];
+
+  // Device decomposition. Splitting along the span is the cheap direction:
+  // the cylinder is invariant along it, so the ghost-point stencil never
+  // reaches across a span seam.
+  optional int32 cores_x = 11 [default = 1];
+  optional int32 cores_y = 12 [default = 1];
+  optional int32 cores_z = 13 [default = 1];
+
+  // Convective CFL number used to pick the time step, based on the *free
+  // stream* speed. The flow accelerates to roughly twice that around the
+  // cylinder, so the CFL the solver reports is about twice this number;
+  // 0.3 keeps the reported value comfortably below one.
+  optional float cfl = 14 [default = 0.3];
+  optional float dt = 15;
+
+  // Where to sample the transverse velocity for the shedding frequency, in
+  // diameters downstream of the centre and off the wake axis. The signal is
+  // weak on the axis itself by symmetry, so the offset matters.
+  optional float probe_downstream = 16 [default = 3.0];
+  optional float probe_offset = 17 [default = 0.5];
+
+  // Repetitions of the ghost-value update per application.
+  optional int32 num_sweeps = 18 [default = 2];
+  // Jacobi iterations in the pressure solve.
+  optional int32 pressure_iterations = 19 [default = 10];
+  optional int32 num_sub_iterations = 20 [default = 3];
+}

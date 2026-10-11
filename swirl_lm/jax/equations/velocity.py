@@ -551,6 +551,23 @@ class Velocity:
       v = velocity_ib_updated[_KEY_V]
       w = velocity_ib_updated[_KEY_W]
 
+      # Exchange again, because the update just changed cells that another
+      # replica holds a copy of. The ghost-point method only writes cells in
+      # this replica's interior -- a ghost cell in the halo is excluded,
+      # since its own stencil could reach outside the local array -- so after
+      # the update every neighbour's halo copy of those cells is stale, and
+      # the next operator to touch them reads a pre-boundary-condition value.
+      #
+      # Measured on a cylinder split so the seam cuts the body: without this
+      # the result differs from the single-device answer by 7% in u, in a
+      # band exactly two cells wide centred on the seam and confined to the
+      # streamwise extent of the body. With it, the difference is round-off.
+      # The cost is one exchange per sub-iteration, and only when an immersed
+      # boundary is configured.
+      u = self.exchange_velocity_halos(u, _KEY_U, mesh, wall_bc)
+      v = self.exchange_velocity_halos(v, _KEY_V, mesh, wall_bc)
+      w = self.exchange_velocity_halos(w, _KEY_W, mesh, wall_bc)
+
     updated_velocity: dict[str, Any] = {
         _KEY_U: u,
         _KEY_V: v,

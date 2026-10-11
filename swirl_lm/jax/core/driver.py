@@ -112,6 +112,7 @@ import numpy as np
 from swirl_lm.base import parameters_pb2
 from swirl_lm.jax.base import parameters as parameters_lib
 from swirl_lm.jax.boundary_condition import boundary_condition_utils
+from swirl_lm.jax.boundary_condition import immersed_boundary_ghost_point as ghost_point_lib
 from swirl_lm.jax.boundary_condition import nonreflecting_boundary
 from swirl_lm.jax.core import simulation as simulation_lib
 from swirl_lm.jax.io import checkpoint as checkpoint_lib
@@ -174,6 +175,16 @@ def create_mesh(
   # each mesh axis name matches its partition count.
   mesh_shape = gp.to_data_axis_order(gp.cx, gp.cy, gp.cz)
   num_devices = gp.cx * gp.cy * gp.cz
+  # Taking a prefix of `jax.devices()` means a computation_shape smaller than
+  # the machine runs happily on a subset and leaves the rest idle, with
+  # nothing to show for it but the wall-clock time. Say so.
+  if jax.device_count() > num_devices:
+    logging.warning(
+        'computation_shape is %dx%dx%d = %d, but %d %s devices are '
+        'available; the other %d will be idle.',
+        gp.cx, gp.cy, gp.cz, num_devices, jax.device_count(),
+        jax.default_backend(), jax.device_count() - num_devices,
+    )
   devices = mesh_utils.create_device_mesh(
       mesh_shape, devices=jax.devices()[:num_devices]
   )
@@ -212,6 +223,16 @@ def _get_state_keys(
 
   # Add LPT keys if configured.
   additional_keys += lpt.required_keys(params.lpt)
+
+  # Add the immersed boundary ghost-point keys if that method is configured.
+  # The geometry arrays are solver internals, so a configuration should not
+  # have to name them; the model declares them instead. Keys a config already
+  # lists -- `ib_interior_mask` is a common one -- are not duplicated.
+  additional_keys += [
+      key
+      for key in ghost_point_lib.required_keys(params)
+      if key not in additional_keys
+  ]
 
   # Add stretched grid keys. In JAX all fields are 3D arrays, so scale
   # factors go into helper_var_keys and 3D coordinates into additional_keys.
@@ -876,12 +897,22 @@ def _save_checkpoint(
       if TIME_VARNAME in states
       else step * grid_params.dt
   )
+  # The immersed boundary's packed index and weight arrays are solver
+  # internals: five-dimensional, meaningless outside `shard_map`, and
+  # unchanging. Its *fields* -- the masks and the signed distance -- are
+  # ordinary 3D states and are kept, because they are what post-processing
+  # uses to cut the body out of a plot.
   checkpoint_lib.save(
       states,
       grid_params,
       step=step,
       path=ckpt_path,
       sim_time=sim_time,
+      fields=[
+          key
+          for key in states
+          if not ghost_point_lib.is_geometry_key(key)
+      ],
   )
   logging.info('Checkpoint saved: %s', ckpt_path)
 
@@ -897,6 +928,8 @@ def run_simulation(
     num_steps_per_cycle: int = 1,
     checkpoint_dir: str | None = None,
     checkpoint_interval: int = 0,
+    probe_fn: Callable[[dict[str, ScalarField]], jax.Array] | None = None,
+    probe_sink: Callable[[np.ndarray], None] | None = None,
 ) -> dict[str, ScalarField]:
   """Runs the simulation for the given number of steps.
 
@@ -932,6 +965,16 @@ def run_simulation(
     num_steps_per_cycle: Number of time steps per cycle. Higher values reduce
       Python loop overhead but delay IO. Default is 1.
     checkpoint_dir: Directory for zarr checkpoints. If None, no checkpointing.
+    probe_fn: An optional diagnostic evaluated on the state after every step,
+      inside `shard_map`, returning a scalar. Use it for anything that has to
+      be sampled at the step rate -- a shedding frequency, say -- where
+      checkpointing is the wrong instrument by orders of magnitude: a full
+      checkpoint is tens of megabytes and a frequency needs a sample every few
+      tens of steps. The function runs per replica, so it must reduce across
+      devices itself, typically with `jax.lax.psum`.
+    probe_sink: Called once per cycle with that cycle's samples, as a NumPy
+      array of length `num_steps_per_cycle`. Accumulating them is the
+      caller's business.
     checkpoint_interval: Save a checkpoint every N cycles. 0 = no periodic
       saves.
 
@@ -1125,22 +1168,34 @@ def run_simulation(
           _stateless_update_if_present(state_carry, updated_state)
       )
 
-      return (new_state, step_id + 1), None
+      # `lax.scan` stacks whatever the body returns as its second value, so
+      # a per-step diagnostic costs one scalar per step and one host transfer
+      # per cycle. Checkpointing instead is the wrong instrument by orders of
+      # magnitude: resolving a shedding period needs a sample every few tens
+      # of steps, and a full checkpoint is tens of megabytes.
+      sample = (
+          jnp.zeros((), jnp.float32)
+          if probe_fn is None
+          else jnp.asarray(probe_fn(new_state), jnp.float32)
+      )
+      return (new_state, step_id + 1), sample
 
     init_carry = (state, init_step_id)
-    (final_state, _), _ = jax.lax.scan(
+    (final_state, _), samples = jax.lax.scan(
         step_body, init_carry, None, length=num_steps_per_cycle
     )
-    return final_state
+    return final_state, samples
 
   # Build the JIT-compiled shard_map function.
   # init_step_id is a scalar, replicated across all devices.
+  # The probe samples are reduced across devices inside the body, so they
+  # come out replicated.
   _jit_one_cycle = jax.jit(
       shard_map.shard_map(
           _shard_map_cycle_body,
           mesh=mesh,
           in_specs=(in_specs, spec_replicated),
-          out_specs=out_specs,
+          out_specs=(out_specs, spec_replicated),
           check_rep=False,
       )
   )
@@ -1164,10 +1219,13 @@ def run_simulation(
 
     # Time the compute portion of each cycle.
     compute_start = time.time()
-    state = _jit_one_cycle(state, init_step_id)
+    state, samples = _jit_one_cycle(state, init_step_id)
     # Block until computation completes (for accurate timing).
     jax.block_until_ready(state)
     compute_time = time.time() - compute_start
+
+    if probe_fn is not None and probe_sink is not None:
+      probe_sink(np.asarray(samples))
 
     steps_completed += num_steps_per_cycle
 

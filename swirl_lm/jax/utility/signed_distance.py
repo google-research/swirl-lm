@@ -380,18 +380,38 @@ def _rotation_matrix(rotation_deg: Sequence[float]) -> jnp.ndarray:
 # -- Queries -----------------------------------------------------------------
 
 
-def evaluate(phi: SignedDistanceFn, points: jax.Array) -> jax.Array:
-  """Evaluates `phi` at many points.
+# Points per block in `evaluate`. A batched primitive holds intermediates of
+# shape `(points, bodies, 3)`, so mapping a whole mesh at once scales memory
+# with the cell count: 17.9 M cells against 24 boxes is 5.2 GB for the
+# coordinate difference alone, and several such arrays live at once. That is
+# enough to take down a 16 GB machine, which it did. Blocking bounds the peak
+# at roughly `_EVAL_BLOCK * bodies * 3` floats regardless of mesh size.
+_EVAL_BLOCK = 1 << 18
+
+
+def evaluate(
+    phi: SignedDistanceFn, points: jax.Array, block: int = _EVAL_BLOCK
+) -> jax.Array:
+  """Evaluates `phi` at many points, in blocks to bound peak memory.
 
   Args:
     phi: The geometry.
     points: Query points of shape `(..., 3)`.
+    block: Points per block. Blocks share one compilation since their shape
+      is fixed; a final short block costs one more.
 
   Returns:
     The signed distance at each point, of shape `(...)`.
   """
   flat = points.reshape(-1, 3)
-  return jax.vmap(phi)(flat).reshape(points.shape[:-1])
+  mapped = jax.vmap(phi)
+  if flat.shape[0] <= block:
+    return mapped(flat).reshape(points.shape[:-1])
+  pieces = [
+      mapped(flat[start : start + block])
+      for start in range(0, flat.shape[0], block)
+  ]
+  return jnp.concatenate(pieces).reshape(points.shape[:-1])
 
 
 def normal(phi: SignedDistanceFn, points: jax.Array) -> jax.Array:

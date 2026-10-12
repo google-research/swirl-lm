@@ -187,12 +187,15 @@ class GhostPoints:
         f'ghost points: {self.num_ghost_points}; '
         f'image-point reach (cells, per data axis): {reach}'
     )
+    # Always reported, not only when something was capped. `m = 2` puts the
+    # image point exactly twice the wall distance out, which is the method's
+    # ideal; anything less was shortened to stay inside the array. Printing
+    # it unconditionally is the difference between knowing the probes are
+    # healthy and merely not being told that they are not.
+    msg += f'; min m = {self.min_probe:.2f}'
     if self.num_capped:
       pct = 100.0 * self.num_capped / max(self.num_ghost_points, 1)
-      msg += (
-          f'; probe capped on {self.num_capped} ({pct:.1f}%), '
-          f'min m = {self.min_probe:.2f}'
-      )
+      msg += f' (capped on {self.num_capped}, {pct:.1f}%)'
     if self.num_fallback:
       pct = 100.0 * self.num_fallback / max(self.num_ghost_points, 1)
       msg += f'; {self.num_fallback} ({pct:.1f}%) on the nearest-fluid fallback'
@@ -1319,11 +1322,9 @@ class GhostPointGeometry:
         f'{len(self.per_replica)} replica(s); image-point reach '
         f'(cells, per data axis): {reach}'
     )
+    text += f'; min m = {min(g.min_probe for g in self.per_replica):.2f}'
     if capped:
-      text += (
-          f'; probe capped on {capped}, min m = '
-          f'{min(g.min_probe for g in self.per_replica):.2f}'
-      )
+      text += f' (capped on {capped})'
     if fallback:
       text += f'; {fallback} on the nearest-fluid fallback'
     del worst

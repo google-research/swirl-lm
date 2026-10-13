@@ -149,6 +149,7 @@ class GhostPoints:
   corner_index: np.ndarray
   alpha: np.ndarray
   self_weight: np.ndarray
+  bi_weight: np.ndarray
   zeta_dirichlet: np.ndarray
   separation: np.ndarray
   normal: np.ndarray
@@ -193,6 +194,13 @@ class GhostPoints:
     # it unconditionally is the difference between knowing the probes are
     # healthy and merely not being told that they are not.
     msg += f'; min m = {self.min_probe:.2f}'
+    anchored = int((self.bi_weight > 1e-6).sum())
+    if anchored:
+      starved = int((self.bi_weight > 0.5).sum())
+      msg += (
+          f'; {anchored} degenerate stencils anchored on the body intercept'
+          + (f', {starved} of them more than half' if starved else '')
+      )
     if self.num_capped:
       pct = 100.0 * self.num_capped / max(self.num_ghost_points, 1)
       msg += f' (capped on {self.num_capped}, {pct:.1f}%)'
@@ -476,6 +484,32 @@ def build(
   zeta_dirichlet, _ = _extrapolation_coefficients(probe, distance)
   separation = probe * distance
 
+  # Move the weight of every stencil node that nothing ever writes onto the
+  # **body intercept**, whose value the boundary condition knows exactly.
+  #
+  # A trilinear stencil around the image point can include solid cells that
+  # are neither fluid nor ghost cells. Those hold whatever the momentum
+  # equation has left drifting inside the body, so interpolating from them is
+  # interpolating from noise. Measured on the Mandeville scene at 2 m: 1 291
+  # of 46 674 ghost cells had such a node and 1 041 had **no fluid node at
+  # all**, leaving their value determined entirely by other solid cells -- a
+  # coupled system with nothing anchoring it.
+  #
+  # The transfer is exact rather than a renormalisation: the trilinear
+  # weights partition unity, so moving the unusable share to the intercept
+  # keeps `sum(alpha) + w_self + w_bi == 1` and still reproduces a constant
+  # field exactly. The intercept is the one point whose value is known, which
+  # is why it can anchor a stencil that has no fluid in it.
+  #
+  # This is the treatment the TensorFlow implementation carried and the port
+  # dropped, and the same principle Mittal et al. (2008) p. 4833 apply when a
+  # stencil node *is* the ghost node: "the row ... is replaced by the boundary
+  # condition at the BI point".
+  settled = ((value > 0.0) | mask).reshape(-1)
+  unusable = ~settled[corner_index]
+  bi_weight = (alpha * unusable).sum(axis=1)
+  alpha = np.where(unusable, 0.0, alpha)
+
   # The implicit solve divides by `1 - zeta * w_self`. For Dirichlet `zeta`
   # is negative so that always exceeds 1, but for Neumann `zeta = +1` and a
   # self-weight near 1 is ill-conditioned. Those cells take the fallback too.
@@ -489,6 +523,9 @@ def build(
     alpha[fallback] = 0.0
     alpha[fallback, 0] = 1.0
     self_weight[fallback] = 0.0
+    # The fallback already points at a fluid cell, so there is nothing left
+    # for the intercept to rescue.
+    bi_weight[fallback] = 0.0
     zeta_dirichlet[fallback] = 0.0     # phi_GC = Gamma = Phi
     separation[fallback] = nb_distance
 
@@ -498,6 +535,7 @@ def build(
       corner_index=corner_index.astype(np.int32),
       alpha=alpha.astype(np.float32),
       self_weight=self_weight.astype(np.float32),
+      bi_weight=bi_weight.astype(np.float32),
       zeta_dirichlet=zeta_dirichlet.astype(np.float32),
       separation=separation.astype(np.float32),
       normal=normal_phys.astype(np.float32),
@@ -621,6 +659,7 @@ def _empty(
       corner_index=np.zeros((0, 8), np.int32),
       alpha=np.zeros((0, 8), np.float32),
       self_weight=np.zeros((0,), np.float32),
+      bi_weight=np.zeros((0,), np.float32),
       zeta_dirichlet=np.zeros((0,), np.float32),
       separation=np.zeros((0,), np.float32),
       normal=np.zeros((0, 3), np.float32),
@@ -652,7 +691,17 @@ def dirichlet_coefficients(
     The slope and offset of `phi_GC = zeta * phi_IP + Gamma`.
   """
   zeta = jnp.asarray(geom.zeta_dirichlet)
-  return zeta, jnp.asarray(value) * (1.0 - zeta)
+  bi = jnp.asarray(geom.bi_weight)
+  # `phi_IP = S + w_self * phi_GC + w_bi * Phi`, with `S` the sum over the
+  # stencil nodes the kernel gathers. Substituting into
+  # `phi_GC = zeta * phi_IP + Phi * (1 - zeta)` and solving gives the pair
+  # below. The intercept's value is known, so it lands wholly in the offset.
+  #
+  # Both are returned already divided by the implicit denominator, so the
+  # kernel is a multiply and an add. For Dirichlet `zeta` is negative, so the
+  # denominator is at least one and cannot go singular.
+  denom = 1.0 - zeta * jnp.asarray(geom.self_weight)
+  return zeta / denom, jnp.asarray(value) * (1.0 - zeta * (1.0 - bi)) / denom
 
 
 def neumann_coefficients(
@@ -676,8 +725,29 @@ def neumann_coefficients(
   # crosses `m*d`, which is exactly `|IP - GC|`. Writing it as `2*d` would be
   # right only at `m = 2` and wrong wherever the probe was capped.
   separation = jnp.asarray(geom.separation)
-  ones = jnp.ones_like(separation)
-  return ones, -jnp.asarray(flux) * separation
+  bi = jnp.asarray(geom.bi_weight)
+  distance = jnp.asarray(geom.distance)
+
+  # Unlike Dirichlet, the intercept's value is *not* known here -- only its
+  # gradient is -- so it cannot be folded into the offset. Stepping along the
+  # normal, `phi_BI = phi_GC + flux * d`, which makes the intercept's share
+  # of the interpolation proportional to `phi_GC` and so part of the implicit
+  # denominator:
+  #
+  #   phi_GC * (1 - w_self - w_bi) = S + flux * (w_bi * d - m * d)
+  #
+  # A stencil with no usable node at all leaves `w_bi -> 1` and the relation
+  # degenerates: the intercept and the ghost cell move together and the
+  # normal derivative is unconstrained. That is genuinely ill-posed rather
+  # than merely awkward, so the denominator is floored and such cells are
+  # counted in `summary` rather than silently returning an infinity.
+  denom = jnp.maximum(
+      1.0 - jnp.asarray(geom.self_weight) - bi, _MIN_DENOM
+  )
+  return (
+      jnp.ones_like(separation) / denom,
+      jnp.asarray(flux) * (bi * distance - separation) / denom,
+  )
 
 
 def apply(
@@ -722,12 +792,16 @@ def apply(
   corner = jnp.asarray(geom.corner_index)
   alpha = jnp.asarray(geom.alpha)
   gc = jnp.asarray(geom.gc_index)
-  denom = 1.0 - zeta * jnp.asarray(geom.self_weight)
 
   flat = u.reshape(-1)
   for _ in range(num_sweeps):
     phi_ip = jnp.einsum('gk,gk->g', alpha, flat[corner])
-    flat = flat.at[gc].set((zeta * phi_ip + gamma) / denom)
+    # `zeta` and `gamma` arrive divided by the implicit denominator, which is
+    # why there is no division here. That also keeps the body intercept off
+    # the device: its contribution is a known per-cell constant, already
+    # inside `gamma` for Dirichlet and inside the denominator for Neumann, so
+    # the stencil stays eight-wide and the traced graph does not change.
+    flat = flat.at[gc].set(zeta * phi_ip + gamma)
   return flat.reshape(u.shape)
 
 
@@ -753,8 +827,11 @@ class ShardedGhostPoints(NamedTuple):
     corner_index: `(c0, c1, c2, n, 8)` flat indices of the stencil corners.
     alpha: `(c0, c1, c2, n, 8)` interpolation weights.
     self_weight: `(c0, c1, c2, n)` weight falling on the ghost cell itself.
+    bi_weight: `(c0, c1, c2, n)` weight moved onto the body intercept.
     zeta_dirichlet: `(c0, c1, c2, n)` Dirichlet extrapolation slope.
     separation: `(c0, c1, c2, n)` ghost-cell-to-image-point distance.
+    distance: `(c0, c1, c2, n)` ghost-cell-to-surface distance, which the
+      Neumann condition needs to place the intercept.
     valid: `(c0, c1, c2, n)` `False` for padding entries.
   """
 
@@ -762,8 +839,10 @@ class ShardedGhostPoints(NamedTuple):
   corner_index: jax.Array
   alpha: jax.Array
   self_weight: jax.Array
+  bi_weight: jax.Array
   zeta_dirichlet: jax.Array
   separation: jax.Array
+  distance: jax.Array
   valid: jax.Array
 
 
@@ -790,8 +869,10 @@ def partition_specs(mesh: jax.sharding.Mesh) -> ShardedGhostPoints:
       corner_index=with_corners,
       alpha=with_corners,
       self_weight=flat,
+      bi_weight=flat,
       zeta_dirichlet=flat,
       separation=flat,
+      distance=flat,
       valid=flat,
   )
 
@@ -926,14 +1007,14 @@ def apply_local(
     raise ValueError(f'`num_sweeps` must be at least 1, got {num_sweeps}.')
 
   gc = geom.gc_index
-  denom = 1.0 - zeta * geom.self_weight
   result = u
   for sweep in range(num_sweeps):
     if sweep and exchange_fn is not None:
       result = exchange_fn(result)
     flat = result.reshape(-1)
     phi_ip = jnp.einsum('gk,gk->g', geom.alpha, flat[geom.corner_index])
-    updated = (zeta * phi_ip + gamma) / denom
+    # Already divided by the implicit denominator; see `apply`.
+    updated = zeta * phi_ip + gamma
     result = flat.at[gc].set(
         jnp.where(geom.valid, updated, flat[gc])
     ).reshape(u.shape)
@@ -1133,7 +1214,8 @@ GHOST_MASK_KEY = 'ib_boundary'
 SIGNED_DISTANCE_KEY = 'ib_phi'
 
 _FLAT_FIELDS = (
-    'gc_index', 'self_weight', 'zeta_dirichlet', 'separation', 'valid'
+    'gc_index', 'self_weight', 'bi_weight', 'zeta_dirichlet', 'separation',
+    'distance', 'valid',
 )
 _CORNER_FIELDS = ('corner_index', 'alpha')
 
@@ -1253,8 +1335,10 @@ def from_additional_states(
       corner_index=get('corner_index').astype(jnp.int32),
       alpha=get('alpha'),
       self_weight=get('self_weight'),
+      bi_weight=get('bi_weight'),
       zeta_dirichlet=get('zeta_dirichlet'),
       separation=get('separation'),
+      distance=get('distance'),
       # Carried as a float so every geometry array has the same dtype
       # handling through the driver; restored to a mask here.
       valid=get('valid') > 0.5,
@@ -1323,6 +1407,13 @@ class GhostPointGeometry:
         f'(cells, per data axis): {reach}'
     )
     text += f'; min m = {min(g.min_probe for g in self.per_replica):.2f}'
+    anchored = sum(int((g.bi_weight > 1e-6).sum()) for g in self.per_replica)
+    if anchored:
+      starved = sum(int((g.bi_weight > 0.5).sum()) for g in self.per_replica)
+      text += (
+          f'; {anchored} degenerate stencils anchored on the body intercept'
+          + (f', {starved} of them more than half' if starved else '')
+      )
     if capped:
       text += f' (capped on {capped})'
     if fallback:
@@ -1419,8 +1510,10 @@ def _build_packed(
       corner_index=np.zeros(corner_shape, np.float32),
       alpha=np.zeros(corner_shape, np.float32),
       self_weight=np.zeros(flat_shape, np.float32),
+      bi_weight=np.zeros(flat_shape, np.float32),
       zeta_dirichlet=np.zeros(flat_shape, np.float32),
       separation=np.ones(flat_shape, np.float32),
+      distance=np.ones(flat_shape, np.float32),
       valid=np.zeros(flat_shape, np.float32),
   )
   for flat_pos, geom in enumerate(per_replica):
@@ -1432,8 +1525,10 @@ def _build_packed(
     packed.corner_index[i0, i1, i2, :n] = geom.corner_index
     packed.alpha[i0, i1, i2, :n] = geom.alpha
     packed.self_weight[i0, i1, i2, :n] = geom.self_weight
+    packed.bi_weight[i0, i1, i2, :n] = geom.bi_weight
     packed.zeta_dirichlet[i0, i1, i2, :n] = geom.zeta_dirichlet
     packed.separation[i0, i1, i2, :n] = geom.separation
+    packed.distance[i0, i1, i2, :n] = geom.distance
     packed.valid[i0, i1, i2, :n] = 1.0
   return packed, per_replica
 

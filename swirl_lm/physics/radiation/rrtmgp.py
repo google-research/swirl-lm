@@ -89,7 +89,7 @@ class RRTMGP:
       return common_ops.map_structure_3d(lambda a, b, c: a * b * c, rho, q_c, h)
     else:
       def cloud_path_fn(rho: tf.Tensor, q_c: tf.Tensor) -> tf.Tensor:
-        return rho * q_c * self._dh  # pyrefly: ignore[unsupported-operation]
+        return rho * q_c * self._dh
       return tf.nest.map_structure(cloud_path_fn, rho, q_c)
 
   def _prepare_states(

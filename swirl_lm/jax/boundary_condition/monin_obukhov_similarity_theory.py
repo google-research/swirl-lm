@@ -100,7 +100,7 @@ class MoninObukhovSimilarityTheory:
       )
       if global_xyz_raw is not None:
         global_xyz = params.grid_params.to_xyz_order(
-            global_xyz_raw  # pyrefly: ignore[bad-argument-type]
+            global_xyz_raw
         )
         self.height = global_xyz[vertical_dim][0]
       else:
@@ -645,7 +645,7 @@ def monin_obukhov_similarity_theory_factory(
     )
     if global_xyz_raw is not None:
       global_xyz = params.grid_params.to_xyz_order(
-          global_xyz_raw  # pyrefly: ignore[bad-argument-type]
+          global_xyz_raw
       )
       height = global_xyz[vertical_dim][0]
     else:

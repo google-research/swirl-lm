@@ -55,13 +55,13 @@ def get_shape(x: Tiles) -> Tuple[int, int, int]:
   shape_dims_0_1 = x[0].shape
   if not isinstance(shape_dims_0_1, tuple):
     shape_dims_0_1 = shape_dims_0_1.as_list()
-  return (*shape_dims_0_1, shape_dim_2)  # pyrefly: ignore[bad-return]
+  return (*shape_dims_0_1, shape_dim_2)
 
 
 def stack(x: Tiles, axis: int = -1) -> TensorOrArray:
   """Stacks the list of tensors or arrays `x` along the given axis."""
   stack_fn = tf.stack if isinstance(x[0], tf.Tensor) else np.stack
-  return stack_fn(x, axis)  # pyrefly: ignore[no-matching-overload]
+  return stack_fn(x, axis)
 
 
 def unstack(x: TensorOrArray, axis: int = -1) -> Tiles:
@@ -150,8 +150,8 @@ def jacobi(x: Tiles,
 
   def body(x, i):
     update = [
-        weight * mask_xy * a_inv_diag for a_inv_diag in a_inv_diagonal(  # pyrefly: ignore[unsupported-operation]
-            [b_ - a_x for b_, a_x in zip(b, a_operator(x))])  # pyrefly: ignore[unsupported-operation]
+        weight * mask_xy * a_inv_diag for a_inv_diag in a_inv_diagonal(
+            [b_ - a_x for b_, a_x in zip(b, a_operator(x))])
     ]
     if do_not_change_borders:
       x = ([x[0]] + [x_ + u for x_, u in zip(x[1:-1], update[1:-1])] +
@@ -218,20 +218,20 @@ def laplacian_and_inv_diagonal_fns(
 
   def laplacian(x: Tiles) -> Tiles:
     roll = tf.roll if isinstance(x[0], tf.Tensor) else np.roll
-    lap = [diag * x_ for x_ in x]  # pyrefly: ignore[unsupported-operation]
+    lap = [diag * x_ for x_ in x]
     for i in range(len(x)):
       for jk in range(2):
         lap[i] += (
-            (roll(x[i], shift=1, axis=jk) + roll(x[i], shift=-1, axis=jk)) /  # pyrefly: ignore[no-matching-overload]
+            (roll(x[i], shift=1, axis=jk) + roll(x[i], shift=-1, axis=jk)) /
             dxs[jk]**2)
       if i > 0:
-        lap[i] += x[i - 1] / dxs[2]**2  # pyrefly: ignore[unsupported-operation]
+        lap[i] += x[i - 1] / dxs[2]**2
       if i < len(x) - 1:
-        lap[i] += x[i + 1] / dxs[2]**2  # pyrefly: ignore[unsupported-operation]
-    return lap  # pyrefly: ignore[bad-return]
+        lap[i] += x[i + 1] / dxs[2]**2
+    return lap
 
   def inv_diagonal(x: Tiles) -> Tiles:
-    return [x_ / diag for x_ in x]  # pyrefly: ignore[bad-return, unsupported-operation]
+    return [x_ / diag for x_ in x]
 
   return laplacian, inv_diagonal
 
@@ -333,7 +333,7 @@ def poisson_residual(
   laplacian, _ = laplacian_and_inv_diagonal_fns(full_grid_shape,
                                                 full_grid_lengths)
 
-  return [b_ - lap for b_, lap in zip(b, laplacian(x))]  # pyrefly: ignore[unsupported-operation]
+  return [b_ - lap for b_, lap in zip(b, laplacian(x))]
 
 
 def poisson_residual_norm(
@@ -346,7 +346,7 @@ def poisson_residual_norm(
                    for r in poisson_residual(x, b, params)][1:-1]
   norm = tf.norm if isinstance(x[0], tf.Tensor) else np.linalg.norm
 
-  return norm(stack(res_no_border, axis=0))  # pyrefly: ignore[bad-argument-type, bad-return]
+  return norm(stack(res_no_border, axis=0))
 
 
 def kronecker_products(ms: Sequence[TensorOrArray], x: Tiles) -> Tiles:
@@ -369,7 +369,7 @@ def kronecker_products(ms: Sequence[TensorOrArray], x: Tiles) -> Tiles:
   for i, m in enumerate(ms[:2]):
     if m is not None:
       indices = multigrid_utils.kronecker_einsum_indices(n=2, i=i)
-      x = [einsum(indices, m, x_) for x_ in x]  # pyrefly: ignore[no-matching-overload]
+      x = [einsum(indices, m, x_) for x_ in x]
 
   # Then dim 2 (the list dimension).
   mz = ms[2]
@@ -387,7 +387,7 @@ def kronecker_products(ms: Sequence[TensorOrArray], x: Tiles) -> Tiles:
       if mz_i_j_non_0:
         ith_plane += mz[i, j] * x[j]
     res.append(ith_plane)
-  return res  # pytype: disable=bad-return-type
+  return res
 
 
 def get_apply_one_core_boundary_conditions_fn(
@@ -427,7 +427,7 @@ def get_apply_one_core_boundary_conditions_fn(
       ])
       inner_dof = np.prod([s - 2 for s in get_shape(x)])  # pyrefly: ignore[bad-argument-type]
       avg = inner_total / inner_dof
-      x = [x_2d - avg for x_2d in x]  # pyrefly: ignore[unsupported-operation]
+      x = [x_2d - avg for x_2d in x]
 
     return x
 

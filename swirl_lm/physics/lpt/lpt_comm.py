@@ -92,7 +92,7 @@ def pairwise(
     dest = np.roll(source, offset, axis=0).astype(lpt_types.LPT_NP_INT)[::-1]
     source_dest_pair = np.stack([source, dest], axis=1)
 
-    with tf.name_scope("gathering_particle_data"):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope("gathering_particle_data"):
       # Determine this replica's destination in the current exchange.
       dest_replica = tf.gather(dest, replica_id)
 
@@ -105,7 +105,7 @@ def pairwise(
           tf.one_hot(dest_replica_loc_indices, tf.shape(locs)[0]) @ locs
       )
 
-    with tf.name_scope("send_recv_locations"):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope("send_recv_locations"):
       # Sending the particle locations to the dest replica to conduct
       # interpolation of fluid data, receiving locations owned by them but
       # located on this replica.
@@ -119,19 +119,19 @@ def pairwise(
     # (as we do here) it works.
 
     # Interpolating at dest locations.
-    with tf.name_scope("interpolating_fluid_data"):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope("interpolating_fluid_data"):
       fluid_data_at_dest_locations = lpt_utils.fluid_data_linear_interpolation(
           dest_locations, states, variables, grid_spacings, local_min_pt
       )
 
-    with tf.name_scope("send_recv_fluid_data"):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope("send_recv_fluid_data"):
       # Sending interpolated fluid data to the replica while receiving fluid
       # data from the replica.
       replica_fluid_data = send_recv.send_recv(
           fluid_data_at_dest_locations, source_dest_pair, n_max
       )
 
-    with tf.name_scope("update_fluid_data"):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope("update_fluid_data"):
       fluid_data = lpt_utils.tensor_scatter_update(
           fluid_data, dest_replica_loc_indices, replica_fluid_data
       )
@@ -200,13 +200,13 @@ def one_shuffle(
 
   for _ in range(num_replicas):
 
-    with tf.name_scope("exchange_fluid_data"):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope("exchange_fluid_data"):
       # Processing the exchange with the neighbors in the circle.
       loc_and_fluid_data = tf.raw_ops.CollectivePermute(
           input=loc_and_fluid_data, source_target_pairs=source_dest_pairs
       )
 
-    with tf.name_scope("extract_fluid_data"):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope("extract_fluid_data"):
       locs = loc_and_fluid_data[:, :3]
       fluid_data = loc_and_fluid_data[:, 3:]
 
@@ -220,12 +220,12 @@ def one_shuffle(
       )
 
     # Interpolating at dest locations.
-    with tf.name_scope("interpolating_fluid_data"):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope("interpolating_fluid_data"):
       fluid_data_at_locs = lpt_utils.fluid_data_linear_interpolation(
           locs_local, states, variables, grid_spacings, local_min_pt
       )
 
-    with tf.name_scope("update_fluid_data"):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope("update_fluid_data"):
       fluid_data = lpt_utils.tensor_scatter_update(
           fluid_data, loc_indices_local, fluid_data_at_locs
       )

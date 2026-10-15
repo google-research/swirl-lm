@@ -154,13 +154,13 @@ def apply_one_core_boundary_conditions_to_tensor_or_array(
       sign = (-1, 1)[side]
 
       if bc_type == BCType.DIRICHLET:
-        concat_plane = cast(broadcast_to(bc_value, shape_with_axis_1d))  # pyrefly: ignore[no-matching-overload]
+        concat_plane = cast(broadcast_to(bc_value, shape_with_axis_1d))
       elif bc_type == BCType.NEUMANN:
         neumann_slice = [slice(None)] * rank
         neumann_slice[axis] = (slice(0, 1), slice(-1, None))[side]
         neumann_plane = x_shaved[tuple(neumann_slice)]
         concat_plane = (neumann_plane +
-                        sign * cast(broadcast_to(bc_value, shape_with_axis_1d)))  # pyrefly: ignore[no-matching-overload]
+                        sign * cast(broadcast_to(bc_value, shape_with_axis_1d)))
       else:
         raise NotImplementedError("Only DIRICHLET, NEUMANN and NO_TOUCH "
                                   "boundary condition types are supported.")
@@ -214,13 +214,13 @@ def apply_one_core_boundary_conditions(
 
         if bc_type == BCType.DIRICHLET:
           concat_planes = [
-              cast(broadcast_to(bc_value, shape_2d_with_axis_1d))] * len(x)  # pyrefly: ignore[no-matching-overload]
+              cast(broadcast_to(bc_value, shape_2d_with_axis_1d))] * len(x)
         elif bc_type == BCType.NEUMANN:
           neumann_slice = [slice(None)] * 2
           neumann_slice[axis] = (slice(0, 1), slice(-1, None))[side]
           neumann_planes = [x_2d[tuple(neumann_slice)] for x_2d in x_shaved]
           concat_planes = [
-              plane + sign * cast(broadcast_to(bc_value, shape_2d_with_axis_1d))  # pyrefly: ignore[no-matching-overload]
+              plane + sign * cast(broadcast_to(bc_value, shape_2d_with_axis_1d))
               for plane in neumann_planes]
         else:
           raise NotImplementedError("Only DIRICHLET, NEUMANN and NO_TOUCH "
@@ -232,12 +232,12 @@ def apply_one_core_boundary_conditions(
         replacement_index = 0 if side == 0 else -1
 
         if bc_type == BCType.DIRICHLET:
-          replacement_plane = cast(broadcast_to(bc_value, shape_xy))  # pyrefly: ignore[no-matching-overload]
+          replacement_plane = cast(broadcast_to(bc_value, shape_xy))
         elif bc_type == BCType.NEUMANN:
           neumann_plane = x[1] if side == 0 else x[-2]
           sign = (-1, 1)[side]
           replacement_plane = (
-              neumann_plane + cast(sign * broadcast_to(bc_value, shape_xy)))  # pyrefly: ignore[no-matching-overload]
+              neumann_plane + cast(sign * broadcast_to(bc_value, shape_xy)))
         x[replacement_index] = replacement_plane  # pyrefly: ignore[unbound-name]
 
   return x

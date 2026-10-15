@@ -526,7 +526,7 @@ class TwoStreamSolver:
 
     def heating_rate_fn(dflux: tf.Tensor, dp: tf.Tensor):
       """Computes the heating rate at the grid cell center [W]."""
-      return constants.G * dflux / dp / constants.CP  # pyrefly: ignore[unsupported-operation]
+      return constants.G * dflux / dp / constants.CP
 
     return tf.nest.map_structure(
         heating_rate_fn,

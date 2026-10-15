@@ -360,7 +360,7 @@ class SwirlLMParameters:
 
     self.bc_type = boundary_condition_utils.find_bc_type(
         self.bc,
-        list(self.grid_params.to_xyz_order(self.grid_params.periodic_dims)),  # pyrefly: ignore[bad-argument-type]
+        list(self.grid_params.to_xyz_order(self.grid_params.periodic_dims)),
     )
     logging.info('Boundary conditions from the input: %r', self.bc)
 

@@ -304,9 +304,9 @@ class DistTurbulenceSynthesizer(object):
                             vk_final * tf.math.conj(vk_final) +
                             wk_final * tf.math.conj(wk_final)))
 
-    tke_hat = 0.5 * common_ops.global_mean(tf.unstack(spec_sq, axis=2),  # pyrefly: ignore[unsupported-operation]
+    tke_hat = 0.5 * common_ops.global_mean(tf.unstack(spec_sq, axis=2),
                                            replicas, halos)
-    epsilon_hat = (2.0 * nu *  # pyrefly: ignore[unsupported-operation]
+    epsilon_hat = (2.0 * nu *
                    common_ops.global_mean(
                        tf.unstack(kk_sq * spec_sq, axis=2),
                        replicas, halos) / nx / ny / nz)
@@ -375,4 +375,4 @@ class DistTurbulenceSynthesizer(object):
       w = tf.math.real(w)
       p = tf.math.real(p)
 
-    return u, v, w, p, tke_hat, epsilon_hat, amp  # pyrefly: ignore[bad-return]
+    return u, v, w, p, tke_hat, epsilon_hat, amp

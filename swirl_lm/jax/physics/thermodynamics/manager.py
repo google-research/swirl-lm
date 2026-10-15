@@ -194,7 +194,7 @@ class ThermodynamicsManager:
             order=2,
         )
         # Apply homogeneous Neumann BC on drho and halo exchange.
-        bc_neumann: tuple[  # pyrefly: ignore[bad-assignment]
+        bc_neumann: tuple[
             tuple[
                 tuple[halo_exchange_utils.BCType, float] | None,
                 tuple[halo_exchange_utils.BCType, float] | None,

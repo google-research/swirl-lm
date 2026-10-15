@@ -119,8 +119,8 @@ def time_advancement_explicit(
     rhs,
     dt: float,
     scheme: (
-        numerics_pb2_jax.TimeIntegrationScheme
-        | numerics_pb2.TimeIntegrationScheme
+        numerics_pb2_jax.TimeIntegrationScheme.ValueType
+        | numerics_pb2.TimeIntegrationScheme.ValueType
     ),
     var_0: Sequence[ScalarField],
     var_n: Sequence[ScalarField],

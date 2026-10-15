@@ -213,8 +213,8 @@ def local_stretched_grid_vars_from_global_xyz(
     tensor_axis = gp.get_axis_index(axis)
     assert isinstance(tensor_axis, int)
 
-    global_coord_no_halos = gp.global_xyz[tensor_axis]  # pyrefly: ignore[bad-index]
-    global_coord_with_halos = gp.global_xyz_with_halos[tensor_axis]  # pyrefly: ignore[bad-index]
+    global_coord_no_halos = gp.global_xyz[tensor_axis]
+    global_coord_with_halos = gp.global_xyz_with_halos[tensor_axis]
 
     # Compute scale factors from global coordinates.
     if periodic_dims_xyz[dim]:

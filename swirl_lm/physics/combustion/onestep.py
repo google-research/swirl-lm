@@ -76,7 +76,7 @@ def _arrhenius_law(
 ) -> tf.Tensor:
   """Computes the Arrhenius law."""
   return a_cst * tf.math.pow(c_f, coeff_f) * tf.math.pow(
-      c_o, coeff_o) * tf.math.exp(-e_a / R_UNIVERSAL / temperature)  # pyrefly: ignore[unsupported-operation]
+      c_o, coeff_o) * tf.math.exp(-e_a / R_UNIVERSAL / temperature)
 
 
 def _concentration(
@@ -85,7 +85,7 @@ def _concentration(
     rho: tf.Tensor,
 ) -> tf.Tensor:
   """Computes the volume concentration of species."""
-  return rho * y_species / w_species  # pyrefly: ignore[unsupported-operation]
+  return rho * y_species / w_species
 
 
 def one_step_reaction_source(
@@ -146,10 +146,10 @@ def one_step_reaction_source(
       e_a,
   )
 
-  return [  # pyrefly: ignore[bad-return]
-      -nu_f * w_f * omega / rho,  # pyrefly: ignore[unsupported-operation]
-      -nu_o * w_o * omega / rho,  # pyrefly: ignore[unsupported-operation]
-      q * omega / cp / rho,  # pyrefly: ignore[unsupported-operation]
+  return [
+      -nu_f * w_f * omega / rho,
+      -nu_o * w_o * omega / rho,
+      q * omega / cp / rho,
   ]
 
 
@@ -323,15 +323,15 @@ def integrated_reaction_source_update_fn(
     for varname, value in additional_states.items():
       if varname == 'src_Y_F':
         updated_additional_states.update({
-            varname: (updated_states[0] - states['Y_F']) / dt,  # pyrefly: ignore[unsupported-operation]
+            varname: (updated_states[0] - states['Y_F']) / dt,
         })
       elif varname == 'src_Y_O':
         updated_additional_states.update({
-            varname: (updated_states[1] - states['Y_O']) / dt,  # pyrefly: ignore[unsupported-operation]
+            varname: (updated_states[1] - states['Y_O']) / dt,
         })
       elif varname == 'src_T':
         updated_additional_states.update({
-            varname: (updated_states[2] - states['T']) / dt,  # pyrefly: ignore[unsupported-operation]
+            varname: (updated_states[2] - states['T']) / dt,
         })
       else:
         updated_additional_states.update({varname: value})

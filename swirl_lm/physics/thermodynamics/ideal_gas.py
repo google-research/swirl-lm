@@ -87,7 +87,7 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
     Returns:
       The density, in units of kg/m^3.
     """
-    return p / r / t  # pyrefly: ignore[bad-return, unsupported-operation]
+    return p / r / t
 
   def _potential_temperature_to_temperature(
       self,
@@ -192,14 +192,14 @@ class IdealGas(thermodynamics_generic.ThermodynamicModel):
       """Computes the reference pressure."""
       return self._p_thermal * tf.math.exp(
           -(z + self._height * delta_t_frac *
-            (tf.math.log(1.0 - delta_t_frac * tf.math.tanh(z / self._height)) -  # pyrefly: ignore[unsupported-operation]
-             tf.math.log(1.0 + tf.math.tanh(z / self._height)) +  # pyrefly: ignore[unsupported-operation]
-             z / self._height)) / h_sfc / (1.0 - delta_t_frac**2))  # pyrefly: ignore[unsupported-operation]
+            (tf.math.log(1.0 - delta_t_frac * tf.math.tanh(z / self._height)) -
+             tf.math.log(1.0 + tf.math.tanh(z / self._height)) +
+             z / self._height)) / h_sfc / (1.0 - delta_t_frac**2))
 
     def pressure_const_theta(z: tf.Tensor) -> tf.Tensor:
       """Computes the reference pressure for constant potential temperature."""
       return (self._p_thermal *
-              (1.0 - thermodynamics_utils.G * z / self.cp_d / self._const_theta)  # pyrefly: ignore[unsupported-operation]
+              (1.0 - thermodynamics_utils.G * z / self.cp_d / self._const_theta)
               **(1.0 / self.kappa))
 
     return (

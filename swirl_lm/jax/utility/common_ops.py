@@ -68,7 +68,7 @@ def array_scatter_1d_update(
       updated.
   """
   axis_index = grid_params.get_axis_index(axis)
-  if hasattr(updates, 'ndim') and updates.ndim == 3:  # pyrefly: ignore[union-attr]
+  if hasattr(updates, 'ndim') and updates.ndim == 3:
     updates = jnp.squeeze(updates, axis=axis_index)
   if axis_index == 0:
     array = array.at[index, :, :].set(updates)
@@ -690,7 +690,7 @@ def get_spectral_index_grid(
     core_nz: int,
     mesh: jax.sharding.Mesh,
     grid_params: grid_parametrization.GridParametrization,
-    dtype: jnp.dtype = jnp.int32,
+    dtype: jnp.dtype = jnp.int32,  # pyrefly: ignore[bad-function-definition]
     halo_width_x: int = 0,
     halo_width_y: int = 0,
     halo_width_z: int = 0,
@@ -1050,7 +1050,7 @@ def slice_field(
     size = n - start_idx
 
   start = [0, 0, 0]
-  start[dim] = start_idx  # pyrefly: ignore[unsupported-operation]
+  start[dim] = start_idx
   slice_shape = list(shape)
-  slice_shape[dim] = size  # pyrefly: ignore[unsupported-operation]
+  slice_shape[dim] = size
   return jax.lax.dynamic_slice(f, start, slice_shape)

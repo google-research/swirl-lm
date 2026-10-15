@@ -95,7 +95,7 @@ class FieldExchange(lpt.LPT):
     locs = lpt_field_floats[:, :3]
 
     # Exchange fluid data at particle locations with other replicas.
-    with tf.name_scope("communicate_fluid_data"):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope("communicate_fluid_data"):
       local_min_loc = self._get_local_min_loc(replicas, replica_id)
       fluid_vels = self.exchange_fluid_data_fn(
           locs,
@@ -114,7 +114,7 @@ class FieldExchange(lpt.LPT):
     omegas = tf.zeros_like(lpt_field_floats[:, 0], dtype=lpt_types.LPT_FLOAT)
 
     # Time step the particles, updating their attributes.
-    with tf.name_scope("time_step_particles"):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope("time_step_particles"):
       lpt_field_ints, lpt_field_floats = self.increment_time(
           replica_id, replicas, additional_states, fluid_vels, omegas
       )
@@ -122,7 +122,7 @@ class FieldExchange(lpt.LPT):
     # TODO(ntricard): Account for particles influence on fluid motion.
 
     # Modulus the locations across periodic boundaries.
-    with tf.name_scope("apply_periodic_boundary_conditions"):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope("apply_periodic_boundary_conditions"):
       lpt_field_floats = self._apply_periodic_boundary_conditions(
           lpt_field_floats
       )

@@ -109,9 +109,9 @@ class Igniter(object):
     ) -> tf.Tensor:
       """Initializes the ignition sequence tensor."""
 
-      distance = tf.math.sqrt((xx - self._origin[0])**2 +  # pyrefly: ignore[unsupported-operation]
-                              (yy - self._origin[1])**2 +  # pyrefly: ignore[unsupported-operation]
-                              (zz - self._origin[2])**2)  # pyrefly: ignore[unsupported-operation]
+      distance = tf.math.sqrt((xx - self._origin[0])**2 +
+                              (yy - self._origin[1])**2 +
+                              (zz - self._origin[2])**2)
 
       ignition_time = distance / self._speed + self._start_time
 

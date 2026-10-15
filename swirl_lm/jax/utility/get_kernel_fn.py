@@ -340,12 +340,12 @@ def _make_banded_matrix(
   offset = _validate_offset_and_stencil(offset, stencil)
   if not isinstance(stencil, (jax.Array, jax.core.Tracer)):
     return _make_banded_matrix_np(stencil, banded_matrix_size, offset)
-  stencil = jnp.array(stencil, dtype=DType)  # pyrefly: ignore[bad-assignment]
+  stencil = jnp.array(stencil, dtype=DType)
   rows = jnp.arange(banded_matrix_size, dtype=jnp.int32)
   rows = jnp.tile(jnp.expand_dims(rows, axis=-1), (1, len(stencil)))
   cols = [jnp.arange(ir, ir + len(stencil)) for ir in range(banded_matrix_size)]
   cols = jnp.stack(cols, axis=0) + len(stencil)
-  vals = jnp.tile(stencil, (banded_matrix_size, 1))  # pyrefly: ignore[bad-argument-type]
+  vals = jnp.tile(stencil, (banded_matrix_size, 1))
   matrix = jnp.zeros(
       (banded_matrix_size, banded_matrix_size + 2 * len(stencil))
   )
@@ -567,7 +567,7 @@ def _convop_kernel_dict(
     )
   if custom_kernel_dict:
     _add_customized_conv_kernel(
-        jnp_kernels,  # pyrefly: ignore[bad-argument-type]
+        jnp_kernels,
         custom_kernel_dict,
         kernel_size=kernel_size,
         kernel_generation_fn=_make_convop_kernel,

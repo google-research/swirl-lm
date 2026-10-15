@@ -201,8 +201,8 @@ def newton_method_multi_dim(
           # Cached best.
           false_fn=lambda: (states.best_residual, states.best_x))
 
-    return (  # pyrefly: ignore[bad-return]
-        i + 1,  # pyrefly: ignore[unsupported-operation]
+    return (
+        i + 1,
         _NewtonState(
             x=x1,
             x0=x,
@@ -241,7 +241,7 @@ def newton_method_multi_dim(
       x0=[[1.0 + 2.0 * tf.abs(x)
            for x in initial_position_i]
           for initial_position_i in initial_position],
-      f=objective_fn(*initial_position),  # pytype: disable=wrong-arg-types
+      f=objective_fn(*initial_position),  # pyrefly: ignore[bad-argument-type]
       # Cache best residual & result.
       best_residual=default_residual,
       best_x=initial_position)
@@ -313,7 +313,7 @@ def newton_method(
     df = jacobian_fn(x)
     h = tf.nest.map_structure(tf.math.divide_no_nan, f, df)
     x1 = tf.nest.map_structure(tf.math.subtract, x, h)
-    return (i + 1, {'x': x1, 'x0': x, 'f': f})  # pyrefly: ignore[bad-return, unsupported-operation]
+    return (i + 1, {'x': x1, 'x0': x, 'f': f})
 
   def cond(i: tf.Tensor, states: FlowFieldMap) -> bool:
     """The stop condition of Newton iterations."""

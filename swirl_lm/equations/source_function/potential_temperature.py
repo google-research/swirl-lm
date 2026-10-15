@@ -377,7 +377,7 @@ class PotentialTemperature(scalar_generic.ScalarGeneric):
       ) -> tf.Tensor:
         """Computes the condensation source term."""
         return (
-            rho * (self._thermodynamics.model.lh_v0 / cp) * (theta_0 / t_0) * s  # pyrefly: ignore[unsupported-operation]
+            rho * (self._thermodynamics.model.lh_v0 / cp) * (theta_0 / t_0) * s
         )
 
       return tf.nest.map_structure(

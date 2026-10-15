@@ -438,7 +438,7 @@ class ConjugateGradient(PoissonSolver):
         if band_config.HasField('dominating_direction'):
           dominating_index = band_config.dominating_direction
         else:
-          dominating_index = np.argmin(values)  # pyrefly: ignore[bad-argument-type, no-matching-overload]
+          dominating_index = np.argmin(values)  # pyrefly: ignore[bad-argument-type]
 
         # Apply ConvOps.
         def get_term(f):
@@ -463,7 +463,7 @@ class ConjugateGradient(PoissonSolver):
           partial_laplacian_rhs = self._laplacian_terms(
               rhs, halo_update=None, indices=indices)
 
-          return tf.nest.map_structure(tf.math.add, *partial_laplacian_rhs)  # pytype: disable=bad-unpacking
+          return tf.nest.map_structure(tf.math.add, *partial_laplacian_rhs)
 
         # Optional taylor expansion, up to order 6 now.
         max_taylor_order = 6
@@ -518,7 +518,7 @@ class ConjugateGradient(PoissonSolver):
         component_wise_distance_fn=component_wise_distance_fn,
         reprojection=reprojection_fn,
         preconditioner=preconditioner,
-        internal_dtype=internal_dtype)  # pytype: disable=wrong-arg-types
+        internal_dtype=internal_dtype)
 
     cg_solution[X] = halo_update(tf.stack(cg_solution[X]))
 

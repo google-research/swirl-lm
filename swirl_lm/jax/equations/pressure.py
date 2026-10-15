@@ -606,19 +606,19 @@ class Pressure:
         if self._bc.get('p') is not None and self._bc['p'] is not None:
           p_bc = self._bc['p']
           if (
-              p_bc[dim] is not None  # pyrefly: ignore[unsupported-operation]
+              p_bc[dim] is not None
               and p_bc[dim][0] is not None  # pyrefly: ignore[unsupported-operation]
               and p_bc[dim][0][0] == halo_exchange_utils.BCType.DIRICHLET  # pyrefly: ignore[unsupported-operation]
           ):
             lo = (halo_exchange_utils.BCType.DIRICHLET, 0.0)
           if (
-              p_bc[dim] is not None  # pyrefly: ignore[unsupported-operation]
+              p_bc[dim] is not None
               and p_bc[dim][1] is not None  # pyrefly: ignore[unsupported-operation]
               and p_bc[dim][1][0] == halo_exchange_utils.BCType.DIRICHLET  # pyrefly: ignore[unsupported-operation]
           ):
             hi = (halo_exchange_utils.BCType.DIRICHLET, 0.0)
-        bc_dp_list.append((lo, hi))  # pyrefly: ignore[bad-argument-type]
-    return tuple(bc_dp_list)  # pyrefly: ignore[bad-return-type]
+        bc_dp_list.append((lo, hi))
+    return tuple(bc_dp_list)
 
   def _dp_halo_update_fn(
       self,
@@ -779,7 +779,7 @@ class Pressure:
         not periodic[dim]
         and self._bc.get('p') is not None
         and self._bc['p'] is not None
-        and self._bc['p'][dim] is not None  # pyrefly: ignore[unsupported-operation]
+        and self._bc['p'][dim] is not None
         and any(
             self._bc['p'][dim][face] is not None  # pyrefly: ignore[unsupported-operation]
             and self._bc['p'][dim][face][0] == halo_exchange_utils.BCType.DIRICHLET  # pyrefly: ignore[unsupported-operation]

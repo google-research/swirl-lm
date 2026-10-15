@@ -131,13 +131,13 @@ class LPT:
     )
     self.core_spacings = tf.convert_to_tensor(
         (
-            (len(params.z) - 1.0) / params.cz  # pyrefly: ignore[bad-argument-type]
+            (len(params.z) - 1.0) / params.cz
             if params.use_stretched_grid[2]
             else params.lz / params.cz,
-            (len(params.x) - 1.0) / params.cx  # pyrefly: ignore[bad-argument-type]
+            (len(params.x) - 1.0) / params.cx
             if params.use_stretched_grid[0]
             else params.lx / params.cx,
-            (len(params.y) - 1.0) / params.cy  # pyrefly: ignore[bad-argument-type]
+            (len(params.y) - 1.0) / params.cy
             if params.use_stretched_grid[1]
             else params.ly / params.cy,
         ),
@@ -318,7 +318,7 @@ class LPT:
         # For any non-stretched dimensions, the returned value for
         # `grid_spacings`` is 1.0 because the dxdt equation remains in physical
         # domain for those dimensions.
-        with tf.name_scope("lpt_getting_stretched_grid_spacings"):  # pyrefly: ignore[bad-instantiation]
+        with tf.name_scope("lpt_getting_stretched_grid_spacings"):
           grid_spacings = self._get_grid_spacings(
               additional_states, local_min_loc
           )
@@ -476,14 +476,14 @@ class LPT:
     """
 
     # Injecting new particles using user-defined injectors.
-    with tf.name_scope("particle_injection"):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope("particle_injection"):
       lpt_states = self.inject_particles(
           replica_id, replicas, states, additional_states, step_id, self.params
       )
       additional_states = dict(additional_states)
       additional_states.update(lpt_states)
 
-    with tf.name_scope("update_particles"):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope("update_particles"):
       return self.update_particles(
           replica_id, replicas, states, additional_states
       )

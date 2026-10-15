@@ -298,9 +298,9 @@ def bubble(
   ) -> tf.Tensor:
     """Computes the perturbation of the bubble centered in the x-y plane."""
     normalized_distance = tf.sqrt(
-        ((x - 0.5 * lx) / rh) ** 2  # pyrefly: ignore[unsupported-operation]
-        + ((y - 0.5 * ly) / rh) ** 2  # pyrefly: ignore[unsupported-operation]
-        + ((z - z_loc) / rv) ** 2  # pyrefly: ignore[unsupported-operation]
+        ((x - 0.5 * lx) / rh) ** 2
+        + ((y - 0.5 * ly) / rh) ** 2
+        + ((z - z_loc) / rv) ** 2
     )
     return tf.where(
         tf.math.less(normalized_distance, 1.0),

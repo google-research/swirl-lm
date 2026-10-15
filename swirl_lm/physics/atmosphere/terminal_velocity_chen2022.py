@@ -214,7 +214,7 @@ class TerminalVelocityChen2022:
     # Convert a from mm^-b to m^-b.
     a = tuple(a_i * tf.math.pow(1e3, b_i) for a_i, b_i in zip(a, b))
     # Convert c from mm^-1 to m^-1.
-    c = tuple(c_i * 1e3 for c_i in c)  # pyrefly: ignore[bad-assignment, unsupported-operation]
+    c = tuple(c_i * 1e3 for c_i in c)
     return TerminalVelocityCoefficients(a, b, c)
 
   def _compute_raindrop_coefficients(
@@ -222,15 +222,15 @@ class TerminalVelocityChen2022:
   ) -> TerminalVelocityCoefficients:
     """Computes raindrop coefficients as a function of density (table b1)."""
     coeffs = self.rain_velocity
-    q = tf.math.exp(coeffs.q_coeff * rho)  # pyrefly: ignore[unsupported-operation]
+    q = tf.math.exp(coeffs.q_coeff * rho)
     a = (
         coeffs.a[0] * q,
         coeffs.a[1] * q,
         coeffs.a[2] * q * tf.math.pow(rho, coeffs.rho_exp),
     )
-    b = tuple(coeffs.b[i][0] + coeffs.b[i][1] * rho for i in range(3))  # pyrefly: ignore[unsupported-operation]
+    b = tuple(coeffs.b[i][0] + coeffs.b[i][1] * rho for i in range(3))
     c = tuple(tf.constant(c_i, tf.float32) for c_i in coeffs.c)
-    return self._convert_coefficients_to_si_units_and_wrap(a, b, c)  # pyrefly: ignore[bad-argument-type]
+    return self._convert_coefficients_to_si_units_and_wrap(a, b, c)
 
   def _compute_ice_coefficients(
       self, rho: tf.Tensor
@@ -238,12 +238,12 @@ class TerminalVelocityChen2022:
     """Computes the ice coefficients as a function of density."""
     coeffs = self.ice_velocity
     a = (
-        coeffs.e * rho ** coeffs.a,  # pyrefly: ignore[unsupported-operation]
-        coeffs.f * rho ** coeffs.a  # pyrefly: ignore[unsupported-operation]
+        coeffs.e * rho ** coeffs.a,
+        coeffs.f * rho ** coeffs.a
     )
     b = (
-        coeffs.b + coeffs.c * rho,  # pyrefly: ignore[unsupported-operation]
-        coeffs.b + coeffs.c * rho,  # pyrefly: ignore[unsupported-operation]
+        coeffs.b + coeffs.c * rho,
+        coeffs.b + coeffs.c * rho,
     )
     c = (tf.zeros_like(coeffs.g), coeffs.g)
     return self._convert_coefficients_to_si_units_and_wrap(a, b, c)
@@ -254,8 +254,8 @@ class TerminalVelocityChen2022:
     """Computes the snow coefficients as a function of density."""
     coeffs = self.snow_velocity
     a = (
-        coeffs.b * rho ** coeffs.a,  # pyrefly: ignore[unsupported-operation]
-        coeffs.e * rho ** coeffs.a * tf.math.exp(coeffs.h * rho),  # pyrefly: ignore[unsupported-operation]
+        coeffs.b * rho ** coeffs.a,
+        coeffs.e * rho ** coeffs.a * tf.math.exp(coeffs.h * rho),
     )
     b = (coeffs.c, coeffs.f)
     c = (tf.zeros_like(coeffs.g), coeffs.g)
@@ -423,4 +423,4 @@ class TerminalVelocityChen2022:
         rho * q_sed / constants.DROPLET_N / particle.params.rho, 1.0 / 3.0
     )
     fall_speed = self._fall_speed_gamma_type_individual(coeffs, diameter)
-    return tf.math.maximum(correction_factor * fall_speed, 0.0)  # pyrefly: ignore[unsupported-operation]
+    return tf.math.maximum(correction_factor * fall_speed, 0.0)

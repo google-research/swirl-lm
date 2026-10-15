@@ -288,7 +288,7 @@ def ignition_with_hot_kernel(
       temperature: tf.Tensor,
   ) -> tf.Tensor:
     """Sets a high temperature region at the specified location."""
-    return temperature + (ignition_temperature - temperature) * ignition_kernel  # pyrefly: ignore[bad-return, unsupported-operation]
+    return temperature + (ignition_temperature - temperature) * ignition_kernel
 
   def ignition_step(
       kernel_op: get_kernel_fn.ApplyKernelOp,
@@ -435,10 +435,10 @@ def ramp_up_down_function(
       The scaling factor at `t` following the ramp function.
     """
     t_0_to_t_1 = (
-        lambda: (t - t_0) / (t_1 - t_0) if t_1 > 0.0 else tf.ones_like(t)  # pyrefly: ignore[unsupported-operation]
+        lambda: (t - t_0) / (t_1 - t_0) if t_1 > 0.0 else tf.ones_like(t)
     )
     t_1_to_t_2 = lambda: tf.constant(1.0, dtype=types.TF_DTYPE)
-    t_2_to_t_3 = lambda: (t - t_3) / (t_2 - t_3)  # pyrefly: ignore[unsupported-operation]
+    t_2_to_t_3 = lambda: (t - t_3) / (t_2 - t_3)
     outside_intervals = lambda: tf.constant(0.0, dtype=types.TF_DTYPE)
 
     t_interval = lambda t_l, t_r: tf.logical_and(
@@ -504,7 +504,7 @@ def ignition_with_heat_source(
     """
     coeff = heat_source_coeff_fn(t)
     return tf.nest.map_structure(
-        lambda mask: coeff * heat_source_magnitude * mask, ignition_kernel  # pyrefly: ignore[unsupported-operation]
+        lambda mask: coeff * heat_source_magnitude * mask, ignition_kernel
     )
 
   return heat_source_update_fn

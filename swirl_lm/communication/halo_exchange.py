@@ -501,7 +501,7 @@ def inplace_halo_exchange(
 
     return bc_info_plane
 
-  with tf.name_scope("HaloExchange"):  # pyrefly: ignore[bad-instantiation]
+  with tf.name_scope("HaloExchange"):
     for dim, replica_dim, periodic, bc in zip(
         dims, replica_dims, periodic_dims, boundary_conditions  # pyrefly: ignore[bad-argument-type]
     ):

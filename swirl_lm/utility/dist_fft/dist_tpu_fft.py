@@ -432,7 +432,7 @@ class DistTPUFFT(object):
                    partial_input: tf.Tensor,
                    transform_dims: Sequence[int],
                    halo_widths: Sequence[int] = 0,  # pyrefly: ignore[bad-function-definition]
-                   inverse: bool = False) -> tf.Tensor:  # pytype: disable=annotation-type-mismatch
+                   inverse: bool = False) -> tf.Tensor:
     """Performs a 2d Fourier transform or inverse Fourier transform.
 
 

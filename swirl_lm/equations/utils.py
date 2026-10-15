@@ -469,7 +469,7 @@ def bound_viscosity(
       h = additional_states[stretched_grid_util.h_face_key(dim)]
     else:
       h = tf.constant(params.grid_spacings[dim], dtype=types.TF_DTYPE)
-    nu_max = params.diff_stab_crit * (h**2 / params.dt)  # pyrefly: ignore[unsupported-operation]
+    nu_max = params.diff_stab_crit * (h**2 / params.dt)
     nu = tf.math.minimum(nu, nu_max)
 
   return nu

@@ -659,7 +659,7 @@ class Velocity(object):
           replicas=replicas,
           additional_states=additional_states,
       )
-      nu = self._params.nu + nu_t  # pyrefly: ignore[unsupported-operation]
+      nu = self._params.nu + nu_t
     else:
       nu = tf.constant(self._params.nu, dtype=types.TF_DTYPE)
 
@@ -726,7 +726,7 @@ class Velocity(object):
     updated_velocity.update(
         self._maybe_update_diagnostics(additional_states, states_0, u))
 
-    return updated_velocity  # pytype: disable=bad-return-type
+    return updated_velocity
 
   def correction_step(
       self,
@@ -770,10 +770,10 @@ class Velocity(object):
       if (self._thermodynamics.solver_mode ==
           thermodynamics_pb2.Thermodynamics.ANELASTIC):
         # jth component of vector equation (ρu) <- (ρu) - dt ρ₀ ∇ (α₀ δp)
-        return rho_u_j - dt * rho * grad_j_dp  # pyrefly: ignore[bad-return, unsupported-operation]
+        return rho_u_j - dt * rho * grad_j_dp
       else:
         # jth component of vector equation (ρu) <- (ρu) - dt ∇ δp
-        return rho_u_j - dt * grad_j_dp  # pyrefly: ignore[bad-return, unsupported-operation]
+        return rho_u_j - dt * grad_j_dp
 
     momentum_keys = (_KEY_RHO_U, _KEY_RHO_V, _KEY_RHO_W)
     states_new = {

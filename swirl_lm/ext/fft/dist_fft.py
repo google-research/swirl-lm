@@ -497,8 +497,8 @@ class DistFFT():
     def do_transform():
       core_coord = (lax.axis_index(self._axis_names[0]),
                     lax.axis_index(self._axis_names[1]), 0)
-      input_signal = input_fn((nx, ny, 1), core_coord)  # pytype: disable=wrong-arg-types  # lax-types
-      kernel = kernel_fn((nx, ny, 1), core_coord)  # pytype: disable=wrong-arg-types  # lax-types
+      input_signal = input_fn((nx, ny, 1), core_coord)  # pyrefly: ignore[bad-argument-type]
+      kernel = kernel_fn((nx, ny, 1), core_coord)  # pyrefly: ignore[bad-argument-type]
       out_signal = input_signal
       for _ in range(num):
         out_signal = self.partitioned_fft_1d(
@@ -574,8 +574,8 @@ class DistFFT():
       core_coord = (lax.axis_index(self._axis_names[0]),
                     lax.axis_index(self._axis_names[1]),
                     lax.axis_index(self._axis_names[2]))
-      input_signal = input_fn((nx, ny, nz), core_coord)  # pytype: disable=wrong-arg-types  # lax-types
-      kernel = kernel_fn((nx, ny, nz), core_coord)  # pytype: disable=wrong-arg-types  # lax-types
+      input_signal = input_fn((nx, ny, nz), core_coord)  # pyrefly: ignore[bad-argument-type]
+      kernel = kernel_fn((nx, ny, nz), core_coord)  # pyrefly: ignore[bad-argument-type]
       out_signal = input_signal
       for _ in range(num):
         forward_x = self.partitioned_fft_1d(out_signal, 0, False, 0)

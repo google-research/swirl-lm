@@ -688,7 +688,7 @@ class SgsModel(object):
       # best approach will be rewrite the class to incorporate all needed
       # information of the grid config.
       halo_width = 2
-      m_inner = common_ops.strip_halos(m, (halo_width, halo_width, halo_width))  # pytype: disable=wrong-arg-types  # always-use-return-annotations
+      m_inner = common_ops.strip_halos(m, (halo_width, halo_width, halo_width))
       m_avg_inner = _germano_averaging(m_inner, periodic_dims, replicas)
       if self._swirllm_params.use_3d_tf_tensor:
         m_avg_full = tf.pad(
@@ -703,7 +703,7 @@ class SgsModel(object):
             # simplicity.
             tf.zeros_like(m_avg_inner[0]),
         ] * halo_width
-        m_avg_inner = z_pad + m_avg_inner + z_pad  # pyrefly: ignore[unsupported-operation]
+        m_avg_inner = z_pad + m_avg_inner + z_pad
         m_avg_full = tf.nest.map_structure(
             lambda inner: tf.pad(  # pylint: disable=g-long-lambda
                 inner,

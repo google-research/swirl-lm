@@ -191,13 +191,13 @@ def create_linear_interpolant(
     size = f_ref.shape[0]
     delta = f_ref[1] - f_ref[0]
     idx_low = floor_idx(f, f_ref)
-    idx_high = tf.math.minimum(idx_low + 1, size - 1)  # pyrefly: ignore[unsupported-operation]
+    idx_high = tf.math.minimum(idx_low + 1, size - 1)
     # Compute the interpolant weights for the two endpoints.
     lower_reference_vals = f_ref[0] + delta * tf.cast(idx_low, f_ref.dtype)
     weight2 = tf.math.abs((f - lower_reference_vals) / delta)
     weight1 = 1.0 - weight2
     if offset is not None:
-      idx_low += offset  # pyrefly: ignore[unsupported-operation]
+      idx_low += offset
       idx_high += offset
     idx_weight_low = IndexAndWeight(idx_low, weight1)
     idx_weight_high = IndexAndWeight(idx_high, weight2)

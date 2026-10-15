@@ -44,7 +44,7 @@ def _read_group(
     if isinstance(group[key], h5py.Group):
       out[key] = _read_group(group[key])
     elif isinstance(group[key], h5py.Dataset):
-      if group[key].shape:  # pytype: disable=attribute-error
+      if group[key].shape:
         out[key] = np.asarray(group[key], dtype=array_dtype)
       else:
         out[key] = group[key][()]
@@ -498,7 +498,7 @@ class WenoNN:
       else:
         weno_wt = tf.unstack(weno_wt, axis=-1)
 
-      return weno_wt  # pytype: disable=bad-return-type
+      return weno_wt
 
     weno_wt_neg = _calculate_weno_nn_wt_single_side(delta_neg)
     # Invert the order of neg side of WENO-weights to match the training of the

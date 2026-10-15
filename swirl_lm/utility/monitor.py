@@ -183,7 +183,7 @@ class Monitor(object):
       states: FlowFieldMap,
       replicas: np.ndarray,
       dt_and_simulation_time: tuple[tf.Tensor, tf.Tensor] | None = None,
-  ) -> MonitorDataType:  # pytype: disable=annotation-type-mismatch
+  ) -> MonitorDataType:
     """Computes and stores analytics for the given calculation module.
 
     Args:

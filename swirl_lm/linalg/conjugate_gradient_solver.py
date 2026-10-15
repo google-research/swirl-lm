@@ -176,7 +176,7 @@ def conjugate_gradient_solver(
     x0 = [x0]  # pyrefly: ignore[bad-assignment]
 
   if internal_dtype is not None and b:
-    input_dtype = b[0].dtype  # pytype: disable=attribute-error
+    input_dtype = b[0].dtype
   else:
     input_dtype = None
 

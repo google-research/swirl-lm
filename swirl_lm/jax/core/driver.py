@@ -92,7 +92,7 @@ Usage example (restart from a previous checkpoint):
 """
 
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 import inspect
 import os
 import time
@@ -102,6 +102,7 @@ from absl import logging
 from google.protobuf import text_format
 import jax
 from jax.experimental import mesh_utils
+from jax.experimental import multihost_utils
 from jax.experimental import shard_map
 import jax.numpy as jnp
 from jax.sharding import Mesh  # pylint: disable=g-importing-member
@@ -115,6 +116,7 @@ from swirl_lm.jax.boundary_condition import nonreflecting_boundary
 from swirl_lm.jax.core import simulation as simulation_lib
 from swirl_lm.jax.io import checkpoint as checkpoint_lib
 from swirl_lm.jax.physics.lpt import lpt
+from swirl_lm.jax.utility import global_layout
 from swirl_lm.jax.utility import grid_parametrization as gp_lib
 from swirl_lm.jax.utility import stretched_grid
 from swirl_lm.jax.utility import stretched_grid_util
@@ -321,6 +323,125 @@ def _init_fn(
   return states
 
 
+def _global_shape_for_spec(
+    local_shape: Sequence[int],
+    spec: P,
+    mesh: Mesh,
+) -> tuple[int, ...]:
+  """Expands a per-replica shape into the global shape implied by `spec`.
+
+  An axis named in the spec is distributed, so the global extent is the local
+  extent times the size of the mesh axes it is mapped onto. An axis the spec
+  leaves as None is held whole by every device.
+
+  Args:
+    local_shape: The shape of one replica's array.
+    spec: The partition spec for that array.
+    mesh: The device mesh.
+
+  Returns:
+    The shape of the assembled global array.
+  """
+  global_shape = []
+  for axis, extent in enumerate(local_shape):
+    names = spec[axis] if axis < len(spec) else None
+    if names is None:
+      global_shape.append(extent)
+      continue
+    if isinstance(names, str):
+      names = (names,)
+    for name in names:
+      extent *= mesh.shape[name]
+    global_shape.append(extent)
+  return tuple(global_shape)
+
+
+def _assemble_sharded_array(
+    key: str,
+    per_replica_states: list[dict[str, ScalarField]],
+    spec: P,
+    mesh: Mesh,
+    computation_shape: tuple[int, ...],
+) -> jax.Array:
+  """Places each replica's array on the device that owns its shard.
+
+  With a partition spec in hand, the replica index alone determines where a
+  tile belongs, so nothing has to be concatenated on the host. This is the
+  same property TF relies on, where `distribute_values` only ever needs to
+  know which device a value belongs to.
+
+  Devices that end up holding the same shard -- which happens for every mesh
+  axis the spec leaves out -- must have been given identical arrays. That is
+  checked rather than assumed: silently keeping one of them is exactly how a
+  genuinely per-replica array gets replaced by replica 0's copy.
+
+  Args:
+    key: The state name, used only for error messages.
+    per_replica_states: One state dict per replica, ordered by replica id.
+    spec: The partition spec mapping the array's axes onto the mesh.
+    mesh: The device mesh.
+    computation_shape: The mesh shape, in data axis order.
+
+  Returns:
+    The assembled global array with a `NamedSharding` built from `spec`.
+
+  Raises:
+    ValueError: If `key` is missing from some replica, or if replicas sharing
+      a shard disagree.
+  """
+  missing = [i for i, s in enumerate(per_replica_states) if key not in s]
+  if missing:
+    raise ValueError(
+        f'State {key!r} was produced by some replicas but not by {missing}. '
+        'Every replica must initialize the same set of states.'
+    )
+
+  tiles = [s[key] for s in per_replica_states]
+  global_shape = _global_shape_for_spec(np.shape(tiles[0]), spec, mesh)
+  sharding = NamedSharding(mesh, spec)
+
+  # Replica index -> device, matching the C-order walk over
+  # `computation_shape` that `_logical_coordinates` uses.
+  replica_of_device = {}
+  for replica in range(len(tiles)):
+    position = np.unravel_index(replica, computation_shape)
+    replica_of_device[mesh.devices[position].id] = replica
+
+  index_map = sharding.addressable_devices_indices_map(global_shape)
+
+  # Group replicas by the shard they would write, and require agreement
+  # within each group. For a fully distributed spec every group holds one
+  # replica and this costs nothing; for a replicated spec it is the check
+  # that the replicas really are interchangeable.
+  by_shard: dict[str, list[int]] = {}
+  for device, index in index_map.items():
+    by_shard.setdefault(str(index), []).append(replica_of_device[device.id])
+
+  for replicas in by_shard.values():
+    reference = np.asarray(tiles[replicas[0]])
+    for replica in replicas[1:]:
+      other = np.asarray(tiles[replica])
+      if not np.array_equal(reference, other):
+        raise ValueError(
+            f'State {key!r} differs between replicas {replicas[0]} and '
+            f'{replica} (by up to '
+            f'{float(np.max(np.abs(reference - other))):.6g}), but the '
+            f'partition spec {spec} maps both onto the same piece of the '
+            'global array, so one of them would be silently discarded. '
+            'Declare a spec for this state in '
+            '`params.additional_state_partition_specs` that distributes the '
+            'axes along which the replicas differ.'
+        )
+
+  arrays = [
+      jax.device_put(tiles[replica_of_device[device.id]], device)
+      for device in index_map
+  ]
+  return jax.make_array_from_single_device_arrays(
+      global_shape, sharding, arrays
+  )
+
+
 def _distribute_states(
     per_replica_states: list[dict[str, ScalarField]],
     mesh: Mesh,
@@ -329,12 +450,13 @@ def _distribute_states(
 ) -> dict[str, jax.Array]:
   """Assembles per-replica states into globally-sharded JAX arrays.
 
-  Each device produces its local state partition via `_init_fn`. This
-  function concatenates them into global arrays with `NamedSharding`
-  so that each device's shard is placed on the correct device.
-
-  Scalar values (0D arrays like TIME_VARNAME) are replicated across all
-  devices rather than sharded.
+  Each replica produces its local state partition via `_init_fn`; `shard_map`
+  consumes one global array per state, so each state's axes have to be mapped
+  onto the mesh. That mapping comes from, in order of precedence: a caller
+  supplied distributor, the boundary condition convention, a declared
+  partition spec, the default for a 3D field, or -- failing all of those --
+  replication, which is only valid if every replica agrees and is verified
+  during assembly.
 
   Args:
     per_replica_states: List of state dicts, one per device, ordered by replica
@@ -348,10 +470,7 @@ def _distribute_states(
     A single state dict of globally-sharded JAX arrays.
   """
   all_keys = list(dict.fromkeys([k for s in per_replica_states for k in s]))  # pylint: disable=g-complex-comprehension
-  sharding_3d = NamedSharding(mesh, P(*mesh.axis_names))
-  sharding_replicated = NamedSharding(mesh, P())
   computation_shape = tuple(mesh.shape[name] for name in mesh.axis_names)
-  num_replicas = len(per_replica_states)
 
   global_state: dict[str, jax.Array] = {}
 
@@ -360,38 +479,35 @@ def _distribute_states(
     if sample is None:
       continue
 
+    # A caller-supplied distributor takes precedence over everything.
+    if params is not None and key in params.additional_state_distributors:
+      global_state[key] = params.additional_state_distributors[key](
+          key, per_replica_states, mesh, grid_params
+      )
+      continue
+
+    # Boundary condition states are not a plain tile placement: only the
+    # replicas on the target face contribute, so they keep their own
+    # assembly.
     if boundary_condition_utils.is_bc_key(key):
       global_state[key] = boundary_condition_utils.distribute_bc_state(
           key, per_replica_states, mesh, grid_params
       )
-    elif params is not None and key in params.additional_state_distributors:
-      global_state[key] = params.additional_state_distributors[key](
-          key, per_replica_states, mesh, grid_params
-      )
-    elif params is not None and key in params.additional_state_partition_specs:
-      spec = params.additional_state_partition_specs[key]
-      sharding = NamedSharding(mesh, spec)
-      global_state[key] = jax.device_put(jnp.asarray(sample), sharding)
-    elif np.ndim(sample) < 3:
-      # Scalar or low-rank (e.g. TIME_VARNAME, boundary face arrays):
-      # replicate across all devices. All replicas should have the same value.
-      global_state[key] = jax.device_put(
-          jnp.asarray(sample), sharding_replicated
-      )
-    elif num_replicas == 1:
-      # Single-device case: no concatenation needed.
-      global_state[key] = jax.device_put(jnp.asarray(sample), sharding_3d)
-    else:
-      # Multi-device 3D field: concatenate per-device shards into global array.
-      # per_replica_states are ordered in C-order over (cx, cy, cz).
-      # Build a (cx, cy, cz) grid of local arrays, then concatenate along
-      # each spatial axis to form the global array.
-      grid = np.empty(computation_shape, dtype=object)
-      for idx in range(num_replicas):
-        multi_idx = np.unravel_index(idx, computation_shape)
-        grid[multi_idx] = per_replica_states[idx][key]
+      continue
 
-      global_state[key] = jax.device_put(jnp.block(grid.tolist()), sharding_3d)
+    if params is not None and key in params.additional_state_partition_specs:
+      spec = params.additional_state_partition_specs[key]
+    elif np.ndim(sample) == 3:
+      # A 3D field is one local subdomain per replica.
+      spec = P(*mesh.axis_names)
+    else:
+      # Nothing declares how this state maps onto the mesh, so the only
+      # possibility left is that it is the same on every replica.
+      spec = P()
+
+    global_state[key] = _assemble_sharded_array(
+        key, per_replica_states, spec, mesh, computation_shape
+    )
 
   return global_state
 
@@ -451,6 +567,40 @@ def _stateless_update_if_present(
   result = mapping.copy()
   result.update({key: val for key, val in updates.items() if key in result})
   return result
+
+
+def _strengthen_dtypes(tree: Any) -> Any:
+  """Strips `weak_type` from every array leaf of `tree`.
+
+  JAX includes `weak_type` in the jit cache key, so a weakly typed input
+  followed by a strongly typed one retraces and recompiles the whole cycle.
+  State arrays come out of a typical `init_fn` weakly typed, because
+  `jnp.arange(n) * dx` with a Python-float `dx` promotes an integer array
+  against a Python scalar and yields a weak float; the cycle then returns
+  those same fields strongly typed, having passed through `lax` collectives.
+  Canonicalizing to strong types makes the cycle's signature stable, so it is
+  compiled once.
+
+  `lax.convert_element_type` preserves the sharding, the commitment and the
+  values exactly, and is skipped for leaves that are already strong, for
+  which it would return the same buffer anyway. It is also valid on tracers,
+  so this can be applied to the scan carry inside the cycle, where it lowers
+  to nothing.
+
+  Args:
+    tree: Any pytree; non-array leaves are returned untouched.
+
+  Returns:
+    The tree with every weakly typed array leaf replaced by its strongly
+    typed equivalent.
+  """
+
+  def strengthen(leaf: Any) -> Any:
+    if getattr(leaf, 'weak_type', False):
+      return jax.lax.convert_element_type(leaf, leaf.dtype)
+    return leaf
+
+  return jax.tree.map(strengthen, tree)
 
 
 def _update_additional_states(
@@ -514,23 +664,24 @@ def _update_additional_states(
     except (ValueError, TypeError):
       accepts_params = False
 
+    # `updated` is passed in rather than the original `additional_states`, and
+    # the result is merged rather than substituted. Both matter: the user
+    # function has to see the cleared source terms and the fresh nonreflecting
+    # boundary condition states, and rebinding `updated` here would discard
+    # steps 1 and 2 outright. The TF original gets away with the same
+    # substitution because there `updated` is an alias of `additional_states`
+    # and those steps mutate it in place; this port copies the dict, which
+    # breaks that implicit hand-off.
+    kwargs: dict[str, Any] = dict(
+        states=essential_states,
+        # A copy, so that a function which mutates its argument cannot reach
+        # back into the state being assembled here.
+        additional_states=dict(updated),
+        step_id=step_id,
+    )
     if accepts_params:
-      updated = dict(
-          fn(
-              states=essential_states,
-              additional_states=additional_states,
-              step_id=step_id,
-              params=params,
-          )
-      )
-    else:
-      updated = dict(
-          fn(
-              states=essential_states,
-              additional_states=additional_states,
-              step_id=step_id,
-          )
-      )
+      kwargs['params'] = params
+    updated.update(fn(**kwargs))
 
   return updated
 
@@ -586,6 +737,123 @@ def _process_at_step_id(
   return essential_states, additional_states
 
 
+def _restore_from_checkpoint(
+    state: dict[str, jax.Array],
+    restart_from: str,
+    params: parameters_lib.SwirlLMParameters,
+    essential_keys: Sequence[str],
+    restart_fields: Sequence[str] | None = None,
+) -> dict[str, object]:
+  """Overrides `state` in place with the contents of a zarr checkpoint.
+
+  A checkpoint holds the unique grid points, while a simulation state holds
+  the sharded layout in which every replica carries its own halos. Each
+  restored variable is therefore expanded back to that layout, using the
+  axis classification recorded at save time, and then placed with the
+  sharding of the array it replaces so that the state stays structurally
+  identical to a non-restarted run and the compiled cycle is not retraced.
+
+  Args:
+    state: The initialized state, modified in place.
+    restart_from: Path to the zarr checkpoint.
+    params: Simulation parameters.
+    essential_keys: The prognostic variable names, used for the default
+      whitelist.
+    restart_fields: Variables to restore. If None, the prognostic state, the
+      accumulated simulation time and the boundary condition states are
+      restored, and everything else in the checkpoint is skipped. Derived and
+      grid-derived variables (`nu_t`, the coordinate fields, stretched-grid
+      scale factors) are recomputed from the restart configuration, and
+      restoring them from a checkpoint written against a different grid would
+      corrupt them without any shape mismatch to catch it.
+
+  Returns:
+    The checkpoint metadata.
+
+  Raises:
+    ValueError: If a restored variable does not match the shape and dtype of
+      the array it replaces.
+  """
+  ckpt_states, metadata = checkpoint_lib.load(restart_from)
+  # Every process reads the store independently, so make sure they are all
+  # done before anything downstream assumes a consistent view.
+  if jax.process_count() > 1:
+    multihost_utils.sync_global_devices('swirl_lm_checkpoint_loaded')
+
+  if restart_fields is None:
+    restart_fields = (
+        list(essential_keys)
+        + [TIME_VARNAME]
+        + [k for k in ckpt_states if boundary_condition_utils.is_bc_key(k)]
+    )
+  wanted = set(restart_fields)
+
+  variable_attrs = metadata.get('variable_attrs', {})
+  restored = []
+  skipped = {}
+  for key in sorted(ckpt_states):
+    if key not in state:
+      skipped[key] = 'not in the initialized state'
+      continue
+    if key not in wanted:
+      skipped[key] = 'not in restart_fields'
+      continue
+
+    target = state[key]
+    value = np.asarray(ckpt_states[key])
+
+    if value.ndim:
+      # The outer halos of a non-periodic axis have no neighbour to come
+      # from, so reuse the initialized values, which are consistent with the
+      # boundary conditions. In a multi-process job the initialized array
+      # cannot be gathered, and the first boundary condition application
+      # corrects them instead.
+      existing = (
+          np.asarray(target)
+          if getattr(target, 'is_fully_addressable', True)
+          else None
+      )
+      value = global_layout.inflate_to_global(
+          value,
+          params.grid_params,
+          target_shape=target.shape,
+          stripped_axes=variable_attrs.get(key, {}).get(  # pyrefly: ignore[missing-attribute]
+              checkpoint_lib.STRIPPED_AXES_ATTR
+          ),
+          existing=existing,
+      )
+
+    if value.shape != target.shape or value.dtype != target.dtype:
+      raise ValueError(
+          f'Restored {key!r} has shape {value.shape} and dtype '
+          f'{value.dtype}, but the initialized state has {target.shape} and '
+          f'{target.dtype}. Check that the restart configuration matches the '
+          'one the checkpoint was written with.'
+      )
+
+    if value.ndim == 0:
+      state[key] = jax.device_put(value, target.sharding)
+    else:
+      # Only the addressable shards are requested, so this is also correct
+      # when the state spans several processes.
+      state[key] = jax.make_array_from_callback(
+          target.shape, target.sharding, lambda index, v=value: v[index]
+      )
+    restored.append(key)
+
+  logging.info(
+      'Restarted from checkpoint %s (step %s, sim_time %s). Restored: %s',
+      restart_from,
+      metadata.get('step', '?'),
+      metadata.get('sim_time', '?'),
+      restored,
+  )
+  for key, reason in skipped.items():
+    logging.info('Checkpoint variable %r not restored: %s', key, reason)
+
+  return metadata
+
+
 def _save_checkpoint(
     states: dict[str, ScalarField],
     grid_params: gp_lib.GridParametrization,
@@ -601,12 +869,19 @@ def _save_checkpoint(
     checkpoint_dir: Directory for zarr checkpoints.
   """
   ckpt_path = os.path.join(checkpoint_dir, f'step_{step:06d}.zarr')
+  # Prefer the accumulated time carried in the state over `step * dt`, which
+  # is only equal to it while `dt` never changes.
+  sim_time = (
+      float(states[TIME_VARNAME])
+      if TIME_VARNAME in states
+      else step * grid_params.dt
+  )
   checkpoint_lib.save(
       states,
       grid_params,
       step=step,
       path=ckpt_path,
-      sim_time=step * grid_params.dt,
+      sim_time=sim_time,
   )
   logging.info('Checkpoint saved: %s', ckpt_path)
 
@@ -618,6 +893,7 @@ def run_simulation(
     mesh: Mesh | None = None,
     additional_states: ScalarFieldMap | None = None,
     restart_from: str | None = None,
+    restart_fields: Sequence[str] | None = None,
     num_steps_per_cycle: int = 1,
     checkpoint_dir: str | None = None,
     checkpoint_interval: int = 0,
@@ -649,6 +925,10 @@ def run_simulation(
       grid scale factors, etc.). Empty dict if None.
     restart_from: Path to a zarr checkpoint to restart from. Variables present
       in the checkpoint override those from `init_fn`.
+    restart_fields: Variables to restore when restarting. If None, the
+      prognostic state, the accumulated simulation time and the boundary
+      condition states are restored; derived and grid-derived variables are
+      recomputed from this configuration instead.
     num_steps_per_cycle: Number of time steps per cycle. Higher values reduce
       Python loop overhead but delay IO. Default is 1.
     checkpoint_dir: Directory for zarr checkpoints. If None, no checkpointing.
@@ -683,25 +963,6 @@ def run_simulation(
         _shard_global_additional_states(additional_states, mesh, params)
     )
 
-  # Override with checkpoint data if restarting.
-  if restart_from is not None:
-    ckpt_states, metadata = checkpoint_lib.load(restart_from)
-    overridden = []
-    for key, value in ckpt_states.items():
-      if key in state:
-        state[key] = value
-        overridden.append(key)
-      else:
-        logging.warning(
-            'Checkpoint variable %r not in init states; skipping.', key
-        )
-    logging.info(
-        'Restarted from checkpoint %s (step %s). Overrode variables: %s',
-        restart_from,
-        metadata.get('step', '?'),
-        overridden,
-    )
-
   # Create simulation model.
   sim = simulation_lib.Simulation(params)
   gp = params.grid_params
@@ -723,15 +984,34 @@ def run_simulation(
       sorted(declared_keys - state_keys),
   )
 
+  # Override with checkpoint data if restarting. This runs before the
+  # shard_map specs are derived from `state`, so the restored arrays are what
+  # those specs describe.
+  if restart_from is not None:
+    _restore_from_checkpoint(
+        state, restart_from, params, essential_keys, restart_fields
+    )
+
+  # Canonicalize the dtypes of everything that enters the cycle. This is the
+  # only place that sees the merged state, so one call covers `init_fn` via
+  # `_distribute_states`, caller-supplied `additional_states` via
+  # `_shard_global_additional_states`, and the restart override. It must cover
+  # every leaf, including the 0D `TIME_VARNAME` and the boundary condition and
+  # helper variables: a single weakly typed leaf left behind costs the same
+  # extra compilation as all of them. For a weak leaf this is a real device
+  # copy, paid once here rather than as a second compilation of the cycle.
+  state = _strengthen_dtypes(state)
+
   # Build the JIT-compiled cycle function with shard_map.
   # The cycle function runs `num_steps_per_cycle` time steps. Inside each step:
   #   1. Split state -> essential + additional
   #   2. Preprocess (conditional on step_id)
   #   3. _update_additional_states
   #   4. sim.step
-  #   5. Postprocess (conditional on step_id)
-  #   6. TIME_VARNAME += dt
-  #   7. Merge back into flat state
+  #   5. Refresh the additional states from the solver's output
+  #   6. Postprocess (conditional on step_id)
+  #   7. TIME_VARNAME += dt
+  #   8. Merge back into flat state
   #
   # This matches the TF `_one_cycle` structure. The step body runs inside
   # shard_map so that collective ops (ppermute, axis_index, psum) have
@@ -796,10 +1076,20 @@ def run_simulation(
       # 3. Run one simulation step.
       updated_state = sim.step(ess, add, mesh)
 
-      # 4. Postprocess.
+      # 4. Pull the solver's results back into `add` before anything else
+      # reads or writes it. `sim.step` owns some of the additional states --
+      # `nu_t`, `drho`, the buoyancy diagnostics -- and returns the updated
+      # value for those while returning the unchanged input for the rest, so
+      # this refresh is what makes `add` current. Without it the stale
+      # pre-step `add` is written back over the solver's output in step 6
+      # below, which is how `nu_t` stayed identically zero for a whole run
+      # despite `use_sgs: true`, and with it `tke`, which is derived from the
+      # stored `nu_t` by the combustion model.
+      add = _stateless_update_if_present(add, updated_state)
+
+      # 5. Postprocess.
       if params.apply_postprocess and params.postprocessing_states_update_fn:
         # Split updated_state back into essential/additional.
-        add = _stateless_update_if_present(add, updated_state)
         ess = _stateless_update_if_present(ess, updated_state)
 
         ess, add = _process_at_step_id(
@@ -814,16 +1104,26 @@ def run_simulation(
         # Merge back.
         updated_state = _stateless_update_if_present(updated_state, ess)
 
-      # 5. Merge additional states updates into updated_state.
+      # 6. Merge the additional states back into updated_state. `add` is
+      # current as of step 4, so this no longer discards the solver's output.
       updated_state.update(add)
 
-      # 6. Accumulate simulation time.
+      # 7. Accumulate simulation time.
       updated_state[TIME_VARNAME] = state_carry[TIME_VARNAME] + jnp.float64(
           params.dt
       )
 
-      # 7. Merge updates back into state (pass-through keys like helper vars).
-      new_state = _stateless_update_if_present(state_carry, updated_state)
+      # 8. Merge updates back into state (pass-through keys like helper vars).
+      # The carry is re-canonicalized because step 3 above is the only step
+      # not wrapped in `lax.cond` (which would unify the types itself), so a
+      # user `additional_states_update_fn` can hand back a weakly typed value
+      # -- `jnp.where(x > 0.0, 1.0, 0.0)` does exactly that -- and `lax.scan`
+      # does not promote a weak carry. That would flip the cycle's output
+      # aval and recompile it. This lowers to nothing when the types already
+      # match.
+      new_state = _strengthen_dtypes(
+          _stateless_update_if_present(state_carry, updated_state)
+      )
 
       return (new_state, step_id + 1), None
 
@@ -920,9 +1220,12 @@ def run_simulation(
         io_time,
     )
 
-  # Save final checkpoint.
+  # Save final checkpoint. `steps_completed` rather than `num_steps`: the
+  # cycle loop runs `num_steps // num_steps_per_cycle` cycles, so the two
+  # differ whenever that division has a remainder, and `num_steps` would
+  # label the file with steps that were never taken.
   if checkpoint_dir:
-    _save_checkpoint(state, gp, num_steps, checkpoint_dir)
+    _save_checkpoint(state, gp, steps_completed, checkpoint_dir)
 
-  logging.info('Simulation completed after %d steps.', num_steps)
+  logging.info('Simulation completed after %d steps.', steps_completed)
   return state

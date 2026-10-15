@@ -75,8 +75,8 @@ def compute_global_tke(
   u_mean = common_ops.global_mean(u, replicas, halos)
   v_mean = common_ops.global_mean(v, replicas, halos)
   w_mean = common_ops.global_mean(w, replicas, halos)
-  local_tke = (u - u_mean)**2 + (v - v_mean)**2 + (w - w_mean)**2  # pyrefly: ignore[unsupported-operation]
-  return (0.5 * common_ops.global_mean(local_tke, replicas, halos),  # pyrefly: ignore[bad-return, unsupported-operation]
+  local_tke = (u - u_mean)**2 + (v - v_mean)**2 + (w - w_mean)**2
+  return (0.5 * common_ops.global_mean(local_tke, replicas, halos),
           u_mean, v_mean, w_mean)
 
 
@@ -242,19 +242,19 @@ def curl(
     ∇ × (u, v, w).
   """
 
-  dwdy = kernel_op.apply_kernel_op_y(w, 'kDy') / dy  # pyrefly: ignore[unsupported-operation]
-  dvdz = kernel_op.apply_kernel_op_z(v, 'kDz', 'kDzsh') / dz  # pyrefly: ignore[unsupported-operation]
+  dwdy = kernel_op.apply_kernel_op_y(w, 'kDy') / dy
+  dvdz = kernel_op.apply_kernel_op_z(v, 'kDz', 'kDzsh') / dz
   curl_x = 0.5 * (dwdy - dvdz)
 
-  dudz = kernel_op.apply_kernel_op_z(u, 'kDz', 'kDzsh') / dz  # pyrefly: ignore[unsupported-operation]
-  dwdx = kernel_op.apply_kernel_op_x(w, 'kDx') / dx  # pyrefly: ignore[unsupported-operation]
+  dudz = kernel_op.apply_kernel_op_z(u, 'kDz', 'kDzsh') / dz
+  dwdx = kernel_op.apply_kernel_op_x(w, 'kDx') / dx
   curl_y = 0.5 * (dudz - dwdx)
 
-  dvdx = kernel_op.apply_kernel_op_x(v, 'kDx') / dx  # pyrefly: ignore[unsupported-operation]
-  dudy = kernel_op.apply_kernel_op_y(u, 'kDy') / dy  # pyrefly: ignore[unsupported-operation]
+  dvdx = kernel_op.apply_kernel_op_x(v, 'kDx') / dx
+  dudy = kernel_op.apply_kernel_op_y(u, 'kDy') / dy
   curl_z = 0.5 * (dvdx - dudy)
 
-  return (curl_x, curl_y, curl_z)  # pyrefly: ignore[bad-return]
+  return (curl_x, curl_y, curl_z)
 
 
 def enstrophy(
@@ -293,7 +293,7 @@ def enstrophy(
   """
   curl_x, curl_y, curl_z = curl(kernel_op, u, v, w, dx, dy, dz)
   return common_ops.global_mean(
-      curl_x**2 + curl_y**2 + curl_z**2, replicas, halos  # pyrefly: ignore[unsupported-operation]
+      curl_x**2 + curl_y**2 + curl_z**2, replicas, halos
   )
 
 
@@ -321,10 +321,10 @@ def gradient(
     each element representing one component of the vector. Note the width one
     halo region will not have the correct values.
   """
-  grad_x = 0.5 * kernel_op.apply_kernel_op_x(u, 'kDx') / dx  # pyrefly: ignore[unsupported-operation]
-  grad_y = 0.5 * kernel_op.apply_kernel_op_y(u, 'kDy') / dy  # pyrefly: ignore[unsupported-operation]
-  grad_z = 0.5 * kernel_op.apply_kernel_op_z(u, 'kDz', 'kDzsh') / dz  # pyrefly: ignore[unsupported-operation]
-  return (grad_x, grad_y, grad_z)  # pyrefly: ignore[bad-return]
+  grad_x = 0.5 * kernel_op.apply_kernel_op_x(u, 'kDx') / dx
+  grad_y = 0.5 * kernel_op.apply_kernel_op_y(u, 'kDy') / dy
+  grad_z = 0.5 * kernel_op.apply_kernel_op_z(u, 'kDz', 'kDzsh') / dz
+  return (grad_x, grad_y, grad_z)
 
 
 def strain_rate(
@@ -360,11 +360,11 @@ def strain_rate(
   s2 = gradient(kernel_op, v, dx, dy, dz)
   s3 = gradient(kernel_op, w, dx, dy, dz)
   s11 = s1[0]
-  s12 = 0.5 * (s1[1] + s2[0])  # pyrefly: ignore[unsupported-operation]
-  s13 = 0.5 * (s1[2] + s3[0])  # pyrefly: ignore[unsupported-operation]
+  s12 = 0.5 * (s1[1] + s2[0])
+  s13 = 0.5 * (s1[2] + s3[0])
   s21 = s12
   s22 = s2[1]
-  s23 = 0.5 * (s2[2] + s3[1])  # pyrefly: ignore[unsupported-operation]
+  s23 = 0.5 * (s2[2] + s3[1])
   s31 = s13
   s32 = s23
   s33 = s3[2]
@@ -412,7 +412,7 @@ def dissipation_rate(
   for i in range(3):
     for j in range(3):
       square_sum += tf.square(s[i][j])
-  return 2.0 * nu * common_ops.global_mean(square_sum, replicas, halos)  # pyrefly: ignore[bad-return, unsupported-operation]
+  return 2.0 * nu * common_ops.global_mean(square_sum, replicas, halos)
 
 
 def kolmogorov_scales(
@@ -457,9 +457,9 @@ def kolmogorov_scales(
   """
   eps = dissipation_rate(kernel_op, u, v, w, dx, dy, dz, nu, halos,
                          group_assignment)
-  eta = (nu**3 / eps)**0.25  # pyrefly: ignore[unsupported-operation]
-  t_eta = tf.math.sqrt(nu / eps)  # pyrefly: ignore[unsupported-operation]
-  u_eta = (nu * eps)**0.25  # pyrefly: ignore[unsupported-operation]
+  eta = (nu**3 / eps)**0.25
+  t_eta = tf.math.sqrt(nu / eps)
+  u_eta = (nu * eps)**0.25
   return eta, t_eta, u_eta
 
 

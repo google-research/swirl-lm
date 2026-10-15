@@ -374,9 +374,9 @@ def get_init_rho_f(
   # grid point with z=0. Note that if the ground elevation is 0 than the first
   # fuel cell will be in the halo.
 
-  quantized_ground_elevation = tf.math.ceil(ground_elevation / dz) * dz - 2 * dz  # pyrefly: ignore[unsupported-operation]
+  quantized_ground_elevation = tf.math.ceil(ground_elevation / dz) * dz - 2 * dz
   num_full_cells = tf.cast(
-      tf.floor(fuel_bed_height / dz), quantized_ground_elevation.dtype  # pyrefly: ignore[unsupported-operation]
+      tf.floor(fuel_bed_height / dz), quantized_ground_elevation.dtype
   )
   # Note that the number of full cells is one more than given by
   # fuel_bed_height because we also put fuel into the boundary cell (i.e.,
@@ -391,8 +391,8 @@ def get_init_rho_f(
     # Bottom grid points are fully filled with the given fuel density.
     rho_f_bottom = tf.compat.v1.where(
         tf.math.logical_and(
-            zz > quantized_ground_elevation + 0.1 * dz,  # pyrefly: ignore[unsupported-operation]
-            zz < quantized_full_fuel_height + 0.1 * dz  # pyrefly: ignore[unsupported-operation]
+            zz > quantized_ground_elevation + 0.1 * dz,
+            zz < quantized_full_fuel_height + 0.1 * dz
         ),
         fuel_density * tf.ones_like(zz),
         tf.zeros_like(zz),
@@ -401,8 +401,8 @@ def get_init_rho_f(
     # fuel bed height extends into the last grid cell.
     rho_f_top = tf.where(
         tf.math.logical_and(
-            zz >= quantized_full_fuel_height + 0.1 * dz,  # pyrefly: ignore[unsupported-operation]
-            zz < quantized_full_fuel_height + 1.1 * dz  # pyrefly: ignore[unsupported-operation]
+            zz >= quantized_full_fuel_height + 0.1 * dz,
+            zz < quantized_full_fuel_height + 1.1 * dz
         ),
         tf.cast(rho_f_top_val, tf.float32),
         tf.zeros_like(zz),
@@ -435,7 +435,7 @@ class Fire:
     self.firebench_initialization = firebench_initialization
     self.firebench_states_update_fn = firebench_states_update_fn
 
-    self.coriolis_force_fn = cloud_utils.coriolis_force(0.5497607357, {  # pyrefly: ignore[bad-argument-type]
+    self.coriolis_force_fn = cloud_utils.coriolis_force(0.5497607357, {
         'u': self.fire_utils.u_init,  # pyrefly: ignore[bad-assignment]
         'v': self.fire_utils.v_init,  # pyrefly: ignore[bad-assignment]
         'w': 0.0
@@ -581,7 +581,7 @@ class Fire:
       temperature: tf.Tensor,
   ) -> tf.Tensor:
     """Sets a high temperature region at the specified location."""
-    return temperature + (self.fire_utils.ignition_temperature -  # pyrefly: ignore[bad-return, unsupported-operation]
+    return temperature + (self.fire_utils.ignition_temperature -
                           temperature) * ignition_kernel
 
   def _rescale_horizontal_velocity(
@@ -1005,7 +1005,7 @@ class Fire:
           self.firebench_states_update_fn(
               replica_id,
               replicas,
-              step_id - self.config.start_step,  # pyrefly: ignore[bad-argument-type, unsupported-operation]
+              step_id - self.config.start_step,
               states,
               additional_states,
               params,
@@ -1299,9 +1299,9 @@ class Fire:
           )
       })
     else:
-      output.update({  # pyrefly: ignore[no-matching-overload]
+      output.update({
           'rho':
-              self.config.rho * self.fire_utils.states_init(  # pyrefly: ignore[unsupported-operation]
+              self.config.rho * self.fire_utils.states_init(
                   coordinates, self.fire_utils.init_fn_ones)  # pyrefly: ignore[bad-argument-type]
       })
 
@@ -1343,7 +1343,7 @@ class Fire:
       # Update the initial velocity so that it is 0 inside the solid.
       output.update(
           {
-              key: output[key] * output['ib_interior_mask']  # pyrefly: ignore[unsupported-operation]
+              key: output[key] * output['ib_interior_mask']
               for key in ('u', 'v', 'w')
           }
       )
@@ -1423,7 +1423,7 @@ class Fire:
       if self.ib is not None:
         output.update({
             'ignition_kernel':
-                output['ignition_kernel'] * output['ib_interior_mask']  # pyrefly: ignore[unsupported-operation]
+                output['ignition_kernel'] * output['ib_interior_mask']
         })
 
       # Add additional states required if moisture is considered in the

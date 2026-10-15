@@ -198,8 +198,13 @@ class SimulatedTurbulentInflow():
       start_step_id: int,
   ) -> Tuple[int, int, float]:
     """Computes the core and local indices for time with fraction of delta t."""
-    t = self._params.dt * tf.cast(step_id - start_step_id, dtype=types.TF_DTYPE)  # pyrefly: ignore[unsupported-operation]
-    t_index_global = tf.cast(t // self._model_params.delta_t, dtype=tf.int32)
+    step_offset = tf.cast(step_id - start_step_id, dtype=types.TF_DTYPE)
+    t_index_global = tf.cast(
+        tf.math.floor(
+            step_offset * (self._params.dt / self._model_params.delta_t)
+        ),
+        dtype=tf.int32,
+    )
     core_index = tf.cast(
         t_index_global // self._inflow_data_shape[0], dtype=tf.int32)
     plane_index = tf.cast(
@@ -209,7 +214,7 @@ class SimulatedTurbulentInflow():
         dtype=tf.int32)
     t_fraction = tf.math.divide(
         tf.math.floormod(
-            tf.cast(step_id - start_step_id, dtype=tf.int32), t_scale), t_scale)  # pyrefly: ignore[unsupported-operation]
+            tf.cast(step_id - start_step_id, dtype=tf.int32), t_scale), t_scale)
     return core_index, plane_index, tf.cast(t_fraction, dtype=types.TF_DTYPE)
 
   def initialize_inflow(self) -> types.FlowFieldMap:
@@ -346,7 +351,7 @@ class SimulatedTurbulentInflow():
       # data is used is greater than those generated, the inflow BC re-iterates
       # from the beginning of the inflow data after it reaches the last plane.
       t = tf.cast(
-          step_id - self._model_params.start_step_id,  # pyrefly: ignore[unsupported-operation]
+          step_id - self._model_params.start_step_id,
           dtype=types.TF_DTYPE) * self._params.dt
       t_cycle = self._model_params.nt * self._model_params.delta_t
       step_id_recoil = tf.math.round((t % t_cycle) / self._params.dt)

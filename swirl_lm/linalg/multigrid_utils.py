@@ -111,8 +111,8 @@ def zero_borders(x: TensorOrArray) -> TensorOrArray:
 def add_borders(x: TensorOrArray, y: TensorOrArray) -> TensorOrArray:
   """Returns `x` with the borders of `y` added."""
   ones_like = tf.ones_like if isinstance(x, tf.Tensor) else np.ones_like
-  mask = 1 - zero_borders(ones_like(x))  # pyrefly: ignore[unsupported-operation]
-  return x + mask * y  # pyrefly: ignore[bad-return, unsupported-operation]
+  mask = 1 - zero_borders(ones_like(x))
+  return x + mask * y
 
 
 def get_homogeneous_boundary_conditions(
@@ -260,7 +260,7 @@ def jacobi(
     mask = zero_borders(ones_like(x))
 
   def body(x, i):
-    update = weight * mask * a_inv_diagonal(b - a_operator(x))  # pyrefly: ignore[unsupported-operation]
+    update = weight * mask * a_inv_diagonal(b - a_operator(x))
     x += update
     if halo_exchange_fn:
       x = halo_exchange_fn(x)
@@ -321,14 +321,14 @@ def laplacian_and_inv_diagonal_fns(
 
   def laplacian(x: TensorOrArray) -> TensorOrArray:
     roll = tf.roll if isinstance(x, tf.Tensor) else np.roll
-    lap = diag * x  # pyrefly: ignore[unsupported-operation]
+    lap = diag * x
     for i in range(rank):
-      lap += ((roll(x, shift=1, axis=i) + roll(x, shift=-1, axis=i))  # pyrefly: ignore[no-matching-overload]
+      lap += ((roll(x, shift=1, axis=i) + roll(x, shift=-1, axis=i))
               / dxs[i]**2)
-    return lap  # pyrefly: ignore[bad-return]
+    return lap
 
   def inv_diagonal(x: TensorOrArray) -> TensorOrArray:
-    return x / diag  # pyrefly: ignore[bad-return, unsupported-operation]
+    return x / diag
 
   return laplacian, inv_diagonal
 
@@ -434,7 +434,7 @@ def poisson_residual(
   laplacian, _ = laplacian_and_inv_diagonal_fns(full_grid_shape,
                                                 full_grid_lengths)
 
-  return b - laplacian(x)  # pyrefly: ignore[unsupported-operation]
+  return b - laplacian(x)
 
 
 def poisson_residual_norm(
@@ -449,10 +449,10 @@ def poisson_residual_norm(
   res_no_border = poisson_residual(x, b, params, full_grids)[inner]
   if isinstance(x, tf.Tensor):
     return tf.norm(res_no_border)
-  return np.linalg.norm(res_no_border)  # pyrefly: ignore[bad-return]
+  return np.linalg.norm(res_no_border)
 
 
-def prolong_matrix(n2: int, n1: Optional[int] = None,  # pytype: disable=annotation-type-mismatch  # numpy-scalars
+def prolong_matrix(n2: int, n1: Optional[int] = None,
                    dtype: np.dtype = _NP_DTYPE) -> np.ndarray:  # pyrefly: ignore[bad-function-definition]
   """Returns a prolongation matrix (2D numpy array).
 
@@ -507,7 +507,7 @@ def _restrict_matrix_from_prolong(p: np.ndarray) -> np.ndarray:
   return p.T * (n1 - 1) / (n2 - 1)
 
 
-def restrict_matrix(n2: int, n1: Optional[int] = None,  # pytype: disable=annotation-type-mismatch  # numpy-scalars
+def restrict_matrix(n2: int, n1: Optional[int] = None,
                     dtype: np.dtype = _NP_DTYPE) -> np.ndarray:  # pyrefly: ignore[bad-function-definition]
   """Returns a restriction matrix from `n2` to `n1`. See `prolong_matrix`."""
   return _restrict_matrix_from_prolong(prolong_matrix(n2, n1, dtype))
@@ -533,7 +533,7 @@ def _grid_sizes(n2: int, n1: int) -> List[Tuple[int, int]]:
   return sizes
 
 
-def _prolong_matrices(n2: int, n1: int,  # pytype: disable=annotation-type-mismatch  # numpy-scalars
+def _prolong_matrices(n2: int, n1: int,
                       dtype: np.dtype = _NP_DTYPE) -> List[np.ndarray]:  # pyrefly: ignore[bad-function-definition]
   """Returns a sequence of prolongation matrices from `n2` to `n1`."""
   return [prolong_matrix(m2, m1, dtype) for m2, m1 in _grid_sizes(n2, n1)]
@@ -617,7 +617,7 @@ def prolong_restrict_matrices(
 
   log_full_grid_shapes_from_ps(ps)
 
-  return (ps, rs)  # pytype: disable=bad-return-type
+  return (ps, rs)  # pyrefly: ignore[bad-return]
 
 
 def full_1d_grid_size_pairs(
@@ -671,7 +671,7 @@ def full_1d_grid_size_pairs(
   return sizes
 
 
-def prolong_restrict_matrices_from_params(  # pytype: disable=annotation-type-mismatch  # numpy-scalars
+def prolong_restrict_matrices_from_params(
     params: grid_parametrization.GridParametrization,
     coarsest_subgrid_shape: Optional[Sequence[int]] = None,
     dtype: np.dtype = _NP_DTYPE  # pyrefly: ignore[bad-function-definition]
@@ -724,7 +724,7 @@ def prolong_restrict_matrices_from_params(  # pytype: disable=annotation-type-mi
                                                dtype)
 
 
-def prolong_restrict_matrices_from_shapes(  # pytype: disable=annotation-type-mismatch  # numpy-scalars
+def prolong_restrict_matrices_from_shapes(
     full_grid_shape: Sequence[int],
     coarsest_subgrid_shape: Sequence[int],
     computation_shape: Sequence[int],
@@ -802,7 +802,7 @@ def convert_ps_rs_dict_to_tuple(
   return (ps, rs)
 
 
-def get_ps_rs_init_fn(params: grid_parametrization.GridParametrization,  # pytype: disable=annotation-type-mismatch  # numpy-scalars
+def get_ps_rs_init_fn(params: grid_parametrization.GridParametrization,
                       coarsest_subgrid_shape: Optional[Sequence[int]] = None,
                       dtype: np.dtype = _NP_DTYPE):  # pyrefly: ignore[bad-function-definition]
   """Returns an init function for prolongation and restriction matrices.
@@ -893,7 +893,7 @@ def get_full_grids_init_fn(
   if a_operator is None:
     a_operator = laplacian_and_inv_diagonal_fns(
         full_grid_shape, full_grid_lengths)[0]
-  b_minus_a_xb = b - a_operator(xb)  # pyrefly: ignore[unsupported-operation]
+  b_minus_a_xb = b - a_operator(xb)
 
   def subgrid_of_3d_grid(full_3d_grid, coordinates):
     """Retrieves the subgrid in the partition specified by `coordinates`."""
@@ -1017,11 +1017,11 @@ def kronecker_products(ms: Sequence[Optional[TensorOrArray]],
   for i, m in enumerate(ms):
     if m is not None:
       indices = kronecker_einsum_indices(rank, i)
-      x = einsum(indices, m, x)  # pyrefly: ignore[no-matching-overload]
+      x = einsum(indices, m, x)
   return x
 
 
-def laplacian_matrix(  # pytype: disable=annotation-type-mismatch  # numpy-scalars
+def laplacian_matrix(
     shape: Sequence[int],
     grid_lengths: Optional[Sequence[float]] = None,
     boundary_conditions: Optional[BoundaryConditionsSpec] = None,
@@ -1121,7 +1121,7 @@ def laplacian_matrix(  # pytype: disable=annotation-type-mismatch  # numpy-scala
   return a
 
 
-def inverse_laplacian_matrix(  # pytype: disable=annotation-type-mismatch  # numpy-scalars
+def inverse_laplacian_matrix(
     shape: Sequence[int],
     grid_lengths: Optional[Sequence[float]] = None,
     boundary_conditions: Optional[BoundaryConditionsSpec] = None,
@@ -1158,7 +1158,7 @@ def solve(a: TensorOrArray, b: TensorOrArray) -> TensorOrArray:
   reshape, solve_fn = ((np.reshape, sp.linalg.solve)
                        if isinstance(b, np.ndarray)
                        else (tf.reshape, tf.linalg.solve))
-  return reshape(solve_fn(a, reshape(b, [-1, 1])), shape)  # pyrefly: ignore[no-matching-overload]
+  return reshape(solve_fn(a, reshape(b, [-1, 1])), shape)
 
 
 def matmul(a: TensorOrArray, x: TensorOrArray) -> TensorOrArray:

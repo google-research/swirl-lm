@@ -286,7 +286,7 @@ class GCMColumn(common_lib.GeophysicalFlowSetup):
 
       res = tf.nest.map_structure(tf.math.subtract, theta, states['theta'])
 
-      return i + 1, {'p': p, 'theta': theta, 'q_l': q_l, 'q_i': q_i, 'res': res}  # pyrefly: ignore[bad-return, unsupported-operation]
+      return i + 1, {'p': p, 'theta': theta, 'q_l': q_l, 'q_i': q_i, 'res': res}
 
     states = self._iterative_solve(body, states_0)
     return {
@@ -419,7 +419,7 @@ class GCMColumn(common_lib.GeophysicalFlowSetup):
 
       res = tf.nest.map_structure(tf.math.subtract, theta, states['theta'])
 
-      return i + 1, {'p': p, 'theta': theta, 'q_l': q_l, 'q_i': q_i, 'res': res}  # pyrefly: ignore[bad-assignment, bad-return, unsupported-operation]
+      return i + 1, {'p': p, 'theta': theta, 'q_l': q_l, 'q_i': q_i, 'res': res}  # pyrefly: ignore[bad-assignment]
 
     states = self._iterative_solve(body, states_0)
     theta_li = (

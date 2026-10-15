@@ -351,7 +351,7 @@ def _update_additional_states(
   # Update BC additional states. Note currently this is only done
   # for the nonreflecting BC and will be  a no-op if there is no nonreflecting
   # BC present.
-  with tf.name_scope('bc_additional_states_update'):  # pyrefly: ignore[bad-instantiation]
+  with tf.name_scope('bc_additional_states_update'):
     updated_additional_states.update(
         nonreflecting_boundary.nonreflecting_bc_state_update_fn(
             states=essential_states,
@@ -362,7 +362,7 @@ def _update_additional_states(
     )
 
   # Update lagrangian particle additional states.
-  with tf.name_scope('lpt_additional_states_update'):  # pyrefly: ignore[bad-instantiation]
+  with tf.name_scope('lpt_additional_states_update'):
     lpt_field = lpt_manager.lpt_factory(params)
     if lpt_field is not None:
       updated_additional_states.update(
@@ -376,7 +376,7 @@ def _update_additional_states(
       )
 
   if params.additional_states_update_fn is not None:
-    with tf.name_scope('additional_states_update'):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope('additional_states_update'):
       updated_additional_states = params.additional_states_update_fn(
           states=essential_states,
           additional_states=additional_states,
@@ -549,7 +549,7 @@ def _one_cycle(
 
       # Perform a preprocessing step, if configured.
       if params.apply_preprocess:
-        with tf.name_scope('preprocess_update'):  # pyrefly: ignore[bad-instantiation]
+        with tf.name_scope('preprocess_update'):
           essential_states, additional_states = _process_at_step_id(
               process_fn=functools.partial(
                   params.preprocessing_states_update_fn, **common_kwargs
@@ -583,7 +583,7 @@ def _one_cycle(
 
       # Perform a postprocessing step, if configured.
       if params.apply_postprocess:
-        with tf.name_scope('postprocess_update'):  # pyrefly: ignore[bad-instantiation]
+        with tf.name_scope('postprocess_update'):
           # Split the updated_state into essential states and additional states.
           additional_states = _stateless_update_if_present(
               additional_states, updated_state
@@ -612,7 +612,7 @@ def _one_cycle(
           )
 
       if SAVE_MAX_UVW_AND_CFL.value:
-        with tf.name_scope('retrieve_grid_spacings'):  # pyrefly: ignore[bad-instantiation]
+        with tf.name_scope('retrieve_grid_spacings'):
           grid_spacings_1d: tuple[FlowFieldVal, FlowFieldVal, FlowFieldVal] = (
               tuple(  # pyrefly: ignore[bad-assignment]
                   params.physical_grid_spacing(
@@ -621,7 +621,7 @@ def _one_cycle(
                   for dim in (0, 1, 2)
               )
           )
-        with tf.name_scope('save_max_cfl'):  # pyrefly: ignore[bad-instantiation]
+        with tf.name_scope('save_max_cfl'):
           updated_state[_MAX_UVW_CFL] = tf.tensor_scatter_nd_add(
               state[_MAX_UVW_CFL],
               tf.convert_to_tensor([
@@ -646,7 +646,7 @@ def _one_cycle(
       state = _stateless_update_if_present(state, updated_state)
       cycle_step_id += 1
       if SAVE_LAST_VALID_STEP.value:
-        with tf.name_scope('save_last_valid_step'):  # pyrefly: ignore[bad-instantiation]
+        with tf.name_scope('save_last_valid_step'):
           if _state_has_nan_inf(state, logical_replicas):
             # Detected nan/inf, skip the update of state by early-exiting from
             # the for loop.
@@ -1075,7 +1075,7 @@ def solver_loop(
     )
     # num_steps_completed and has_non_finite are guaranteed to be identical for
     # all replicas, so we are just taking replica 0 value.
-    with tf.name_scope('check_states_validity'):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope('check_states_validity'):
       num_steps_completed = _local_state_value(
           strategy, num_steps_completed)[0].numpy()
       has_non_finite = _local_state_value(
@@ -1084,7 +1084,7 @@ def solver_loop(
     step_id.assign_add(num_steps_completed)
 
     if SAVE_MAX_UVW_AND_CFL.value:
-      with tf.name_scope('print_max_cfl'):  # pyrefly: ignore[bad-instantiation]
+      with tf.name_scope('print_max_cfl'):
         # CFL number is guaranteed to be identical for all replicas, so take
         # replica 0 value.
         cfl_values = (
@@ -1102,13 +1102,13 @@ def solver_loop(
 
     # If we just attempted the first cycle, log information about available
     # debug variables to help with debugging.
-    with tf.name_scope('log_debug_variable'):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope('log_debug_variable'):
       if cycle == 0:
         debug_output.log_variable_use()
 
     # Check if we did not complete a full cycle.
     if has_non_finite:
-      with tf.name_scope('logging_non_finite_states'):  # pyrefly: ignore[bad-instantiation]
+      with tf.name_scope('logging_non_finite_states'):
         logging.info(
             'Non-convergence detected. Early exit from cycle %d at step %d.',
             cycle, step_id_value())
@@ -1143,7 +1143,7 @@ def solver_loop(
 
     # Consider explicitly deleting prev_state here to free its memory because
     # after its written to disk it is no longer needed.
-    with tf.name_scope('logging_time_info'):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope('logging_time_info'):
       replica_id_values = []
       replica_id_values.extend(
           _local_state_value(strategy, state['replica_id'])
@@ -1168,7 +1168,7 @@ def solver_loop(
     # Save checkpoint if the current step, from the start of the simulation,
     # is a multiple of the checkpoint interval, else just record, a possibly
     # shortened version of the current state.
-    with tf.name_scope('writing_checkpoints'):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope('writing_checkpoints'):
       if (step_id_value() - params.start_step) % checkpoint_interval == 0:
         write_status = write_state_and_sync(
             state=state, step_id=step_id_value()

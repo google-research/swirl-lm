@@ -111,7 +111,7 @@ class LookupVolumeMixingRatio:
         global_means=global_means,
         profiles=profiles,
     )
-    return cls(**kwargs)  # pyrefly: ignore[bad-argument-type]
+    return cls(**kwargs)
 
   def _vmr_interpolant_fn(
       self,

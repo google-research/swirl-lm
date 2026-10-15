@@ -99,12 +99,12 @@ def compute_optical_properties(
   # mask constructed below.
   particle_size = [
       tf.clip_by_value(
-          _M_TO_MICRONS_FACTOR * radius_eff_liq,  # pyrefly: ignore[unsupported-operation]
+          _M_TO_MICRONS_FACTOR * radius_eff_liq,
           lookup.radius_liq_lower,
           lookup.radius_liq_upper,
       ),
       tf.clip_by_value(
-          _M_TO_MICRONS_FACTOR * 2.0 * radius_eff_ice,  # pyrefly: ignore[unsupported-operation]
+          _M_TO_MICRONS_FACTOR * 2.0 * radius_eff_ice,
           lookup.diameter_ice_lower,
           lookup.diameter_ice_upper,
       ),
@@ -125,18 +125,18 @@ def compute_optical_properties(
   asy_tables = (lookup.asy_liq[ibnd, :], lookup.asy_ice[roughness, ibnd, :])
   # Convert cloud path to g/m² to conform to the lookup tables.
   cloud_path = (
-      cloud_path_liq * _KG_TO_G_FACTOR,  # pyrefly: ignore[unsupported-operation]
-      cloud_path_ice * _KG_TO_G_FACTOR,  # pyrefly: ignore[unsupported-operation]
+      cloud_path_liq * _KG_TO_G_FACTOR,
+      cloud_path_ice * _KG_TO_G_FACTOR,
   )
 
   cld_mask_liq = tf.where(
-      tf.greater_equal(cloud_path_liq * _KG_TO_G_FACTOR, _EPSILON),  # pyrefly: ignore[unsupported-operation]
+      tf.greater_equal(cloud_path_liq * _KG_TO_G_FACTOR, _EPSILON),
       tf.ones_like(cloud_path_liq),
       tf.zeros_like(cloud_path_liq),
   )
 
   cld_mask_ice = tf.where(
-      tf.greater_equal(cloud_path_ice * _KG_TO_G_FACTOR, _EPSILON),  # pyrefly: ignore[unsupported-operation]
+      tf.greater_equal(cloud_path_ice * _KG_TO_G_FACTOR, _EPSILON),
       tf.ones_like(cloud_path_ice),
       tf.zeros_like(cloud_path_ice),
   )

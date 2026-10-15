@@ -460,7 +460,7 @@ def _angle_to_point(
     point_y: float,
 ) -> initializer.TensorOrArray:
   """Computes the angle in radians from mesh points in `xx`, `yy` to a point."""
-  return tf.math.atan2(yy - point_y, xx - point_x)  # pyrefly: ignore[unsupported-operation]
+  return tf.math.atan2(yy - point_y, xx - point_x)
 
 
 def _distance_to_point(
@@ -471,7 +471,7 @@ def _distance_to_point(
 ) -> initializer.TensorOrArray:
   """Computes the distance from mesh points in `xx`, `yy` to a point."""
   return tf.math.sqrt(
-      tf.math.pow(xx - point_x, 2) + tf.math.pow(yy - point_y, 2)  # pyrefly: ignore[unsupported-operation]
+      tf.math.pow(xx - point_x, 2) + tf.math.pow(yy - point_y, 2)
   )
 
 
@@ -509,12 +509,12 @@ def _between_angles(
     A boolean array with the same shape as `x_radians`.
   """
   pi2 = 2 * np.pi
-  x = x_radians % pi2  # pyrefly: ignore[unsupported-operation]
+  x = x_radians % pi2
   theta_0, theta_1 = theta_0_radians % pi2, theta_1_radians % pi2
   if theta_0 < theta_1:
-    return (theta_0 <= x) & (x <= theta_1)  # pyrefly: ignore[bad-return]
+    return (theta_0 <= x) & (x <= theta_1)
   else:
-    return (x >= theta_0) | (x <= theta_1)  # pyrefly: ignore[bad-return]
+    return (x >= theta_0) | (x <= theta_1)
 
 
 def _distance_to_arc(
@@ -547,7 +547,7 @@ def _distance_to_arc(
   """
 
   distance_to_circle = tf.math.abs(
-      _distance_to_point(xx, yy, center_x, center_y) - radius  # pyrefly: ignore[unsupported-operation]
+      _distance_to_point(xx, yy, center_x, center_y) - radius
   )
   p1 = _point_on_circle(center_x, center_y, radius, theta_0)
   p2 = _point_on_circle(center_x, center_y, radius, theta_1)
@@ -1214,9 +1214,9 @@ class WildfireUtils:
                 self.ignition_option))
 
       rr = tf.math.sqrt(
-          tf.math.pow(xx - self.ignition_center_x, 2) +  # pyrefly: ignore[unsupported-operation]
-          tf.math.pow(yy - self.ignition_center_y, 2) +  # pyrefly: ignore[unsupported-operation]
-          tf.math.pow(zz - self.ignition_center_z, 2))  # pyrefly: ignore[unsupported-operation]
+          tf.math.pow(xx - self.ignition_center_x, 2) +
+          tf.math.pow(yy - self.ignition_center_y, 2) +
+          tf.math.pow(zz - self.ignition_center_z, 2))
 
       sphere = 0.5 * (
           tf.math.tanh(self.ignition_scale * (rr + self.ignition_radius))
@@ -1259,7 +1259,7 @@ class WildfireUtils:
       )
       arc = tf.where(
           tf.math.less_equal(d, 0.5 * self.ignition_arc_width),
-          tf.math.cos(d * np.pi / self.ignition_arc_width) ** 2,  # pyrefly: ignore[unsupported-operation]
+          tf.math.cos(d * np.pi / self.ignition_arc_width) ** 2,
           tf.zeros_like(d),
       )
       location_z = tf.math.logical_and(
@@ -1400,16 +1400,16 @@ class WildfireUtils:
       return inflow_generator.helper_key(var_type, velocity, inflow_dim,
                                          inflow_face)
 
-    return {  # pyrefly: ignore[bad-return]
+    return {
         varname('bc', 'u'): self.u_mean * ones,
         varname('bc', 'v'): self.v_mean * ones,
         varname('bc', 'w'): zeros,
-        varname('mean', 'u'): self.u_mean * mask,  # pyrefly: ignore[unsupported-operation]
-        varname('mean', 'v'): self.v_mean * mask,  # pyrefly: ignore[unsupported-operation]
+        varname('mean', 'u'): self.u_mean * mask,
+        varname('mean', 'v'): self.v_mean * mask,
         varname('mean', 'w'): tf.zeros_like(mask, dtype=_TF_DTYPE),
-        varname('rms', 'u'): self.u_rms * mask,  # pyrefly: ignore[unsupported-operation]
-        varname('rms', 'v'): self.v_rms * mask,  # pyrefly: ignore[unsupported-operation]
-        varname('rms', 'w'): self.w_rms * mask,  # pyrefly: ignore[unsupported-operation]
+        varname('rms', 'u'): self.u_rms * mask,
+        varname('rms', 'v'): self.v_rms * mask,
+        varname('rms', 'w'): self.w_rms * mask,
         varname('rand', 'u'): r[0],
         varname('rand', 'v'): r[1],
         varname('rand', 'w'): r[2],

@@ -71,11 +71,11 @@ class Cloud(object):
     Returns:
       The radiation source term.
     """
-    return (_F0 * tf.math.exp(-_KAPPA * q_h) +  # pyrefly: ignore[unsupported-operation]
-            _F1 * tf.math.exp(-_KAPPA * q_l) +  # pyrefly: ignore[unsupported-operation]
+    return (_F0 * tf.math.exp(-_KAPPA * q_h) +
+            _F1 * tf.math.exp(-_KAPPA * q_l) +
             rho * self._water_model.cp_d * _D * _ALPHA_Z *
-            (0.25 * tf.math.pow(tf.maximum(z - _ZI, 0.0), 4.0 / 3.0) +  # pyrefly: ignore[unsupported-operation]
-             _ZI * tf.math.pow(tf.maximum(z - _ZI, 0.0), 1.0 / 3.0)))  # pyrefly: ignore[unsupported-operation]
+            (0.25 * tf.math.pow(tf.maximum(z - _ZI, 0.0), 4.0 / 3.0) +
+             _ZI * tf.math.pow(tf.maximum(z - _ZI, 0.0), 1.0 / 3.0)))
 
   def source_by_radiation(
       self,

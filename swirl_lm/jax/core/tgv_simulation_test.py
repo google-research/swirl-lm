@@ -40,9 +40,10 @@ The step function is JIT-compiled for performance.
 """
 
 
-import itertools
+import logging as pylog
 import os
 import tempfile
+import unittest
 
 from absl.testing import absltest
 from google.protobuf import text_format
@@ -53,6 +54,7 @@ import jax.numpy as jnp
 from jax.sharding import Mesh  # pylint: disable=g-importing-member
 from jax.sharding import PartitionSpec as P  # pylint: disable=g-importing-member
 import numpy as np
+
 from swirl_lm.base import parameters_pb2
 from swirl_lm.jax.base import parameters as parameters_lib
 from swirl_lm.jax.boundary_condition import boundary_condition_utils
@@ -60,6 +62,8 @@ from swirl_lm.jax.core import driver as driver_lib
 from swirl_lm.jax.core import simulation as simulation_lib
 from swirl_lm.jax.equations import common
 from swirl_lm.jax.io import visualization as visualization_lib
+from swirl_lm.jax.physics.turbulence import sgs_model as sgs_model_lib
+from swirl_lm.jax.utility import global_layout
 from swirl_lm.jax.utility import stretched_grid
 from swirl_lm.jax.utility import stretched_grid_util
 
@@ -626,27 +630,32 @@ def _tgv_driver_init_fn(
 
 
 def _remove_halos(params, states, varnames):
-  gp = params.grid_params
-  hw = gp.halo_width
+  """Converts global sharded fields into contiguous interior arrays.
 
-  states_no_halos = {}
-  for key, v in states.items():
-    if key not in varnames:
-      continue
-    buf = np.zeros((gp.fx, gp.fy, gp.fz), dtype=v.dtype)
-    for i, j, k in itertools.product(range(gp.cx), range(gp.cy), range(gp.cz)):
-      buf[
-          i * gp.core_nx : (i + 1) * gp.core_nx,
-          j * gp.core_ny : (j + 1) * gp.core_ny,
-          k * gp.core_nz : (k + 1) * gp.core_nz,
-      ] = v[
-          i * gp.nx + hw : (i + 1) * gp.nx - hw,
-          j * gp.ny + hw : (j + 1) * gp.ny - hw,
-          k * gp.nz + hw : (k + 1) * gp.nz - hw,
-      ]
-    states_no_halos[key] = buf
+  Delegates to `global_layout.strip_halos_global`, which also handles a
+  non-xyz `data_axis_order`; the previous inline version indexed `gp.cx`/
+  `gp.nx` against array axes 0/1/2 and was only correct for `'xyz'`.
 
-  return states_no_halos
+  Args:
+    params: The simulation parameters carrying the grid parametrization.
+    states: Mapping from variable name to the global sharded array.
+    varnames: The variable names to convert; other entries are dropped.
+
+  Returns:
+    Mapping from each selected variable name to its halo-free interior array.
+  """
+  return {
+      key: global_layout.strip_halos_global(np.asarray(v), params.grid_params)
+      for key, v in states.items()
+      if key in varnames
+  }
+
+
+def _make_driver_params() -> parameters_lib.SwirlLMParameters:
+  """Builds the single-device driver-level TGV parameters."""
+  config = parameters_pb2.SwirlLMParameters()
+  text_format.Parse(_DRIVER_TGV_CONFIG_111, config)
+  return parameters_lib.SwirlLMParameters(config)
 
 
 class TgvDriverSingleDeviceTest(absltest.TestCase):
@@ -829,6 +838,313 @@ class TgvDriverMultiDeviceTest(absltest.TestCase):
     )
     self.assertIn('bc_u_0_0', state)
     self.assertEqual(state['bc_u_0_0'].shape, bc_arr.shape)
+
+
+class _CycleCompileCounter(pylog.Handler):
+  """Counts XLA compilations of the jitted simulation cycle.
+
+  This scrapes a JAX-internal log message, which is the only handle on the
+  compilation count from outside `run_simulation`: the jitted callable is a
+  local there, so neither `_cache_size()` nor an aval comparison via
+  `jax.eval_shape` is reachable. If JAX ever changes the message, the count
+  falls to zero and the assertions below fail loudly rather than passing
+  vacuously.
+  """
+
+  def __init__(self):
+    super().__init__()
+    self.count = 0
+
+  def emit(self, record):
+    # Depending on the JAX version the module is named `_shard_map_cycle_body`
+    # or `jit(_shard_map_cycle_body)`; accept both.
+    message = record.getMessage()
+    if message.startswith('Compiling ') and '_shard_map_cycle_body' in message:
+      self.count += 1
+
+
+class CycleCompilationTest(absltest.TestCase):
+  """The simulation cycle must be compiled exactly once per run.
+
+  JAX keys its jit cache on `weak_type` as well as shape and dtype, so a
+  weakly typed state array entering the cycle and coming back strongly typed
+  costs a second trace and compilation of the entire cycle. `init_fn`s
+  routinely produce weak arrays -- `jnp.arange(n) * dx` with a Python-float
+  `dx` is enough -- so `driver._strengthen_dtypes` canonicalizes the state
+  both on the way in and on the scan carry.
+  """
+
+  def _count_compiles(self, **run_kwargs):
+    params = _make_driver_params()
+    # A warm cache from an earlier test in this process would otherwise make
+    # the count zero and hide a regression.
+    jax.clear_caches()
+    counter = _CycleCompileCounter()
+    logger = pylog.getLogger('jax')
+    previous_level = logger.level
+    logger.setLevel(pylog.DEBUG)
+    logger.addHandler(counter)
+    try:
+      with jax.log_compiles(True):
+        state = driver_lib.run_simulation(
+            params=params,
+            init_fn=_tgv_driver_init_fn,
+            num_steps=2,
+            num_steps_per_cycle=1,
+            **run_kwargs,
+        )
+    finally:
+      logger.removeHandler(counter)
+      logger.setLevel(previous_level)
+    return counter.count, state
+
+  def test_compiled_once_with_weakly_typed_init_fn(self):
+    """`_tgv_driver_init_fn` returns weakly typed fields; one compile only."""
+    count, state = self._count_compiles()
+
+    self.assertEqual(count, 1)
+    weak = [k for k, v in state.items() if getattr(v, 'weak_type', False)]
+    self.assertEmpty(weak)
+
+  def test_compiled_once_with_weakly_typed_update_fn(self):
+    """A user update fn returning a weak value must not retrigger a compile.
+
+    Step 3 of the cycle (`_update_additional_states`) is the only step not
+    wrapped in `lax.cond`, which would unify the types itself, and `lax.scan`
+    does not promote a weakly typed carry. `jnp.where(x > 0.0, 1.0, 0.0)` --
+    the idiomatic indicator field -- returns a weak array even from strong
+    inputs, so without the guard on the carry this run compiles twice.
+    """
+    params = _make_driver_params()
+    gp = params.grid_params
+    plane = jnp.ones((gp.fy, gp.fz), dtype=jnp.float32)
+    bc_arr = boundary_condition_utils.boundary_plane_to_bc(
+        plane, dim=0, halo_width=params.halo_width, grid_params=gp
+    )
+
+    def weakly_typed_update_fn(states, additional_states, step_id=None):
+      del states, step_id
+      updated = dict(additional_states)
+      updated['bc_u_0_0'] = jnp.where(
+          additional_states['bc_u_0_0'] > 0.0, 1.0, 0.0
+      )
+      return updated
+
+    count, _ = self._count_compiles(
+        additional_states={'bc_u_0_0': bc_arr},
+    )
+    self.assertEqual(count, 1)
+
+    # Same run, now with the weak-producing update function.
+    params.additional_states_update_fn = weakly_typed_update_fn
+    jax.clear_caches()
+    counter = _CycleCompileCounter()
+    logger = pylog.getLogger('jax')
+    previous_level = logger.level
+    logger.setLevel(pylog.DEBUG)
+    logger.addHandler(counter)
+    try:
+      with jax.log_compiles(True):
+        state = driver_lib.run_simulation(
+            params=params,
+            init_fn=_tgv_driver_init_fn,
+            num_steps=2,
+            num_steps_per_cycle=1,
+            additional_states={'bc_u_0_0': bc_arr},
+        )
+    finally:
+      logger.removeHandler(counter)
+      logger.setLevel(previous_level)
+
+    self.assertEqual(counter.count, 1)
+    self.assertFalse(getattr(state['bc_u_0_0'], 'weak_type', False))
+
+
+class UpdateAdditionalStatesTest(absltest.TestCase):
+  """`_update_additional_states` must not discard its own earlier steps.
+
+  The function clears `src_*` source terms and refreshes the nonreflecting
+  boundary condition states before handing control to a user-supplied
+  `additional_states_update_fn`. Both of those have to reach the user function
+  and survive its return, which they did not while its result replaced the
+  accumulated dict instead of being merged into it.
+  """
+
+  def _run(self, additional_states, update_fn):
+    params = _make_driver_params()
+    params.additional_states_update_fn = update_fn
+    return driver_lib._update_additional_states(
+        {'u': jnp.zeros((4, 4, 4), jnp.float32)},
+        additional_states,
+        jnp.int32(0),
+        params,
+        mesh=None,
+    )
+
+  def test_source_terms_are_cleared_before_the_user_fn_runs(self):
+    seen = {}
+
+    def update_fn(states, additional_states, step_id=None):
+      del states, step_id
+      seen.update(additional_states)
+      updated = dict(additional_states)
+      # The idiomatic pattern: accumulate this step's contribution onto the
+      # cleared slot.
+      updated['src_theta'] = updated['src_theta'] + 1.0
+      return updated
+
+    stale = jnp.full((4, 4, 4), 5.0, jnp.float32)
+    out = self._run({'src_theta': stale}, update_fn)
+
+    # The user function must have seen zeros, not last step's 5.0 ...
+    np.testing.assert_array_equal(
+        np.asarray(seen['src_theta']), np.zeros((4, 4, 4), np.float32)
+    )
+    # ... so its accumulation starts from zero every step.
+    np.testing.assert_array_equal(
+        np.asarray(out['src_theta']), np.ones((4, 4, 4), np.float32)
+    )
+
+  def test_keys_the_user_fn_omits_are_preserved(self):
+    def update_fn(states, additional_states, step_id=None):
+      del states, additional_states, step_id
+      # A function that reports only what it touched.
+      return {'other': jnp.full((4, 4, 4), 2.0, jnp.float32)}
+
+    out = self._run(
+        {
+            'src_theta': jnp.full((4, 4, 4), 5.0, jnp.float32),
+            'other': jnp.zeros((4, 4, 4), jnp.float32),
+        },
+        update_fn,
+    )
+
+    # The key set must be preserved: dropping one changes the scan carry
+    # structure and fails deep inside the cycle.
+    self.assertEqual(set(out), {'src_theta', 'other'})
+    np.testing.assert_array_equal(
+        np.asarray(out['src_theta']), np.zeros((4, 4, 4), np.float32)
+    )
+    np.testing.assert_array_equal(
+        np.asarray(out['other']), np.full((4, 4, 4), 2.0, np.float32)
+    )
+
+  def test_user_fn_cannot_mutate_the_state_being_assembled(self):
+    def update_fn(states, additional_states, step_id=None):
+      del states, step_id
+      # A function that mutates its argument in place and returns nothing of
+      # its own must not corrupt the caller's dict.
+      additional_states['src_theta'] = jnp.full((4, 4, 4), 9.0, jnp.float32)
+      return {}
+
+    out = self._run(
+        {'src_theta': jnp.full((4, 4, 4), 5.0, jnp.float32)}, update_fn
+    )
+    np.testing.assert_array_equal(
+        np.asarray(out['src_theta']), np.zeros((4, 4, 4), np.float32)
+    )
+
+
+# The TGV driver config with the static Smagorinsky model switched on and
+# `nu_t` tracked as an additional state, which is how a real LES config asks
+# the driver to report the turbulent viscosity.
+_DRIVER_TGV_CONFIG_SGS = _DRIVER_TGV_CONFIG_111.replace(
+    'use_sgs: false',
+    'use_sgs: true\n'
+    'sgs_model { smagorinsky { c_s: 0.18 pr_t: 1.0 } }\n'
+    'additional_state_keys: "nu_t"\n',
+)
+
+
+class SgsStatePersistenceTest(absltest.TestCase):
+  """The solver's own additional states must survive the step.
+
+  `sim.step` owns a few additional states -- `nu_t`, `drho`, the buoyancy
+  diagnostics -- and returns the updated value for them. The driver has to
+  pull those back into `add` before writing `add` into the step's output,
+  or the stale pre-step value is put back and the computed one is lost.
+
+  That is not hypothetical: it kept `nu_t` identically zero for entire runs
+  despite `use_sgs: true`, and with it `tke`, which the combustion model
+  derives from the stored `nu_t` as `(nu_t / (c_k * delta))**2`. The momentum
+  equation was unaffected because it recomputes `nu_t` internally each step
+  and never reads the stored copy, so the defect was invisible in the
+  velocity field and showed up only in the reported diagnostics and in the
+  models that consume them.
+  """
+
+  def _params(self):
+    config = parameters_pb2.SwirlLMParameters()
+    text_format.Parse(_DRIVER_TGV_CONFIG_SGS, config)
+    return parameters_lib.SwirlLMParameters(config)
+
+  def _init_fn(self, params, logical_coordinates):
+    states = _tgv_driver_init_fn(params, logical_coordinates)
+    states['nu_t'] = jnp.zeros_like(states['u'])
+    return states
+
+  def test_sgs_model_produces_nonzero_viscosity(self):
+    # Guards the premise: if the model itself returned zero, the driver test
+    # below would pass for the wrong reason.
+    params = self._params()
+    model = sgs_model_lib.SgsModel(params)
+    init = self._init_fn(params, (0, 0, 0))
+    nu_t = np.asarray(
+        model.turbulent_viscosity(
+            [init['u'], init['v'], init['w']], {}
+        )
+    )
+    self.assertGreater(float(np.abs(nu_t).max()), 0.0)
+
+  def test_nu_t_is_reported_after_a_step(self):
+    params = self._params()
+    state = driver_lib.run_simulation(
+        params=params,
+        init_fn=self._init_fn,
+        num_steps=3,
+        num_steps_per_cycle=1,
+    )
+    nu_t = np.asarray(state['nu_t'])
+    self.assertTrue(np.all(np.isfinite(nu_t)))
+    self.assertGreater(
+        float(np.abs(nu_t).max()),
+        0.0,
+        'nu_t came back identically zero, so the driver discarded the value '
+        'the solver computed.',
+    )
+
+
+class StrengthenDtypesTest(absltest.TestCase):
+
+  def test_strips_weak_type_and_preserves_everything_else(self):
+    weak = jnp.full((4, 4, 4), 1.25)
+    self.assertTrue(weak.weak_type)
+
+    strong = driver_lib._strengthen_dtypes(weak)
+
+    self.assertFalse(strong.weak_type)
+    self.assertEqual(strong.dtype, weak.dtype)
+    np.testing.assert_array_equal(np.asarray(strong), np.asarray(weak))
+
+  def test_already_strong_leaves_are_untouched(self):
+    strong = jnp.zeros((4, 4, 4), jnp.float32)
+    self.assertIs(driver_lib._strengthen_dtypes(strong), strong)
+
+  def test_maps_over_a_state_dict_including_scalars_and_masks(self):
+    state = {
+        'u': jnp.full((2, 2, 2), 0.5),
+        'simulation_time': jnp.float32(0.0),
+        'mask': jnp.where(jnp.zeros((2, 2)) > 0.0, True, False),
+        'count': jnp.full((2,), 3),
+    }
+    out = driver_lib._strengthen_dtypes(state)
+
+    self.assertEqual(set(out), set(state))
+    for key, value in out.items():
+      self.assertFalse(
+          getattr(value, 'weak_type', False), f'{key} is still weakly typed'
+      )
+      self.assertEqual(value.dtype, state[key].dtype)
 
 
 if __name__ == '__main__':

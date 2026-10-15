@@ -241,7 +241,7 @@ class Velocity:
         mesh,
         self._grid_params,
         periodic,
-        bc_for_name,  # pyrefly: ignore[bad-argument-type]
+        bc_for_name,
         halo_width=self._params.halo_width,
     )
 
@@ -494,7 +494,7 @@ class Velocity:
     for dim, vel_key in enumerate((_KEY_U, _KEY_V, _KEY_W)):
       src_fn = self._params.source_update_fn(vel_key)
       if src_fn is not None:
-        src_result = src_fn(states, additional_states)  # pyrefly: ignore[unsupported-operation]
+        src_result = src_fn(states, additional_states)
         src_val = src_result[self._src_manager.generate_src_key(vel_key)]
         if forces[dim] is not None:
           forces[dim] = forces[dim] + src_val  # pyrefly: ignore[unsupported-operation]
@@ -524,7 +524,7 @@ class Velocity:
     rho_u, rho_v, rho_w = time_integration.time_advancement_explicit(
         rhs_fn,
         self._params.dt,
-        self._params.time_integration_scheme,  # pyrefly: ignore[bad-argument-type]
+        self._params.time_integration_scheme,
         (states_0[_KEY_RHO_U], states_0[_KEY_RHO_V], states_0[_KEY_RHO_W]),
         (states[_KEY_RHO_U], states[_KEY_RHO_V], states[_KEY_RHO_W]),
     )

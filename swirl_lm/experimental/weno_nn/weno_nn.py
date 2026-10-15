@@ -81,7 +81,7 @@ def upwind_weights(order: int = 3) -> tuple[jax.Array, jax.Array]:
     d_minus = 0.1 * jnp.array([3.0, 6.0, 1.0], dtype=jnp.float64)
     d_plus = 0.1 * jnp.array([1.0, 6.0, 3.0], dtype=jnp.float64)
 
-  return (d_minus, d_plus)  # pytype: disable=bad-return-type  # jnp-type
+  return (d_minus, d_plus)
 
 
 def beta(u_bar: jax.Array, order: int = 3) -> jax.Array:
@@ -129,7 +129,7 @@ def omega_plus(
     u_bar: jax.Array,
     order: int = 3,
     p: int = 2,
-    eps: jnp.float64 = 1e-15,
+    eps: jnp.float64 = 1e-15,  # pyrefly: ignore[not-a-type]
 ) -> jax.Array:
   r"""Computes the WENO weights in the interpolation.
 
@@ -247,7 +247,7 @@ def weno_interpolation_plus(
     u_bar: jax.Array,
     omega_fun: Callable[[jax.Array, Optional[int]], jax.Array],
     order: int = 3,
-) -> jnp.float64:
+) -> jnp.float64:  # pyrefly: ignore[not-a-type]
   r"""Interpolation to u_{i+1/2}.
 
   Args:
@@ -338,8 +338,8 @@ def _delta_layer(
 
 def delta_layer(
     u_bar: jax.Array,
-    global_norm: jnp.float64 | None = None,
-    eps: jnp.float64 = 1e-15,
+    global_norm: jnp.float64 | None = None,  # pyrefly: ignore[unsupported-operation]
+    eps: jnp.float64 = 1e-15,  # pyrefly: ignore[not-a-type]
 ) -> jax.Array:
   r"""Implementation of Delta layer that outputs the features of the network.
 
@@ -377,8 +377,8 @@ class FeaturesRationalLayer(nn.Module):
     cutoff: Shift for the thresholding.
   """
 
-  dtype: jnp.dtype = jnp.float64
-  cutoff: Optional[jnp.float64] = None
+  dtype: jnp.dtype = jnp.float64  # pyrefly: ignore[bad-assignment]
+  cutoff: Optional[jnp.float64] = None  # pyrefly: ignore[not-a-type]
 
   @nn.compact
   def __call__(self, u_bar: jax.Array) -> jax.Array:
@@ -415,8 +415,8 @@ class FeaturesRationalLayerDescentered(nn.Module):
     cutoff: Shift for the thresholding.
   """
 
-  dtype: jnp.dtype = jnp.float64
-  cutoff: Optional[jnp.float64] = None
+  dtype: jnp.dtype = jnp.float64  # pyrefly: ignore[bad-assignment]
+  cutoff: Optional[jnp.float64] = None  # pyrefly: ignore[not-a-type]
 
   @nn.compact
   def __call__(self, u_bar: jax.Array) -> jax.Array:
@@ -448,10 +448,10 @@ class FeaturesRationalLayerDescentered(nn.Module):
 
 
 def hard_thresholding(
-    x: jnp.float64,
-    threshold_value: jnp.float64,
-    cutoff: jnp.float64 = 2e-4,
-) -> jnp.float64:
+    x: jnp.float64,  # pyrefly: ignore[not-a-type]
+    threshold_value: jnp.float64,  # pyrefly: ignore[not-a-type]
+    cutoff: jnp.float64 = 2e-4,  # pyrefly: ignore[not-a-type]
+) -> jnp.float64:  # pyrefly: ignore[not-a-type]
   """Simple implementation of hard thresholding in Eq. (16) of [1].
 
   Args:
@@ -466,7 +466,7 @@ def hard_thresholding(
   return jax.lax.cond(x < cutoff, lambda x: threshold_value, lambda x: x, x)
 
 
-def eno_layer(omega: jax.Array, cutoff: jnp.float64 = 2e-4) -> jax.Array:
+def eno_layer(omega: jax.Array, cutoff: jnp.float64 = 2e-4) -> jax.Array:  # pyrefly: ignore[not-a-type]
   """Implementation of the ENO_layer that thresholds and normalizes the weights.
 
   Args:
@@ -485,7 +485,7 @@ def eno_layer(omega: jax.Array, cutoff: jnp.float64 = 2e-4) -> jax.Array:
   return omega_tilde
 
 
-def gamma(u_bar: jax.Array, epsilon_gamma: jnp.float64 = 1e-15) -> jax.Array:
+def gamma(u_bar: jax.Array, epsilon_gamma: jnp.float64 = 1e-15) -> jax.Array:  # pyrefly: ignore[not-a-type]
   """Computation of gamma in Eq. (22) of [1].
 
   Args:
@@ -525,16 +525,16 @@ class OmegaNN(nn.Module):
       ENO layer should only be used during inference.
   """
 
-  features: tuple[jnp.int64, ...]
+  features: tuple[jnp.int64, ...]  # pyrefly: ignore[not-a-type]
   order: int = 3
   features_fun: Callable[[jax.Array], jax.Array] = functools.partial(
       delta_layer, global_norm=None, eps=1e-15
   )
   act_fun: Callable[[jax.Array], jax.Array] | str = nn.swish
   act_fun_out: Callable[[jax.Array], jax.Array] = nn.softmax
-  dtype: jnp.dtype = jnp.float64
-  global_norm: jnp.float64 | None = None
-  eno_layer_cutoff: jnp.float64 = 2e-4
+  dtype: jnp.dtype = jnp.float64  # pyrefly: ignore[bad-assignment]
+  global_norm: jnp.float64 | None = None  # pyrefly: ignore[unsupported-operation]
+  eno_layer_cutoff: jnp.float64 = 2e-4  # pyrefly: ignore[not-a-type]
 
   @nn.compact
   def __call__(self, u_bar: jax.Array, test: bool = False) -> jax.Array:

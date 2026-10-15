@@ -173,7 +173,7 @@ def _get_gravity_direction(
   else:
     gravity_direction = [0.] * 3
 
-  return gravity_direction  # pyrefly: ignore[bad-return]
+  return gravity_direction
 
 
 class SwirlLMParameters(grid_parametrization.GridParametrization):
@@ -295,7 +295,7 @@ class SwirlLMParameters(grid_parametrization.GridParametrization):
         f' {g_dim} is provided.'
     )
     self.g_dim: Literal[0, 1, 2] | None = (
-        g_dim.item() if len(g_dim) == 1 else None  # pyrefly: ignore[bad-assignment]
+        g_dim.item() if len(g_dim) == 1 else None
     )
 
     # Get the scalar related quantities if scalars are solved as a

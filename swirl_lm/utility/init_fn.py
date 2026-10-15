@@ -169,23 +169,23 @@ def blasius_boundary_layer(
     if len(elevation.shape) == 3:
       elevation = tf.squeeze(elevation[..., 0])
 
-    dh_dx_0 = kernel_op.apply_kernel_op_x(tf.expand_dims(elevation, 0),  # pyrefly: ignore[unsupported-operation]
+    dh_dx_0 = kernel_op.apply_kernel_op_x(tf.expand_dims(elevation, 0),
                                           'kdx+') / dx
-    dh_dx_c = kernel_op.apply_kernel_op_x(tf.expand_dims(elevation, 0),  # pyrefly: ignore[unsupported-operation]
+    dh_dx_c = kernel_op.apply_kernel_op_x(tf.expand_dims(elevation, 0),
                                           'kDx') / (2.0 * dx)
-    dh_dx_e = kernel_op.apply_kernel_op_x(tf.expand_dims(elevation, 0),  # pyrefly: ignore[unsupported-operation]
+    dh_dx_e = kernel_op.apply_kernel_op_x(tf.expand_dims(elevation, 0),
                                           'kdx') / dx
     dh_dx = tf.concat(
-        [dh_dx_0[0, 0:1, :], dh_dx_c[0, 1:-1, :], dh_dx_e[0, -2:-1, :]], axis=0)  # pyrefly: ignore[bad-index]
+        [dh_dx_0[0, 0:1, :], dh_dx_c[0, 1:-1, :], dh_dx_e[0, -2:-1, :]], axis=0)
 
-    dh_dy_0 = kernel_op.apply_kernel_op_y(tf.expand_dims(elevation, 0),  # pyrefly: ignore[unsupported-operation]
+    dh_dy_0 = kernel_op.apply_kernel_op_y(tf.expand_dims(elevation, 0),
                                           'kdy+') / dy
-    dh_dy_c = kernel_op.apply_kernel_op_y(tf.expand_dims(elevation, 0),  # pyrefly: ignore[unsupported-operation]
+    dh_dy_c = kernel_op.apply_kernel_op_y(tf.expand_dims(elevation, 0),
                                           'kDy') / (2.0 * dy)
-    dh_dy_e = kernel_op.apply_kernel_op_y(tf.expand_dims(elevation, 0),  # pyrefly: ignore[unsupported-operation]
+    dh_dy_e = kernel_op.apply_kernel_op_y(tf.expand_dims(elevation, 0),
                                           'kdy') / dy
     dh_dy = tf.concat(
-        [dh_dy_0[0, :, 0:1], dh_dy_c[0, :, 1:-1], dh_dy_e[0, :, -2:-1]], axis=1)  # pyrefly: ignore[bad-index]
+        [dh_dy_0[0, :, 0:1], dh_dy_c[0, :, 1:-1], dh_dy_e[0, :, -2:-1]], axis=1)
 
     theta = tf.math.asin((u_inf * dh_dx + v_inf * dh_dy) / tf.math.sqrt(
         (1.0 + dh_dx**2 + dh_dy**2)) / u_mag)
@@ -238,7 +238,7 @@ def blasius_boundary_layer(
   def get_values(data: tf.Tensor, zz: tf.Tensor,) -> tf.Tensor:
     """Retrieves values from `f` at height zz."""
     indices = tf.cast(
-        tf.maximum(tf.floor((zz - elevation) / bin_size) + 1, 0), tf.int32)  # pyrefly: ignore[unsupported-operation]
+        tf.maximum(tf.floor((zz - elevation) / bin_size) + 1, 0), tf.int32)
     return tf.gather(data, indices)
 
   def u_init_fn(
@@ -252,12 +252,12 @@ def blasius_boundary_layer(
   ) -> tf.Tensor:
     """Computes the value of the velocity component parallel to the wall."""
     del xx, yy, lx, ly, lz, coord
-    u_n = u_inf * get_values(f[:, 1], zz)  # pyrefly: ignore[bad-argument-type, unsupported-operation]
+    u_n = u_inf * get_values(f[:, 1], zz)  # pyrefly: ignore[bad-argument-type]
     w_n = 0.5 * np.sqrt(nu * u_mag / x) * (
-        get_values(eta, zz) * get_values(f[:, 1], zz) - get_values(f[:, 0], zz))  # pyrefly: ignore[bad-argument-type, unsupported-operation]
+        get_values(eta, zz) * get_values(f[:, 1], zz) - get_values(f[:, 0], zz))  # pyrefly: ignore[bad-argument-type]
     corr = get_values(slope_correction, zz)
     return (u_n * tf.math.cos(theta) -
-            w_n * tf.math.sin(theta)) * corr + u_n * (1.0 - corr)  # pyrefly: ignore[unsupported-operation]
+            w_n * tf.math.sin(theta)) * corr + u_n * (1.0 - corr)
 
   def v_init_fn(
       xx: tf.Tensor,
@@ -270,12 +270,12 @@ def blasius_boundary_layer(
   ) -> tf.Tensor:
     """Computes the value of the velocity component parallel to the wall."""
     del xx, yy, lx, ly, lz, coord
-    v_n = v_inf * get_values(f[:, 1], zz)  # pyrefly: ignore[bad-argument-type, unsupported-operation]
+    v_n = v_inf * get_values(f[:, 1], zz)  # pyrefly: ignore[bad-argument-type]
     w_n = 0.5 * np.sqrt(nu * u_mag / x) * (
-        get_values(eta, zz) * get_values(f[:, 1], zz) - get_values(f[:, 0], zz))  # pyrefly: ignore[bad-argument-type, unsupported-operation]
+        get_values(eta, zz) * get_values(f[:, 1], zz) - get_values(f[:, 0], zz))  # pyrefly: ignore[bad-argument-type]
     corr = get_values(slope_correction, zz)
     return (v_n * tf.math.cos(theta) -
-            w_n * tf.math.sin(theta)) * corr + v_n * (1.0 - corr)  # pyrefly: ignore[unsupported-operation]
+            w_n * tf.math.sin(theta)) * corr + v_n * (1.0 - corr)
 
   def w_init_fn(
       xx: tf.Tensor,
@@ -290,12 +290,12 @@ def blasius_boundary_layer(
     del xx, yy, lx, ly, lz, coord
     u_n = u_mag * get_values(f[:, 1], zz)  # pyrefly: ignore[bad-argument-type]
     w_n = 0.5 * np.sqrt(nu * u_mag / x) * (
-        get_values(eta, zz) * get_values(f[:, 1], zz) - get_values(f[:, 0], zz))  # pyrefly: ignore[bad-argument-type, unsupported-operation]
+        get_values(eta, zz) * get_values(f[:, 1], zz) - get_values(f[:, 0], zz))  # pyrefly: ignore[bad-argument-type]
     corr = get_values(slope_correction, zz)
     return (u_n * tf.math.sin(theta) +
-            w_n * tf.math.cos(theta)) * corr + w_n * (1.0 - corr)  # pyrefly: ignore[unsupported-operation]
+            w_n * tf.math.cos(theta)) * corr + w_n * (1.0 - corr)
 
-  return {'u': u_init_fn, 'v': v_init_fn, 'w': w_init_fn}  # pyrefly: ignore[bad-assignment, bad-return]
+  return {'u': u_init_fn, 'v': v_init_fn, 'w': w_init_fn}  # pyrefly: ignore[bad-assignment]
 
 
 def logarithmic_boundary_layer(
@@ -348,7 +348,7 @@ def logarithmic_boundary_layer(
     """Computes the friction velocity based on the free stream velocity."""
     lz = tf.constant(lz, dtype=_TF_DTYPE)
 
-    return u_ref * kappa / tf.math.log(  # pyrefly: ignore[unsupported-operation]
+    return u_ref * kappa / tf.math.log(
         tf.maximum(lz - elevation, zero) / z_0)
 
   def log_wind_profile(z: tf.Tensor, u_s: tf.Tensor, dz: tf.Tensor
@@ -362,7 +362,7 @@ def logarithmic_boundary_layer(
     # Offset by dz so that the first halo layer is treated as the non-slip
     # ground.
     return tf.maximum(
-        u_s / kappa *  # pyrefly: ignore[unsupported-operation]
+        u_s / kappa *
         tf.math.log(tf.maximum(
             (z - elevation_corrected + dz) / z_0, zero)), zero)
 
@@ -378,7 +378,7 @@ def logarithmic_boundary_layer(
     """Computes the value of the velocity component parallel to the wall."""
     del xx, yy, lx, ly, coord
 
-    u_s = friction_velocity(u_inf, lz)
+    u_s = friction_velocity(u_inf, lz)  # pyrefly: ignore[bad-argument-type]
 
     dz = zz[0, 0, 1] - zz[0, 0, 0]
 
@@ -396,7 +396,7 @@ def logarithmic_boundary_layer(
     """Computes the value of the velocity component parallel to the wall."""
     del xx, yy, lx, ly, coord
 
-    u_s = friction_velocity(v_inf, lz)
+    u_s = friction_velocity(v_inf, lz)  # pyrefly: ignore[bad-argument-type]
 
     dz = zz[0, 0, 1] - zz[0, 0, 0]
 
@@ -416,4 +416,4 @@ def logarithmic_boundary_layer(
 
     return tf.zeros_like(zz)
 
-  return {'u': u_init_fn, 'v': v_init_fn, 'w': w_init_fn}  # pyrefly: ignore[bad-assignment, bad-return]
+  return {'u': u_init_fn, 'v': v_init_fn, 'w': w_init_fn}  # pyrefly: ignore[bad-assignment]

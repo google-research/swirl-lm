@@ -155,7 +155,7 @@ class ConstantHeatSource:
     # tf.Tensor value. The type has to be a simple type (like float) because we
     # pass `x_center` to fancyflags which allows only a limited subset of
     # types. This is ok for now because pytype doesn't catch this as an error.
-    return dataclasses.replace(self, x_center=self.x_center + t * self.u)  # pyrefly: ignore[unsupported-operation]
+    return dataclasses.replace(self, x_center=self.x_center + t * self.u)
 
 
 _SIMULATION_TYPE = flags.DEFINE_enum_class(
@@ -519,7 +519,7 @@ class GeophysicalFlow():
         return t
 
       r_m = sim_states['r_m']
-      rho = p / r_m / t  # pyrefly: ignore[unsupported-operation]
+      rho = p / r_m / t
       if varname == 'rho':
         return rho
 
@@ -527,10 +527,10 @@ class GeophysicalFlow():
       q_l, q_i = self.cloud_utils.thermodynamics.equilibrium_phase_partition(
           t, rho, q_t)
       if varname == 'q_c':
-        return q_l + q_i  # pyrefly: ignore[unsupported-operation]
+        return q_l + q_i
 
       if varname == 'q_v':
-        return q_t - q_l - q_i  # pyrefly: ignore[unsupported-operation]
+        return q_t - q_l - q_i
 
       e = self.cloud_utils.thermodynamics.internal_energy(t, q_t, q_l, q_i)
       if varname == 'e':
@@ -1399,7 +1399,7 @@ class GeophysicalFlow():
         replica_id, replicas, step_id, states, additional_states
     )
 
-    return additional_states  # pytype: disable=bad-return-type
+    return additional_states
 
   def initial_states(
       self,
@@ -1480,7 +1480,7 @@ class GeophysicalFlow():
         t = t_states['temperature']
         r_m = t_states['r_m']
 
-        rho = p / r_m / t  # pyrefly: ignore[unsupported-operation]
+        rho = p / r_m / t
 
         q_l, q_i = self.cloud_utils.thermodynamics.equilibrium_phase_partition(
             t, rho, q_t
@@ -1850,7 +1850,7 @@ class GeophysicalFlow():
     const_heat_src = self.const_heat_src.at_time_t(t)
     coeff = self.ramp_up_down_fn(t)
     heat_flux = tf.nest.map_structure(
-        lambda h_0, h_1: coeff * self._get_max_heat_flux(h_0, h_1,  # pyrefly: ignore[unsupported-operation]
+        lambda h_0, h_1: coeff * self._get_max_heat_flux(h_0, h_1,
                                                          const_heat_src),
         horizontal_0, horizontal_1)
     # NOTE(bcg): The flux variable needs to be a proper 3D tensor with a

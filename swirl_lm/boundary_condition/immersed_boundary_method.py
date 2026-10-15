@@ -337,7 +337,7 @@ def get_fluid_solid_interface_value_z(
     layer contacting the solid.
   """
   interface_val = tf.zeros_like(value[0])
-  for i in range(len(value)):  # pyrefly: ignore[bad-argument-type]
+  for i in range(len(value)):
     interface_val += value[i] * ib_boundary_mask[i]
 
   cx, cy, _ = replicas.shape
@@ -752,7 +752,7 @@ class ImmersedBoundaryMethod(object):
       """Generates the sponge force for variable `var_name` within the solid."""
       a_max = np.power(damping_coeff * self._params.dt, -1)
 
-      force = -a_max * (value - target_value) * (1.0 - mask)  # pyrefly: ignore[unsupported-operation]
+      force = -a_max * (value - target_value) * (1.0 - mask)
       return force if override else original_force + force
 
     additional_states_new = {}

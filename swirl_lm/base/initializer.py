@@ -182,7 +182,7 @@ def partial_mesh_for_core(
     zs = get_slice_in_dim(core_nz, lz, cz, gz, params.z)
 
   xx, yy, zz = tf.meshgrid(xs, ys, zs, indexing='ij')
-  val = value_fn(xx, yy, zz, _NP_DTYPE(lx), _NP_DTYPE(ly), _NP_DTYPE(lz),  # pytype: disable=wrong-arg-types  # numpy-scalars
+  val = value_fn(xx, yy, zz, _NP_DTYPE(lx), _NP_DTYPE(ly), _NP_DTYPE(lz),  # pyrefly: ignore[bad-argument-type]
                  coordinate)
   if pad_mode and pad_mode != 'PHYSICAL':
     val = tf.pad(
@@ -367,7 +367,7 @@ def three_d_subgrid_slices(
   """
   return tuple([  # pyrefly: ignore[bad-return]
       subgrid_slice(ss, c, halo_width)
-      for ss, c in zip(subgrid_size, coordinates)  # pyrefly: ignore[bad-argument-type]
+      for ss, c in zip(subgrid_size, coordinates)
   ])
 
 
@@ -465,7 +465,7 @@ def three_d_subgrid_of_2d_grid(
   sub_grid = subgrid_of_2d_grid(full_2d_grid, params, coordinates)
   expand_dims = (
       tf.expand_dims if isinstance(full_2d_grid, tf.Tensor) else np.expand_dims)
-  return expand_dims(sub_grid, axis=0)  # pyrefly: ignore[no-matching-overload]
+  return expand_dims(sub_grid, axis=0)
 
 
 def three_d_subgrid_of_2d_border_strip(
@@ -529,5 +529,5 @@ def gen_partial_from_full_2d(field_2d: np.ndarray,
   Returns:
     The requested subgrid, as a 3d numpy array.
   """
-  return np.expand_dims(  # pyrefly: ignore[no-matching-overload]
+  return np.expand_dims(
       subgrid_of_2d_grid(field_2d, params, coordinates), axis=0)

@@ -222,17 +222,17 @@ def klemp_lilly_relaxation_coeff_fn(
       face = sponge.face if sponge.HasField('face') else 1
 
       if face == 1:
-        h_d = (1.0 - sponge.fraction) * h_t + c0  # pyrefly: ignore[unsupported-operation]
+        h_d = (1.0 - sponge.fraction) * h_t + c0
         buf = tf.compat.v1.where(
             tf.less_equal(grid, h_d), tf.zeros_like(grid),
             a_max * tf.math.pow(
-                tf.math.sin(np.pi / 2.0 * (grid - h_d) / (h_t - h_d)), 2))  # pyrefly: ignore[unsupported-operation]
+                tf.math.sin(np.pi / 2.0 * (grid - h_d) / (h_t - h_d)), 2))
       elif face == 0:
-        h_d = sponge.fraction * h_t + c0  # pyrefly: ignore[unsupported-operation]
+        h_d = sponge.fraction * h_t + c0
         buf = tf.compat.v1.where(
             tf.greater_equal(grid, h_d), tf.zeros_like(grid),
             a_max *
-            tf.math.pow(tf.math.sin(np.pi / 2.0 * tf.abs(grid - h_d) / h_d), 2))  # pyrefly: ignore[unsupported-operation]
+            tf.math.pow(tf.math.sin(np.pi / 2.0 * tf.abs(grid - h_d) / h_d), 2))
       else:
         raise ValueError(
             'Face index has to be one of 0 and 1. {} is provided.'.format(face))
@@ -314,7 +314,7 @@ class RayleighDampingLayer(object):
       target_value = common_ops.global_mean(
           field, replicas, axis=target_value_mean_dims)
 
-    return beta / dt * (target_value - field)  # pyrefly: ignore[unsupported-operation]
+    return beta / dt * (target_value - field)
 
   @property
   def varnames(self) -> Sequence[str]:
@@ -409,7 +409,7 @@ class RayleighDampingLayer(object):
         value: FlowFieldVal,
     ) -> FlowFieldVal:
       """Adds two states elementwise."""
-      return additional_states[name] + value  # pyrefly: ignore[unsupported-operation]
+      return additional_states[name] + value
 
     additional_states_updated = {}
     additional_states_updated.update(additional_states)
@@ -437,7 +437,7 @@ class RayleighDampingLayer(object):
           self._target_value_mean_dims_by_var[varname],
           target_val)
       if not self._is_primitive[varname]:
-        sponge_force = states['rho'] * sponge_force  # pyrefly: ignore[unsupported-operation]
+        sponge_force = states['rho'] * sponge_force
       additional_states_updated.update(
           {sponge_name: add_to_additional_states(sponge_name, sponge_force)})
 

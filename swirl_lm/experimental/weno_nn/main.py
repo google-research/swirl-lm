@@ -85,7 +85,7 @@ def main(argv):
       features=config.features,
       features_fun=features_fun,  # pyrefly: ignore[bad-argument-type]
       act_fun=act_fun,  # pyrefly: ignore[bad-argument-type]
-      dtype=jnp.float64,
+      dtype=jnp.float64,  # pyrefly: ignore[bad-argument-type]
   )
 
   # Initializing the parameters.

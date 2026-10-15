@@ -95,7 +95,7 @@ class LptInjector(abc.ABC):
     # Early return if we do not inject at this time step.
     if attributes.n_particles == 0 or (
         step_id != initial_inject_step
-        and (period is None or (step_id - initial_inject_step) % period != 0)  # pyrefly: ignore[unsupported-operation]
+        and (period is None or (step_id - initial_inject_step) % period != 0)
     ):
       return {
           LPT_INTS_KEY: tf.zeros((0, 2), LPT_INT),
@@ -129,11 +129,11 @@ class LptInjector(abc.ABC):
 
     # Random seeds.
     op_seed = ids[0]
-    core_seed = self.injector_params.seed * replica_id  # pyrefly: ignore[unsupported-operation]
+    core_seed = self.injector_params.seed * replica_id
 
     # Generating random attributes.
     locs = self._get_locs(replica_n_particles, (core_seed, op_seed))
-    with tf.name_scope("stretched_grid_injection"):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope("stretched_grid_injection"):
       locs = self._correct_for_stretched_grid(locs, params)
     vels = self._get_vels(
         replica_n_particles, attributes, (core_seed, op_seed + 3)
@@ -275,7 +275,7 @@ class LptInjector(abc.ABC):
       dim_grid = params.global_xyz[dim_xyz]
 
       # Determining the nodal locations.
-      with tf.name_scope("gathering_indices_in_stretched_grid"):  # pyrefly: ignore[bad-instantiation]
+      with tf.name_scope("gathering_indices_in_stretched_grid"):
 
         indices = tf.map_fn(
             _make_idx_func(dim_grid),
@@ -284,13 +284,13 @@ class LptInjector(abc.ABC):
         )
 
       # Determining how far between the node and the next node each particle is.
-      with tf.name_scope("calculating_weights"):  # pyrefly: ignore[bad-instantiation]
+      with tf.name_scope("calculating_weights"):
         prev_loc = tf.gather(dim_grid, indices)
         next_loc = tf.gather(dim_grid, indices + 1)
         w = (locs[:, dim] - prev_loc) / (next_loc - prev_loc)
 
       # Adding the two to get the overall new mapped particle locs.
-      with tf.name_scope("calculating_new_locs"):  # pyrefly: ignore[bad-instantiation]
+      with tf.name_scope("calculating_new_locs"):
         new_dim_locs = tf.cast(indices, LPT_FLOAT) + w
 
         locs = tf.tensor_scatter_nd_update(

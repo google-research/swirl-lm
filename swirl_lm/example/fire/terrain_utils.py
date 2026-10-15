@@ -145,7 +145,7 @@ class TerrainUtils(object):
                 ly: float, lz: float, coord: ThreeIntTuple) -> tf.Tensor:
       """Initializes the flow field mask."""
       del xx, yy, lx, ly, lz, coord
-      return tf.compat.v1.where(zz > local_map,  # pyrefly: ignore[unsupported-operation]
+      return tf.compat.v1.where(zz > local_map,
                                 tf.ones_like(zz, dtype=_TF_DTYPE),
                                 tf.zeros_like(zz, dtype=_TF_DTYPE))
 
@@ -163,7 +163,7 @@ class TerrainUtils(object):
       """Initializes the flow field mask."""
       del xx, yy, lx, ly, lz, coord
       return tf.compat.v1.where(
-          tf.math.logical_and(zz <= local_map, zz > local_map - self.config.dz),  # pyrefly: ignore[unsupported-operation]
+          tf.math.logical_and(zz <= local_map, zz > local_map - self.config.dz),
           tf.ones_like(zz, dtype=_TF_DTYPE), tf.zeros_like(zz, dtype=_TF_DTYPE))
 
     return init_fn  # pyrefly: ignore[bad-return]

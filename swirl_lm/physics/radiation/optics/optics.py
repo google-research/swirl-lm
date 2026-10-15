@@ -83,7 +83,7 @@ class RRTMOptics(optics_base.OpticsScheme):
     """The actual optical_depth calculation as a graph."""
     logging.info('Calling optical depth graph.')
     lookup_gas_optics = self.gas_optics_lw if is_lw else self.gas_optics_sw
-    return (gas_optics.compute_minor_optical_depth(  # pyrefly: ignore[unsupported-operation]
+    return (gas_optics.compute_minor_optical_depth(
         lookup_gas_optics,  # pyrefly: ignore[bad-argument-type]
         self.vmr_lib,
         molecules,
@@ -342,7 +342,7 @@ class RRTMOptics(optics_base.OpticsScheme):
       else:
         raise ValueError(f'Unsupported nested input type: {type(arg)}')
 
-    n = len(single_input)  # pyrefly: ignore[bad-argument-type]
+    n = len(single_input)
     # Split arguments along z-list and apply the function to each level
     # separately.
     split_inputs = [[extract_arg(arg, i) for arg in args] for i in range(n)]
@@ -356,15 +356,15 @@ class RRTMOptics(optics_base.OpticsScheme):
     def delta_scale_tau(
         tau: tf.Tensor, ssa: tf.Tensor, g: tf.Tensor
     ) -> tf.Tensor:
-      wf = ssa * g**2  # pyrefly: ignore[unsupported-operation]
+      wf = ssa * g**2
       return (1.0 - wf) * tau
 
     def delta_scale_ssa(ssa: tf.Tensor, g: tf.Tensor) -> tf.Tensor:
-      wf = ssa * g**2  # pyrefly: ignore[unsupported-operation]
+      wf = ssa * g**2
       return (ssa - wf) / tf.maximum(self._EPSILON, 1.0 - wf)
 
     def delta_scale_asy(g: tf.Tensor) -> tf.Tensor:
-      f = g**2  # pyrefly: ignore[unsupported-operation]
+      f = g**2
       return (g - f) / tf.maximum(self._EPSILON, 1.0 - f)
 
     cloud_tau = tf.nest.map_structure(
@@ -819,7 +819,7 @@ class GrayAtmosphereOptics(optics_base.OpticsScheme):
     del pressure
 
     def src_fn(t: tf.Tensor) -> tf.Tensor:
-      return constants.STEFAN_BOLTZMANN * t**4 / np.pi  # pyrefly: ignore[unsupported-operation]
+      return constants.STEFAN_BOLTZMANN * t**4 / np.pi
 
     temperature_bottom, temperature_top = self._reconstruct_face_values(
         replica_id, replicas, temperature,

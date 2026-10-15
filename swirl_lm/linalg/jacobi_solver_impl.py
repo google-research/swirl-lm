@@ -392,26 +392,26 @@ class ThreeWeight(BaseJacobiSolver):
     reciprocal_diagonal_factor = self._precompute_reciprocal_diagonal_factor(
         w0, w1, w2
     )
-    diagonal_factor = 1 / reciprocal_diagonal_factor  # pyrefly: ignore[unsupported-operation]
+    diagonal_factor = 1 / reciprocal_diagonal_factor
 
     # Compute factors for the off-diagonal terms.
     sum_op = (
-        lambda f: (0.5 * self._delta2_inv[0])  # pyrefly: ignore[unsupported-operation]
+        lambda f: (0.5 * self._delta2_inv[0])
         * self._kernel_op.apply_kernel_op_x(f, 'kSx'),
-        lambda f: (0.5 * self._delta2_inv[1])  # pyrefly: ignore[unsupported-operation]
+        lambda f: (0.5 * self._delta2_inv[1])
         * self._kernel_op.apply_kernel_op_y(f, 'kSy'),
-        lambda f: (0.5 * self._delta2_inv[2])  # pyrefly: ignore[unsupported-operation]
+        lambda f: (0.5 * self._delta2_inv[2])
         * self._kernel_op.apply_kernel_op_z(f, 'kSz', 'kSzsh'),
     )
 
     w = (w0, w1, w2)
     s_p = [sum_op[dim](p) for dim in (0, 1, 2)]
-    w_s_p = [w[dim] * s_p[dim] for dim in (0, 1, 2)]  # pyrefly: ignore[unsupported-operation]
-    w_p = [w[dim] * p for dim in (0, 1, 2)]  # pyrefly: ignore[unsupported-operation]
+    w_s_p = [w[dim] * s_p[dim] for dim in (0, 1, 2)]
+    w_p = [w[dim] * p for dim in (0, 1, 2)]
     s_w_p = [sum_op[dim](w_p[dim]) for dim in (0, 1, 2)]
 
     return (
-        -diagonal_factor * p  # pyrefly: ignore[bad-return, unsupported-operation]
+        -diagonal_factor * p
         + (w_s_p[0] + w_s_p[1] + w_s_p[2])
         + (s_w_p[0] + s_w_p[1] + s_w_p[2])
         - rhs

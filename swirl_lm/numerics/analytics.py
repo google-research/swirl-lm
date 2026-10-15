@@ -191,7 +191,7 @@ def pair_distance_with_tol(
   lhs = halo_exchange.clear_halos(lhs, halo_width)
   rhs = halo_exchange.clear_halos(rhs, halo_width)
 
-  diff = lhs - rhs  # pyrefly: ignore[unsupported-operation]
+  diff = lhs - rhs
 
   num_replicas = np.prod(replicas.shape)
   group_assignment = np.array([range(num_replicas)], dtype=np.int32)

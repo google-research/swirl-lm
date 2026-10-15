@@ -310,7 +310,7 @@ class TotalEnergy(scalar_generic.ScalarGeneric):
           tau_2j_l: tf.Tensor,
       ) -> tf.Tensor:
         """Computes the dot product of the velocity and stress tensor."""
-        return u * tau_0j_l + v * tau_1j_l + w * tau_2j_l  # pyrefly: ignore[unsupported-operation]
+        return u * tau_0j_l + v * tau_1j_l + w * tau_2j_l
 
       return tf.nest.map_structure(
           u_dot_tau,

@@ -53,10 +53,34 @@ from swirl_lm.jax.base import physical_variable_keys_manager
 from swirl_lm.jax.boundary_condition import boundary_condition_utils
 from swirl_lm.jax.utility import grid_parametrization
 from swirl_lm.jax.utility import types
-import tensorflow as tf
 
 ScalarField = types.ScalarField
 ScalarFieldMap = types.ScalarFieldMap
+
+
+def _resolve_prng_key(
+    key: jax.Array | None,
+    seed: tuple[int, int] | None,
+) -> jax.Array:
+  """Resolves the `key`/`seed` pair this module accepts into a JAX PRNG key.
+
+  `key` takes precedence when both are given. `seed` is the older
+  two-integer form, kept for callers that want a deterministic stream without
+  building a key themselves; the two integers are folded together so each
+  contributes independently.
+
+  Args:
+    key: A JAX PRNG key, or None.
+    seed: A two-integer seed, or None.
+
+  Returns:
+    A JAX PRNG key.
+  """
+  if key is not None:
+    return key
+  if seed is not None:
+    return jax.random.fold_in(jax.random.PRNGKey(seed[0]), seed[1])
+  return jax.random.PRNGKey(0)
 
 
 class SyntheticTurbulentInflow:
@@ -115,6 +139,23 @@ class SyntheticTurbulentInflow:
         2 * self.n_pad[1] + self.m[0],
         2 * self.n_pad[2] + self.m[1],
     ]
+
+    # The random fields carry `n_pad` ghost points on each side of each
+    # in-plane axis, and the cross-device exchange fills them from the
+    # neighbour's interior by reading a `n_pad`-wide slab of it. That slab only
+    # exists if each core's in-plane extent is at least `n_pad`; otherwise the
+    # exchange silently reads the neighbour's own ghost region and the filtered
+    # turbulence is corrupted in a band at every device boundary.
+    for i, (pad, extent) in enumerate(zip(self.n_pad[1:], self.m)):
+      if pad > extent:
+        dim = self.inflow_plane[i]
+        raise ValueError(
+            f'The synthetic inflow needs at least {pad} grid points per core '
+            f'along dimension {dim} (the filter half width derived from '
+            f'`length_scale`), but the core has only {extent}. Either reduce '
+            f'`length_scale[{dim}]`, coarsen the grid, or use fewer cores '
+            f'along that dimension.'
+        )
 
     # Initializes the weights of the filters.
     self.b = [
@@ -191,6 +232,40 @@ class SyntheticTurbulentInflow:
       )
     return f'{helper_type}_{velocity}_{inflow_dim}_{inflow_face}'
 
+  def partition_specs(self) -> dict[str, jax.sharding.PartitionSpec]:
+    """Returns how this model's 2D helper states map onto the device mesh.
+
+    `mean_*` and `rms_*` live on the inflow plane and are built per replica,
+    so they are genuinely different on every device whose subdomain covers a
+    different part of that plane. The driver cannot infer that -- a 2D state
+    with no declared spec can only be replicated -- so register the result of
+    this method in `params.additional_state_partition_specs`:
+
+      params.additional_state_partition_specs.update(
+          inflow.partition_specs())
+
+    Without it, the driver has to assume every replica produced the same
+    plane; it now raises instead of silently keeping replica 0's copy, which
+    previously fed the wrong mean velocity profile to every device except the
+    first.
+
+    Returns:
+      A dict mapping each 2D helper state name to its `PartitionSpec`.
+    """
+    # The plane's two axes are the physical dimensions other than the inflow
+    # normal, in ascending order -- the same ordering `self.m` uses. Mesh axis
+    # names are the physical dimension names ('x', 'y', 'z') whatever
+    # `data_axis_order` is, so the spec simply names those two axes and does
+    # not depend on the grid parametrization. Compare
+    # `boundary_condition_utils.get_bc_partition_spec`, which derives the same
+    # thing for the rank-3 boundary condition arrays, where the normal axis is
+    # additionally present and unpartitioned.
+    plane_axis_names = tuple(
+        ('x', 'y', 'z')[dim] for dim in self.inflow_plane
+    )
+    spec = jax.sharding.PartitionSpec(*plane_axis_names)
+    return {key: spec for key in self._mean_keys + self._rms_keys}
+
   def _compute_filter_weights(self, n: int, n_pad: int) -> list[float]:
     """Computes the filter weights for the turbulence flow field.
 
@@ -235,25 +310,17 @@ class SyntheticTurbulentInflow:
   ) -> list[ScalarField]:
     """Generates three random fields for the turbulence generation.
 
+    The three fields are drawn from independent sub-keys, so the `u`, `v` and
+    `w` fluctuations are uncorrelated.
+
     Args:
-      key: A JAX PRNG key.
-      seed: Optional (int, int) tuple seed for stateless normal generation (used
-        for TF test compatibility).
+      key: A JAX PRNG key. Takes precedence over `seed`.
+      seed: An optional two-integer seed, used when `key` is None.
 
     Returns:
       A length 3 list of 3D arrays, each being a random field.
     """
-    if seed is not None and tf is not None:
-      return [
-          jnp.array(
-              tf.random.stateless_normal(
-                  shape=self.nr_total, dtype=tf.float32, seed=seed
-              ).numpy()
-          )
-          for _ in range(3)
-      ]
-    rng_key = key if key is not None else jax.random.PRNGKey(0)
-    keys = jax.random.split(rng_key, 3)
+    keys = jax.random.split(_resolve_prng_key(key, seed), 3)
     return [jax.random.normal(keys[i], shape=self.nr_total) for i in range(3)]
 
   def _halo_exchange_1d(
@@ -413,64 +480,16 @@ class SyntheticTurbulentInflow:
     r_halo_updated = [halo_exchange_2d(r_i) for r_i in r]
     u_alpha = [compute_u_alpha(r_alpha) for r_alpha in r_halo_updated]
 
-    if key is not None:
-      rng_key = key
-      keys = jax.random.split(rng_key, 3)
-      new_slices = [
-          jax.random.normal(
-              keys[i],
-              shape=[
-                  self.n_pad[1] * 2 + self.m[0],
-                  self.n_pad[2] * 2 + self.m[1],
-              ],
-          )
-          for i in range(3)
-      ]
-    elif seed is not None and tf is not None:
-      try:
-        new_slices = [
-            jnp.array(
-                tf.random.stateless_normal(
-                    shape=[
-                        self.n_pad[1] * 2 + self.m[0],
-                        self.n_pad[2] * 2 + self.m[1],
-                    ],
-                    dtype=tf.float32,
-                    seed=seed,
-                ).numpy()
-            )
-            for _ in range(3)
-        ]
-      except Exception:  # pylint: disable=broad-exception-caught
-        rng_key = jax.random.fold_in(jax.random.PRNGKey(seed[0]), seed[1])
-        keys = jax.random.split(rng_key, 3)
-        new_slices = [
-            jax.random.normal(
-                keys[i],
-                shape=[
-                    self.n_pad[1] * 2 + self.m[0],
-                    self.n_pad[2] * 2 + self.m[1],
-                ],
-            )
-            for i in range(3)
-        ]
-    else:
-      rng_key = (
-          jax.random.fold_in(jax.random.PRNGKey(seed[0]), seed[1])
-          if seed is not None
-          else jax.random.PRNGKey(0)
-      )
-      keys = jax.random.split(rng_key, 3)
-      new_slices = [
-          jax.random.normal(
-              keys[i],
-              shape=[
-                  self.n_pad[1] * 2 + self.m[0],
-                  self.n_pad[2] * 2 + self.m[1],
-              ],
-          )
-          for i in range(3)
-      ]
+    # The leading plane of each random field is replaced by a fresh draw every
+    # step; this is what advances the turbulence in time.
+    keys = jax.random.split(_resolve_prng_key(key, seed), 3)
+    new_slice_shape = [
+        self.n_pad[1] * 2 + self.m[0],
+        self.n_pad[2] * 2 + self.m[1],
+    ]
+    new_slices = [
+        jax.random.normal(keys[i], shape=new_slice_shape) for i in range(3)
+    ]
 
     r_new = [
         jnp.concatenate(

@@ -230,7 +230,7 @@ def save_1d_array_to_tempfile(
   """Saves a 1D array to a tempfile and returns the path to the tempfile."""
   tempfile = test.create_tempfile()
   fname = os.path.join(tempfile)
-  np.savetxt(fname, array)  # pyrefly: ignore[bad-argument-type]
+  np.savetxt(fname, array)
   return fname
 
 

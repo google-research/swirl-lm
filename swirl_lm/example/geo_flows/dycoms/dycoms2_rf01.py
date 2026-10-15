@@ -130,7 +130,7 @@ class Dycoms2RF01(geophysical_flow_common.GeophysicalFlowSetup):
         tf.less_equal(zz, self.cloud_utils.zi),
         self.t_base * tf.ones_like(zz),
         self.t_top
-        + tf.math.pow(tf.maximum(zz - self.cloud_utils.zi, 0.0), 1.0 / 3.0),  # pyrefly: ignore[unsupported-operation]
+        + tf.math.pow(tf.maximum(zz - self.cloud_utils.zi, 0.0), 1.0 / 3.0),
     )
 
     # This condition is specified in Eq. (2) in Stevens, et. al., 2005.

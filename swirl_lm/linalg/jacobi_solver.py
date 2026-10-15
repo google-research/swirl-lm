@@ -75,7 +75,7 @@ def halo_update_for_compatibility_fn(
 
   def halo_update_fn(p: FlowFieldVal) -> FlowFieldVal:
     """Updates the halo following the divergence theorem."""
-    nz = len(p)  # pyrefly: ignore[bad-argument-type]
+    nz = len(p)
     nx, ny = p[0].get_shape().as_list()
     lx = dx * (nx - 2 * halo_width) * computation_shape[0]
     ly = dy * (ny - 2 * halo_width) * computation_shape[1]

@@ -280,7 +280,7 @@ def _make_backward_banded_matrix(
   if axis == 'y':
     stencil = stencil[::-1]
     if len(stencil) % 2 == 0:
-      offset -= 1
+      offset -= 1  # pyrefly: ignore[unsupported-operation]
 
   return _make_banded_matrix(stencil, n, offset)
 
@@ -609,7 +609,7 @@ class ApplyKernelOp(object):
         (shift and shift not in self._z_kernel_dict)):
       raise ValueError('Invalid kernel name requested.')
     return common_ops.apply_op_z(tiles, self._z_kernel_dict[name],
-                                 self._z_kernel_dict[shift])  # pytype: disable=wrong-arg-types
+                                 self._z_kernel_dict[shift])
 
 
 def _mulop_kernel_dict(nx,
@@ -744,11 +744,11 @@ class ApplyKernelMulOp(ApplyKernelOp):
 
   def apply_kernel_op_x(self, tiles: FlowFieldVal,
                         name: Text) -> FlowFieldVal:
-    return common_ops.apply_op_x(tiles, self._get_kernel(name))  # pytype: disable=wrong-arg-types
+    return common_ops.apply_op_x(tiles, self._get_kernel(name))
 
   def apply_kernel_op_y(self, tiles: FlowFieldVal,
                         name: Text) -> FlowFieldVal:
-    return common_ops.apply_op_y(tiles, self._get_kernel(name))  # pytype: disable=wrong-arg-types
+    return common_ops.apply_op_y(tiles, self._get_kernel(name))
 
 
 def _convop_kernel_dict(
@@ -1075,8 +1075,8 @@ class ApplyKernelSliceOp(ApplyKernelOp):
 
   def apply_kernel_op_x(self, tiles: FlowFieldVal,
                         name: Text) -> FlowFieldVal:
-    return common_ops.apply_slice_op_x(tiles, self._get_kernel(name))  # pytype: disable=wrong-arg-types
+    return common_ops.apply_slice_op_x(tiles, self._get_kernel(name))
 
   def apply_kernel_op_y(self, tiles: FlowFieldVal,
                         name: Text) -> FlowFieldVal:
-    return common_ops.apply_slice_op_y(tiles, self._get_kernel(name))  # pytype: disable=wrong-arg-types
+    return common_ops.apply_slice_op_y(tiles, self._get_kernel(name))

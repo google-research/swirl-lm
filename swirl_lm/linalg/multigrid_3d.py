@@ -200,7 +200,7 @@ def mg_cycle(
   return x
 
 
-def poisson_mg_cycle_fn_for_one_core(  # pytype: disable=annotation-type-mismatch  # numpy-scalars
+def poisson_mg_cycle_fn_for_one_core(
     full_grid_shape: Sequence[int],
     n_coarse: int = 1,
     n_smooth: int = 1,
@@ -287,12 +287,12 @@ def poisson_mg_cycle_fn_for_one_core(  # pytype: disable=annotation-type-mismatc
         x0, b_minus_a_xb, prs, homogeneous_smoother_fn, residual_fn,
         a_inv_for_coarsest_level, n_coarse, num_cycles=num_cycles)
 
-    return [x0_ + xb_ for x0_, xb_ in zip(x0, xb)]  # pyrefly: ignore[unsupported-operation]
+    return [x0_ + xb_ for x0_, xb_ in zip(x0, xb)]
 
   return mg_cycle_fn
 
 
-def poisson_mg_cycle_fn(  # pytype: disable=annotation-type-mismatch  # numpy-scalars
+def poisson_mg_cycle_fn(
     params: grid_parametrization.GridParametrization,
     prs: multigrid_utils.ProlongRestrictMatrices,
     boundary_conditions: halo_exchange_utils.BoundaryConditionsSpec,
@@ -358,7 +358,7 @@ def poisson_mg_cycle_fn(  # pytype: disable=annotation-type-mismatch  # numpy-sc
   return mg_cycle_fn
 
 
-def poisson_mg_cycle_step_fn(  # pytype: disable=annotation-type-mismatch  # numpy-scalars
+def poisson_mg_cycle_step_fn(
     params: grid_parametrization.GridParametrization,
     coarsest_subgrid_shape: Optional[Sequence[int]] = None,
     n_coarse: int = 1,

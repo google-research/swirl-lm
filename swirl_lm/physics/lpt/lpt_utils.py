@@ -76,7 +76,7 @@ def get_particle_replica_id(
   replica_ids = tf.where(
       out_of_bounds,
       -tf.ones_like(x0_ind),
-      common_ops.gather(replicas, tf.stack([x1_ind, x2_ind, x0_ind], axis=-1)),
+      common_ops.gather(replicas, tf.stack([x1_ind, x2_ind, x0_ind], axis=-1)),  # pyrefly: ignore[bad-argument-type]
   )
 
   return replica_ids

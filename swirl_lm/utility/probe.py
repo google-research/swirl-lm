@@ -141,7 +141,7 @@ class Probe:
 
     # Update values from the correct replica.
     probes = {}
-    row_id = step_id - self.start_step_id  # pyrefly: ignore[unsupported-operation]
+    row_id = step_id - self.start_step_id
     for i in range(self.indices.shape[0]):
       probe_old = additional_states[self.probe_name(i)]
       ci = replicas[self.c_indices[i][0], self.c_indices[i][1],

@@ -458,7 +458,7 @@ def get_local_slice_of_1d_array(
   Returns:
     A 1D tensor representing the local slice of `v` in `core_id`.
   """
-  start = core_id * core_n  # pyrefly: ignore[unsupported-operation]
+  start = core_id * core_n
   end = start + n
   return v[start : end]
 
@@ -553,7 +553,7 @@ def group_replicas(
 
   if axis is None:
     # Returns a single group with all the replica id's.
-    return reshape(replicas, [1, -1])  # pyrefly: ignore[no-matching-overload]
+    return reshape(replicas, [1, -1])
 
   if isinstance(axis, int):
     axis = [axis]
@@ -565,7 +565,7 @@ def group_replicas(
   # Transpose `replicas` so the dimensions in `axis` occur last.
   remaining_axis = list(set([0, 1, 2]) - set(axis))
   transpose_axes = remaining_axis + axis  # pyrefly: ignore[unsupported-operation]
-  transposed_replicas = transpose(replicas, transpose_axes)  # pyrefly: ignore[no-matching-overload]
+  transposed_replicas = transpose(replicas, transpose_axes)
   # Flatten replica slices.
   slice_size = np.prod([replicas.shape[dim] for dim in axis])
   return reshape(transposed_replicas, [-1, slice_size])
@@ -974,7 +974,7 @@ def local_dot(
   Returns:
     The dot product of the two input vectors.
   """
-  return tf.math.reduce_sum(vec1 * vec2)  # pyrefly: ignore[unsupported-operation]
+  return tf.math.reduce_sum(vec1 * vec2)
 
 
 def local_vdot(
@@ -1213,7 +1213,7 @@ def compute_norm(
       norm = global_reduce(v, l1_norm_op, group_assignment)
     elif norm_type == NormType.L2:
       norm = tf.math.sqrt(
-          global_reduce(v * v, tf.math.reduce_sum, group_assignment))  # pyrefly: ignore[unsupported-operation]
+          global_reduce(v * v, tf.math.reduce_sum, group_assignment))
     elif norm_type == NormType.L_INF:
       l_inf_norm_op = lambda u: tf.math.reduce_max(tf.abs(u))
       norm = global_reduce(v, l_inf_norm_op, group_assignment)
@@ -1504,7 +1504,7 @@ def integration_in_dim(
       pred=tf.equal(iloc, 0),
       true_fn=lambda: local_cumsum,
       false_fn=lambda: local_cumsum + tf.expand_dims(  # pylint: disable=g-long-lambda
-          replica_cumsum[plane_index(iloc - 1)],  # pyrefly: ignore[unsupported-operation]
+          replica_cumsum[plane_index(iloc - 1)],
           axis=axis))
   cumsum_to_end = tf.expand_dims(
       replica_cumsum[plane_index(-1)], axis=axis) - cumsum_from_0
@@ -1687,7 +1687,7 @@ def gather_from_mask(x: tf.Tensor, mask: tf.Tensor) -> tf.Tensor:
   Raises:
     ValueError If the shapes of `x` and `mask` are different.
   """
-  return gather(x, tf.where(tf.less(tf.abs(mask - 1.0), 1e-6)))  # pyrefly: ignore[unsupported-operation]
+  return gather(x, tf.where(tf.less(tf.abs(mask - 1.0), 1e-6)))
 
 
 def scatter(
@@ -1740,7 +1740,7 @@ def scatter_to_mask(
     with all zeros will be returned.
   """
   return scatter(
-      x, tf.where(tf.less(tf.abs(mask - 1.0), 1e-6)), tf.shape(mask), dtype  # pyrefly: ignore[unsupported-operation]
+      x, tf.where(tf.less(tf.abs(mask - 1.0), 1e-6)), tf.shape(mask), dtype
   )
 
 
@@ -1888,7 +1888,7 @@ def get_face(
   if isinstance(value, Sequence) and dim == 2:
     bc_value = bc_value[0]
 
-  return bc_value  # pytype: disable=bad-return-type
+  return bc_value  # pyrefly: ignore[bad-return]
 
 
 def meshgrid(xs: _TensorEquivalent, ys: _TensorEquivalent,

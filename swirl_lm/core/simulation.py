@@ -247,7 +247,7 @@ class Simulation:
 
     # Step 1: store the variables at the previous time step with boundary
     # conditions updated.
-    with tf.name_scope('init_states_update'):  # pyrefly: ignore[bad-instantiation]
+    with tf.name_scope('init_states_update'):
       init_states = self._update_initial_states(replica_id, replicas, states,
                                                 additional_states)
     states_0 = init_states
@@ -265,7 +265,7 @@ class Simulation:
       # Step 2: Update all scalars in conservative form. Boundary conditions are
       # not enforced for the conservative scalars, but they are enforced for the
       # temporary primitive scalars.
-      with tf.name_scope('scalar_prediction_step'):  # pyrefly: ignore[bad-instantiation]
+      with tf.name_scope('scalar_prediction_step'):
         scalar_prediction_states, mass_source = self.scalars.prediction_step(
             replica_id, replicas, states_k, states_0, additional_states)
       states_k.update(scalar_prediction_states)
@@ -274,7 +274,7 @@ class Simulation:
       # Because the boundary conditions are enforced for the temporary primitive
       # variables, the density at the boundary is valid.
       if self._params.solver_mode == thermodynamics_pb2.Thermodynamics.LOW_MACH:
-        with tf.name_scope('density_update_low_mach'):  # pyrefly: ignore[bad-instantiation]
+        with tf.name_scope('density_update_low_mach'):
           rho, drho = self.thermodynamics.update_density(self._kernel_op,
                                                          replica_id, replicas,
                                                          states_k,
@@ -288,14 +288,14 @@ class Simulation:
             'drho': drho,
         })
       else:
-        with tf.name_scope('density_update_anelastic'):  # pyrefly: ignore[bad-instantiation]
+        with tf.name_scope('density_update_anelastic'):
           rho_thermal = self.thermodynamics.update_thermal_density(
               states_k, additional_states)
         states_k.update({
             'rho_thermal': rho_thermal,
         })
 
-      with tf.name_scope('pressure_halo_update'):  # pyrefly: ignore[bad-instantiation]
+      with tf.name_scope('pressure_halo_update'):
         pressure_update_halo_states = self.pressure.update_pressure_halos(
             replica_id, replicas, {
                 'rho_u': states_k['rho_u'],
@@ -319,7 +319,7 @@ class Simulation:
           and self._params.solver_mode
           != thermodynamics_pb2.Thermodynamics.ANELASTIC
       ):
-        with tf.name_scope('scalar_correction'):  # pyrefly: ignore[bad-instantiation]
+        with tf.name_scope('scalar_correction'):
           scalar_correction_states = self.scalars.correction_step(
               replica_id, replicas, states_k, states_0, additional_states
           )
@@ -328,7 +328,7 @@ class Simulation:
       # Step 5: Time advance the momentum equations to yield provisional
       # estimates for the velocity components. Boundary conditions are enforced
       # for velocity components only.
-      with tf.name_scope('velocity_prediction'):  # pyrefly: ignore[bad-instantiation]
+      with tf.name_scope('velocity_prediction'):
         velocity_prediction_states = self.velocity.prediction_step(
             replica_id, replicas, states_k, states_0, additional_states
         )
@@ -336,7 +336,7 @@ class Simulation:
 
       # Step 6: Get the pressure correction. NB: the boundary condition for
       # density is set to be Neumann everywhere.
-      with tf.name_scope('pressure_step'):  # pyrefly: ignore[bad-instantiation]
+      with tf.name_scope('pressure_step'):
         additional_states_with_mass_source = dict(additional_states) | {
             'mass_source': mass_source
         }
@@ -352,7 +352,7 @@ class Simulation:
       states_k.update(pressure_step_states)
 
       # Step 7: Update the velocity and pressure.
-      with tf.name_scope('velocity_correction'):  # pyrefly: ignore[bad-instantiation]
+      with tf.name_scope('velocity_correction'):
         velocity_correction_states = self.velocity.correction_step(
             replica_id, replicas, states_k, states_0, additional_states
         )

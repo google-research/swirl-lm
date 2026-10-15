@@ -154,6 +154,6 @@ class BoundaryLayer():
     z = 0.5 * self.most.height if height is None else height
 
     zeta = self.return_fn(
-        self.most._normalized_height(theta, u1, u2, z))  # pylint: disable=protected-access
+        self.most._normalized_height(theta, u1, u2, z))  # pylint: disable=protected-access  # pyrefly: ignore[bad-argument-type]
 
     return z / zeta

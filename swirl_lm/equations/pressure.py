@@ -340,7 +340,7 @@ def _gen_monitor_data(
     return monitor_vars
 
   norm_types = requested_norms.keys()
-  norms, r_raw = solver.compute_residual(  # pytype: disable=attribute-error
+  norms, r_raw = solver.compute_residual(
       replica_id,
       replicas,
       dp,
@@ -391,7 +391,7 @@ def _gen_monitor_data(
         vv = v
       monitor_vars.update({k: vv})
 
-  return monitor_vars  # pytype: disable=bad-return-type
+  return monitor_vars
 
 
 def _get_first_last_grid_spacing_for_wall_bc(
@@ -591,7 +591,7 @@ class Pressure(object):
       drho_dt: FlowFieldVal,
       subiter: Optional[tf.Tensor] = None,
       step_id: Optional[tf.Tensor] = None,
-  ) -> Tuple[FlowFieldVal, monitor.MonitorDataType]:  # pytype: disable=annotation-type-mismatch
+  ) -> Tuple[FlowFieldVal, monitor.MonitorDataType]:
     """Updates the pressure correction.
 
     This method follows the approach introduced in:
@@ -1172,7 +1172,7 @@ class Pressure(object):
       additional_states: FlowFieldMap,
       subiter: Optional[tf.Tensor] = None,
       step_id: Optional[tf.Tensor] = None,
-  ) -> FlowFieldMap:  # pytype: disable=annotation-type-mismatch
+  ) -> FlowFieldMap:
     """Updates the pressure and its correction for the current subiteration.
 
     Args:

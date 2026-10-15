@@ -183,7 +183,7 @@ def filter_2(
 
   # Handle the 3D tensor case.
   if isinstance(f, tf.Tensor):
-    nz, nx, ny = f.shape  # pytype: disable=attribute-error
+    nz, nx, ny = f.shape
     mask = tf.pad(
         tf.constant(True, shape=(nz - 2, nx - 2, ny - 2)),
         paddings=[[1, 1], [1, 1], [1, 1]],

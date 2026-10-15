@@ -440,7 +440,7 @@ class Scalars(object):
                                                replicas, updated_scalars,
                                                additional_states, self._bc)  # pyrefly: ignore[bad-argument-type]
 
-    return updated_scalars, mass_source  # pytype: disable=bad-return-type
+    return updated_scalars, mass_source
 
   def correction_step(
       self,

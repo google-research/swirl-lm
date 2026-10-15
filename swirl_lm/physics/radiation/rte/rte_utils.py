@@ -86,7 +86,7 @@ class RTEUtils:
     assert a_is_tensor == isinstance(b, tf.Tensor)
 
     if not a_is_tensor and dim == 2:  # Append to Python list.
-      return a + b  # pyrefly: ignore[unsupported-operation]
+      return a + b
 
     if a_is_tensor:
       # Handles the case of single 3D tensor. Shifts `dim` to conform with the

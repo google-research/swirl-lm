@@ -268,7 +268,7 @@ def compute_major_optical_depth(
       ('p', lambda _: p_interp),
       ('m', mix_interpolant_fn),
   ))
-  return molecules / _M2_TO_CM2_FACTOR * optics_utils.interpolate(  # pyrefly: ignore[unsupported-operation]
+  return molecules / _M2_TO_CM2_FACTOR * optics_utils.interpolate(
       lookup_gas_optics.kmajor[..., igpt], interpolant_fns=interpolant_fn_dict
   )
 
@@ -362,7 +362,7 @@ def _compute_minor_optical_depth(
   )
 
   if vmr_fields is not None and lookup.idx_h2o in vmr_fields:
-    dry_factor = 1.0 / (1.0 + vmr_fields[lookup.idx_h2o])  # pyrefly: ignore[unsupported-operation]
+    dry_factor = 1.0 / (1.0 + vmr_fields[lookup.idx_h2o])
   else:
     dry_factor = 1.0
 
@@ -391,7 +391,7 @@ def _compute_minor_optical_depth(
     return lambda: scaling
 
   def scale_with_density_fn(i):
-    scaling = _PASCAL_TO_HPASCAL_FACTOR * p / temperature  # pyrefly: ignore[unsupported-operation]
+    scaling = _PASCAL_TO_HPASCAL_FACTOR * p / temperature
     scaling *= tf.cond(
         pred=tf.greater(idx_scaling_gas[i], 0),
         true_fn=scale_with_gas_fn(i),
@@ -405,7 +405,7 @@ def _compute_minor_optical_depth(
     # Map the minor contributor to the RRTMGP gas index.
     gas_idx = idx_gases_minor[i] * tf.ones_like(tropo_idx)
     vmr_minor = get_vmr(lookup, vmr_lib, gas_idx, vmr_fields)
-    scaling = vmr_minor * molecules / _M2_TO_CM2_FACTOR  # pyrefly: ignore[unsupported-operation]
+    scaling = vmr_minor * molecules / _M2_TO_CM2_FACTOR
     scaling *= tf.cond(
         pred=tf.equal(minor_scales_with_density[i], 1),
         true_fn=scale_with_density_fn(i),
@@ -562,12 +562,12 @@ def compute_rayleigh_optical_depth(
       lkp.rayl_upper[..., igpt], interpolant_fns
   )
   if vmr_fields is not None and lkp.idx_h2o in vmr_fields:
-    factor = 1.0 + vmr_fields[lkp.idx_h2o]  # pyrefly: ignore[unsupported-operation]
+    factor = 1.0 + vmr_fields[lkp.idx_h2o]
   else:
     factor = 1.0
 
   return (
-      factor  # pyrefly: ignore[unsupported-operation]
+      factor
       * molecules
       / _M2_TO_CM2_FACTOR
       * tf.where(

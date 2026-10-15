@@ -190,7 +190,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       The latent heat of freezing/fusion at the input temperature.
     """
     lh_f0 = self._lh_s0 - self._lh_v0
-    return lh_f0 + (self._cp_l - self._cp_i) * (temperature - self._t_0)  # pyrefly: ignore[bad-return, unsupported-operation]
+    return lh_f0 + (self._cp_l - self._cp_i) * (temperature - self._t_0)
 
   def humidity_to_volume_mixing_ratio(
       self,
@@ -396,17 +396,26 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       return self._p_thermal * tf.math.exp(
           -(z + ref_state.height * delta_t_frac *
             (tf.math.log(1.0 - delta_t_frac *
-                         tf.math.tanh(z / ref_state.height)) -  # pyrefly: ignore[unsupported-operation]
-             tf.math.log(1.0 + tf.math.tanh(z / ref_state.height)) +  # pyrefly: ignore[unsupported-operation]
-             z / ref_state.height)) / h_sfc / (1.0 - delta_t_frac**2))  # pyrefly: ignore[unsupported-operation]
+                         tf.math.tanh(z / ref_state.height)) -
+             tf.math.log(1.0 + tf.math.tanh(z / ref_state.height)) +
+             z / ref_state.height)) / h_sfc / (1.0 - delta_t_frac**2))
 
     def pressure_with_const_theta(z: tf.Tensor) -> tf.Tensor:
       """Computes the reference pressure for constant potential temperature."""
       ref_state = cast(
           thermodynamics_pb2.Water.ConstThetaReferenceState, self._ref_state
       )
+      # Fold G / (cp_d * theta) into a single factor, computed as
+      # ((1 / cp_d) * (1 / theta)) * G in the dtype of `z` with rounding after
+      # every operation, so that `z` is multiplied by one constant.
+      np_dtype = tf.as_dtype(z.dtype).as_numpy_dtype
+      g_over_cp_d_theta = (
+          np_dtype(1.0) / np_dtype(self.cp_d)
+          * (np_dtype(1.0) / np_dtype(ref_state.theta))
+          * np_dtype(constants.G)
+      )
       return (self._p_thermal *
-              (1.0 - constants.G * z / self.cp_d / ref_state.theta)  # pyrefly: ignore[unsupported-operation]
+              (1.0 - z * g_over_cp_d_theta)
               **(self.cp_d / _R_D))
 
     def pressure_with_constant(z: tf.Tensor) -> tf.Tensor:
@@ -737,9 +746,9 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       The vapor pressure at saturation condition.
     """
     return self._p_triple * tf.math.pow(
-        temperature / self._t_triple, d_cp / self._r_v) * tf.math.exp(  # pyrefly: ignore[unsupported-operation]
-            (lh_0 - d_cp * self._t_0) / self._r_v *  # pyrefly: ignore[unsupported-operation]
-            (1.0 / self._t_triple - 1.0 / temperature))  # pyrefly: ignore[unsupported-operation]
+        temperature / self._t_triple, d_cp / self._r_v) * tf.math.exp(
+            (lh_0 - d_cp * self._t_0) / self._r_v *
+            (1.0 / self._t_triple - 1.0 / temperature))
 
   def saturation_vapor_pressure_generic(
       self,
@@ -935,7 +944,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
         liquid_frac: tf.Tensor,
     ) -> tf.Tensor:
       """Computes the liquid fraction from condensate fractions."""
-      return tf.where(tf.greater(q_c, 0.0), q_l / q_c, liquid_frac)  # pyrefly: ignore[unsupported-operation]
+      return tf.where(tf.greater(q_c, 0.0), q_l / q_c, liquid_frac)
 
     return tf.nest.map_structure(
         liquid_fraction_from_condensate, q_liq, q_c, liquid_frac_no_condensate)
@@ -1353,7 +1362,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
         target_i: tf.Tensor,
     ) -> tf.Tensor:
       """Determines if the fluid is frozen."""
-      return tf.less(tf.abs(target_freeze_i - target_i), _EPS_E_INT)  # pyrefly: ignore[unsupported-operation]
+      return tf.less(tf.abs(target_freeze_i - target_i), _EPS_E_INT)
 
     return tf.nest.map_structure(
         lambda target_freeze_i, target_i, t_freeze_i, t_i: tf.where(  # pylint: disable=g-long-lambda
@@ -1681,22 +1690,22 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       # Note: these derivatives are approximate because we neglect the
       # derivative of Rm with respect to T and rho. However, these derivatives
       # are very small, and so the approximation is quite good.
-      j11 = rm * temperature  # ∂f1/∂ρ  # pyrefly: ignore[unsupported-operation]
-      j12 = rm * rho  # ∂f1/∂T  # pyrefly: ignore[unsupported-operation]
+      j11 = rm * temperature  # ∂f1/∂ρ
+      j12 = rm * rho  # ∂f1/∂T
 
       # Finite difference derivatives for f2 with respect to rho and
       # T.
       # ∂f2/∂ρ
-      drho = eps * rho  # pyrefly: ignore[unsupported-operation]
+      drho = eps * rho
       rho_plus = rho + drho / 2
       rho_minus = rho - drho / 2
-      j21 = (f2(rho_plus, temperature) - f2(rho_minus, temperature)) / drho  # pyrefly: ignore[unsupported-operation]
+      j21 = (f2(rho_plus, temperature) - f2(rho_minus, temperature)) / drho
 
       # ∂f2/∂T
-      dtemp = eps * temperature  # pyrefly: ignore[unsupported-operation]
+      dtemp = eps * temperature
       temperature_plus = temperature + dtemp / 2
       temperature_minus = temperature - dtemp / 2
-      j22 = (f2(rho, temperature_plus) - f2(rho, temperature_minus)) / dtemp  # pyrefly: ignore[unsupported-operation]
+      j22 = (f2(rho, temperature_plus) - f2(rho, temperature_minus)) / dtemp
 
       # Invert the Jacobian and proceed with a Newton iteration.
       determinant = j11 * j22 - j12 * j21
@@ -1705,12 +1714,12 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       jinv_21 = -j21 / determinant
       jinv_22 = j11 / determinant
 
-      f1val = rho * rm * temperature - p_ref  # pyrefly: ignore[unsupported-operation]
+      f1val = rho * rm * temperature - p_ref
       f2val = f2(rho, temperature)
 
       rho_new = rho - (jinv_11 * f1val + jinv_12 * f2val)
       temperature_new = temperature - (jinv_21 * f1val + jinv_22 * f2val)
-      return (i + 1, (rho_new, temperature_new))  # pyrefly: ignore[bad-return, unsupported-operation]
+      return (i + 1, (rho_new, temperature_new))
 
     i0 = tf.constant(0)
     cond = lambda i, rho_t: tf.less(i, num_iterations)
@@ -1734,11 +1743,11 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     q_l, q_i = self.equilibrium_phase_partition(temperature, rho, q_t)
     r_m = self.r_m(temperature, rho, q_t)
     cp_m = self.cp_m(q_t, q_l, q_i)
-    exner_inv = tf.pow(p_ref / self._p00, -r_m / cp_m)  # pyrefly: ignore[unsupported-operation]
+    exner_inv = tf.pow(p_ref / self._p00, -r_m / cp_m)
     lh_v0 = self._lh_v0
     lh_s0 = self._lh_s0
 
-    theta_li = exner_inv * (temperature - (lh_v0 * q_l + lh_s0 * q_i) / cp_m)  # pyrefly: ignore[unsupported-operation]
+    theta_li = exner_inv * (temperature - (lh_v0 * q_l + lh_s0 * q_i) / cp_m)
     return theta_li
 
   def _rho_and_temperature_from_theta_li_qt_fast(
@@ -1769,9 +1778,9 @@ class Water(thermodynamics_generic.ThermodynamicModel):
     # Case 1: temperature at unsaturated condition.
     # Compute the temperature assuming the air is unsaturated.  This T will be
     # the initial guess for the Newton iterations.
-    r_m_unsat = (1 - q_t) * _R_D + q_t * self._r_v  # pyrefly: ignore[unsupported-operation]
-    cp_m_unsat = (1 - q_t) * constants.CP + q_t * self._cp_v  # pyrefly: ignore[unsupported-operation]
-    exner = (p_ref / self._p00) ** (r_m_unsat / cp_m_unsat)  # pyrefly: ignore[unsupported-operation]
+    r_m_unsat = (1 - q_t) * _R_D + q_t * self._r_v
+    cp_m_unsat = (1 - q_t) * constants.CP + q_t * self._cp_v
+    exner = (p_ref / self._p00) ** (r_m_unsat / cp_m_unsat)
     t1 = exner * theta_li
     t1 = tf.maximum(self._t_min, t1)  # Apply a cutoff for numerical reasons.
     t_guess = t1
@@ -1783,7 +1792,7 @@ class Water(thermodynamics_generic.ThermodynamicModel):
       theta_sat = self._theta_li_from_temperature_rho_qt(
           temperature, rho, q_t, p_ref
       )
-      return theta_sat - theta_li  # pyrefly: ignore[unsupported-operation]
+      return theta_sat - theta_li
 
     num_iterations = self._t_max_iter
     rho, temperature_saturation = self._rho_temperature_newton_solver(

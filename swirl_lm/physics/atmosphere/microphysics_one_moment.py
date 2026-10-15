@@ -118,7 +118,7 @@ def _v_0(
         * particle.params.r_0
         * constants.G
         / (3.0 * particle.params.c_d)
-        * (constants_1m.RHO_WATER / rho - 1.0)  # pyrefly: ignore[unsupported-operation]
+        * (constants_1m.RHO_WATER / rho - 1.0)
     )
   elif isinstance(particle, Snow):
     return tf.constant(2.0**2.25 * particle.params.r_0**0.25)
@@ -219,10 +219,10 @@ class OneMoment(microphysics_generic.Microphysics):
       """Computes the effects of thermal conductivity and water diffusivity."""
       r_v = self.water_model.r_v
       return 1.0 / (
-          lh  # pyrefly: ignore[unsupported-operation]
-          / (constants_1m.K_COND * temperature)  # pyrefly: ignore[unsupported-operation]
+          lh
+          / (constants_1m.K_COND * temperature)
           * (lh / (r_v * temperature) - 1.0)
-          + (r_v * temperature) / (p_sat * constants_1m.D_VAP)  # pyrefly: ignore[unsupported-operation]
+          + (r_v * temperature) / (p_sat * constants_1m.D_VAP)
       )
 
     return tf.nest.map_structure(
@@ -287,13 +287,13 @@ class OneMoment(microphysics_generic.Microphysics):
     ) -> tf.Tensor:
       """Computes the accretion rate."""
       return tf.math.divide_no_nan(
-          particles.n_0(particle, rho, q_p)  # pyrefly: ignore[unsupported-operation]
+          particles.n_0(particle, rho, q_p)
           * pi_av_coeff
           * _v_0(particle, rho)
-          * (q_l * e_cp_l + q_i * e_cp_i)  # pyrefly: ignore[unsupported-operation]
+          * (q_l * e_cp_l + q_i * e_cp_i)
           * particles.gamma(sigma_av + 1.0),
           lam,
-      ) * tf.math.pow(tf.math.divide_no_nan(1.0, coeff.r_0 * lam), sigma_av)  # pyrefly: ignore[unsupported-operation]
+      ) * tf.math.pow(tf.math.divide_no_nan(1.0, coeff.r_0 * lam), sigma_av)
 
     return tf.nest.map_structure(accretion_fn, rho, q_l, q_i, q_p, lam)
 
@@ -358,16 +358,16 @@ class OneMoment(microphysics_generic.Microphysics):
       """Computes the autoconversion of snow."""
       r_is = self._aut_coeff.r_is
       aut = (
-          4.0  # pyrefly: ignore[unsupported-operation]
+          4.0
           * np.pi
           / rho
-          * (s - 1.0)  # pyrefly: ignore[unsupported-operation]
+          * (s - 1.0)
           * g
           * particles.n_0(self._ice)
           * tf.math.exp(-lam * r_is)
           * (
               r_is**2 / (self._ice.params.m_e + self._ice.params.del_m)
-              + tf.math.divide_no_nan((r_is * lam + 1.0), lam**2)  # pyrefly: ignore[unsupported-operation]
+              + tf.math.divide_no_nan((r_is * lam + 1.0), lam**2)
           )
       )
       return tf.math.maximum(aut, 0.0)
@@ -394,12 +394,12 @@ class OneMoment(microphysics_generic.Microphysics):
     coeff = particle.params
     return coeff.a_vent + coeff.b_vent * (
         constants_1m.NU_AIR / constants_1m.D_VAP
-    ) ** (1.0 / 3.0) * tf.math.divide_no_nan(1.0, coeff.r_0 * lam) ** (  # pyrefly: ignore[unsupported-operation]
+    ) ** (1.0 / 3.0) * tf.math.divide_no_nan(1.0, coeff.r_0 * lam) ** (
         0.5 * (coeff.v_e + coeff.del_v)
     ) * tf.math.sqrt(
         tf.math.divide_no_nan(
-            2.0 * coeff.chi_v * _v_0(particle, rho),  # pyrefly: ignore[unsupported-operation]
-            (constants_1m.NU_AIR * lam),  # pyrefly: ignore[unsupported-operation]
+            2.0 * coeff.chi_v * _v_0(particle, rho),
+            (constants_1m.NU_AIR * lam),
         )
     ) * particles.gamma(
         0.5 * (coeff.v_e + coeff.del_v + 5.0)
@@ -461,13 +461,13 @@ class OneMoment(microphysics_generic.Microphysics):
       f_vent = self._ventilation_factor(particle, rho, lam)
       evap_subl = (
           tf.math.divide_no_nan(
-              -4.0  # pyrefly: ignore[unsupported-operation]
+              -4.0
               * np.pi
               * particles.n_0(particle, rho, q_p)
               / rho
-              * (s - 1.0)  # pyrefly: ignore[unsupported-operation]
+              * (s - 1.0)
               * g,
-              lam**2,  # pyrefly: ignore[unsupported-operation]
+              lam**2,
           )
           * f_vent
       )
@@ -547,14 +547,14 @@ class OneMoment(microphysics_generic.Microphysics):
       # to avoid negative rates.
       melt = (
           tf.math.divide_no_nan(
-              4.0  # pyrefly: ignore[unsupported-operation]
+              4.0
               * np.pi
               * particles.n_0(snow, rho, q_s)
               * constants_1m.K_COND
               / self.water_model.lh_f(t)
               / rho
               * tf.math.maximum(t - self.water_model.t_freeze, 0.0),
-              lam**2,  # pyrefly: ignore[unsupported-operation]
+              lam**2,
           )
           * f_vent
       )
@@ -638,9 +638,9 @@ class OneMoment(microphysics_generic.Microphysics):
     def terminal_velocity_fn(rho: tf.Tensor, lam: tf.Tensor):
       """Computes the terminal velocity."""
       return (
-          coeff.chi_v  # pyrefly: ignore[unsupported-operation]
+          coeff.chi_v
           * _v_0(particle, rho)
-          * tf.math.divide_no_nan(1.0, (coeff.r_0 * lam))  # pyrefly: ignore[unsupported-operation]
+          * tf.math.divide_no_nan(1.0, (coeff.r_0 * lam))
           ** (coeff.v_e + coeff.del_v)
           * particles.gamma(
               coeff.m_e + coeff.v_e + coeff.del_m + coeff.del_v + 1.0
@@ -1046,7 +1046,7 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
           water_source: tf.Tensor,
       ) -> tf.Tensor:
         """Converts water conversion rate to an energy source term."""
-        return rho * lh / cp * exner_inv * water_source  # pyrefly: ignore[bad-return, unsupported-operation]
+        return rho * lh / cp * exner_inv * water_source
 
       return source_fn
 
@@ -1256,6 +1256,6 @@ class Adapter(microphysics_generic.MicrophysicsAdapter):
       alpha = (4.0 / 3.0 * np.pi * rho_c * constants_1m.ASYMMETRY_CLOUD) ** (
           -1 / 3
       )
-      return alpha * (rho * q_c / constants_1m.DROPLET_N) ** (1 / 3)  # pyrefly: ignore[unsupported-operation]
+      return alpha * (rho * q_c / constants_1m.DROPLET_N) ** (1 / 3)
 
     return tf.nest.map_structure(r_eff_fn, rho, q_c)

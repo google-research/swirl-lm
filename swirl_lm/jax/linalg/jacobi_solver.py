@@ -147,7 +147,7 @@ class JacobiSolver(base_poisson_solver.PoissonSolver):
       kernel_op.add_kernel({'weighted_sum_121': ([1.0, 2.0, 1.0], 1)})
     elif isinstance(kernel_op, get_kernel_fn.ApplyKernelSliceOp):
       kernel_op.add_kernel(
-          {'weighted_sum_121': {'coeff': [1.0, 2.0, 1.0], 'shift': [-1, 0, 1]}}  # pyrefly: ignore[bad-argument-type]
+          {'weighted_sum_121': {'coeff': [1.0, 2.0, 1.0], 'shift': [-1, 0, 1]}}  # pyrefly: ignore[bad-assignment]
       )
     self._three_weight_solver: jacobi_solver_impl.ThreeWeight | None = None
 

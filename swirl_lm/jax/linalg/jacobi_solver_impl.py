@@ -75,7 +75,7 @@ class BaseJacobiSolver:
       self._kernel_op.add_kernel({'weighted_sum_121': ([1.0, 2.0, 1.0], 1)})
     elif isinstance(self._kernel_op, get_kernel_fn.ApplyKernelSliceOp):
       self._kernel_op.add_kernel(
-          {'weighted_sum_121': {'coeff': [1.0, 2.0, 1.0], 'shift': [-1, 0, 1]}}  # pyrefly: ignore[bad-argument-type]
+          {'weighted_sum_121': {'coeff': [1.0, 2.0, 1.0], 'shift': [-1, 0, 1]}}  # pyrefly: ignore[bad-assignment]
       )
 
     self._omega = solver_option.jacobi.omega

@@ -214,7 +214,7 @@ class SgsModel:
       # du_dx is [[dφ/d0, dφ/d1, dφ/d2]] — a list of 1 list of 3 components.
       grad_phi = du_dx[0]
       s_mag = jnp.sqrt(
-          sum(g**2 for g in grad_phi)  # pyrefly: ignore[bad-argument-type]
+          sum(g**2 for g in grad_phi)
       )
 
     delta_sq = self._delta_square(field_vars[0], delta_formula)

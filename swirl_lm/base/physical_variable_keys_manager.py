@@ -184,7 +184,7 @@ class BoundaryConditionKeysHelper(PhysicalVariableKeysHelper):
 
       bc_value = []
       for i in range(halo_width):
-        bc_value += common_ops.get_face(value, dim, face, i)  # pyrefly: ignore[unsupported-operation]
+        bc_value += common_ops.get_face(value, dim, face, i)
 
       # The order of the slices is from the outermost to the innermost. On the
       # higher end it needs to be reversed.

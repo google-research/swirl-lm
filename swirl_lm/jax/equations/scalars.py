@@ -145,7 +145,7 @@ class Scalars:
         mesh,
         self._grid_params,
         periodic,
-        bc,  # pyrefly: ignore[bad-argument-type]
+        bc,
         halo_width=self._params.halo_width,
     )
 

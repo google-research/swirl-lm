@@ -22,6 +22,7 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 ## [Unreleased]
 * Fixing pyproject.toml: 1. Correcting the dependent package absl to absl-py.
  2. Adding back optional-dependencies.
+* Fixing the slice-kernel fallback of `ApplyKernelConvOp` in `get_kernel_fn.py`: the QUICK and upwind stencils were mirrored relative to the convolution path when the array size is not a multiple of `kernel_size` (#17).
 ## [0.0.0] - 2022-08-15
 
 * Initial release

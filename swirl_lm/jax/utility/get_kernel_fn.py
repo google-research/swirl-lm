@@ -214,7 +214,7 @@ SHIFTS = {
     # QUICK scheme
     'face_flux_quick': [1, 0, -1],
     # First order forward difference of the third order derivative.
-    'forward_difference_3_order_1': [1, 0, -1, -2],
+    'forward_difference_3_order_1': [2, 1, 0, -1],
     # Second order central difference of the fourth order derivative.
     'centered_difference_4_order_2': [-2, -1, 0, 1, 2],
 }
@@ -613,8 +613,7 @@ class ApplyKernelConvOp(ApplyKernelOp):
     if custom_kernel_dict:
       for name, (coeffs, offset) in custom_kernel_dict.items():
         if name not in self._slice_kernels:
-          shifts = [j - offset for j in range(len(coeffs))]  # pyrefly: ignore[unsupported-operation]
-          self._slice_kernels[name] = _discard_zero_coefficients(coeffs, shifts)  # pyrefly: ignore[bad-argument-type]
+          self._slice_kernels[name] = _custom_to_slice(coeffs, offset)
 
   def add_kernel(self, custom_kernel_dict: ExternalDictKernelType):
     """Adds a customized kernel to the kernel library."""
@@ -629,8 +628,7 @@ class ApplyKernelConvOp(ApplyKernelOp):
     # format {name: {'coeff': ..., 'shift': ...}}.
     for name, (coeffs, offset) in custom_kernel_dict.items():
       if name not in self._slice_kernels:
-        shifts = [j - offset for j in range(len(coeffs))]  # pyrefly: ignore[unsupported-operation]
-        self._slice_kernels[name] = _discard_zero_coefficients(coeffs, shifts)  # pyrefly: ignore[bad-argument-type]
+        self._slice_kernels[name] = _custom_to_slice(coeffs, offset)
 
   def apply_kernel_op(
       self, array: ScalarField, name: str, axis: str
@@ -677,6 +675,19 @@ def _discard_zero_coefficients(
       new_coeff.append(c)
       new_shift.append(s)
   return {'coeff': tuple(new_coeff), 'shift': tuple(new_shift)}
+
+
+def _custom_to_slice(
+    coeffs: list[float] | tuple[float, ...], offset: int
+) -> SliceKernelType:
+  """Converts a convolution-style (coeffs, offset) pair to a slice kernel.
+
+  The convolution path applies coeffs[j] to array[i + j - offset]. The slice
+  path reads array[i - s] for shift s, so s = offset - j.
+  """
+  return _discard_zero_coefficients(
+      coeffs, [offset - j for j in range(len(coeffs))]
+  )
 
 
 def _add_customized_slice_kernel(
@@ -752,8 +763,9 @@ def _slice_kernel_dict(
       'kf2': _discard_zero_coefficients(
           COEFFS['face_flux_quick'], SHIFTS['face_flux_quick']
       ),
+      # Reverse coefficients only; reversing shifts too is a no-op on the pairs.
       'kf2+': _discard_zero_coefficients(
-          COEFFS['face_flux_quick'][::-1], SHIFTS['face_flux_quick'][::-1]
+          COEFFS['face_flux_quick'][::-1], SHIFTS['face_flux_quick']
       ),
       'k3d1+': _discard_zero_coefficients(
           COEFFS['forward_difference_3_order_1'],

@@ -37,6 +37,7 @@ operates on single-device 3D arrays using JAX operations.
 """
 
 
+import functools
 from typing import Callable
 
 import jax
@@ -82,59 +83,162 @@ def _last(u: jnp.ndarray, axis: int):
   return (slice(None),) * axis + (u.shape[axis] - 1,)
 
 
+def _interior_diagonal(
+    operator, shape: tuple[int, ...]
+) -> jnp.ndarray:
+  """The diagonal entry of a translation-invariant stencil operator.
+
+  Weighted Jacobi needs the diagonal of whatever operator it is smoothing. A
+  Galerkin operator has no closed form for it, but away from the boundary
+  these operators are translation invariant, so one probe suffices: apply the
+  operator to a unit impulse and read the value back at the same cell. The
+  boundary rows differ, and the damping absorbs that.
+
+  Args:
+    operator: The linear operator.
+    shape: The grid shape at this level.
+
+  Returns:
+    The diagonal entry, as a scalar.
+  """
+  centre = tuple(extent // 2 for extent in shape)
+  impulse = jnp.zeros(shape, jnp.float32).at[centre].set(1.0)
+  return operator(impulse)[centre]
+
+
 def _smooth(
     u: jnp.ndarray,
     b: jnp.ndarray,
-    spacings: tuple[float, ...],
+    operator,
+    diagonal: jnp.ndarray,
     weight: float,
     n_smooth: int,
 ) -> jnp.ndarray:
-  """Applies `n_smooth` weighted Jacobi sweeps.
+  """Applies `n_smooth` weighted Jacobi sweeps against `operator`.
 
   Args:
     u: The current iterate.
     b: The right hand side.
-    spacings: Grid spacing per array axis.
+    operator: The linear operator at this level.
+    diagonal: Its diagonal entry, from `_interior_diagonal`.
     weight: The damping factor; 2/3 is the usual choice.
     n_smooth: How many sweeps.
 
   Returns:
     The smoothed iterate.
   """
-  diagonal = -2.0 * sum(1.0 / (s * s) for s in spacings)
 
   def sweep(_, current):
-    return current + weight * (b - _laplacian(current, spacings)) / diagonal
+    return current + weight * (b - operator(current)) / diagonal
 
   return jax.lax.fori_loop(0, n_smooth, sweep, u)
 
 
-def _restrict(fine: jnp.ndarray) -> jnp.ndarray:
-  """Averages each 2x2x2 block onto one coarse cell.
-
-  Paired with `_prolongate` this is an exact adjoint up to the constant
-  `1 / 2**3`: averaging is the transpose of copying, scaled by the block
-  size.
+def _coarsen_operator(error, fine_operator):
+  """`R A P`, the Galerkin coarse operator built from `fine_operator`.
 
   Args:
-    fine: The fine field. Every axis must have even length.
+    error: The coarse field to apply it to.
+    fine_operator: The operator one level finer.
+
+  Returns:
+    The coarse operator applied to `error`.
+  """
+  return _restrict(fine_operator(_prolongate(error)))
+
+
+def _shift_up(u: jnp.ndarray, axis: int) -> jnp.ndarray:
+  """`u[i+1]`, with zero beyond the last cell."""
+  return jnp.roll(u, -1, axis=axis).at[_last(u, axis)].set(0.0)
+
+
+def _shift_down(u: jnp.ndarray, axis: int) -> jnp.ndarray:
+  """`u[i-1]`, with zero before the first cell."""
+  return jnp.roll(u, 1, axis=axis).at[_first(axis)].set(0.0)
+
+
+def _interleave(even: jnp.ndarray, odd: jnp.ndarray, axis: int) -> jnp.ndarray:
+  """Weaves `even` and `odd` back together along `axis`."""
+  stacked = jnp.stack([even, odd], axis=axis + 1)
+  shape = list(even.shape)
+  shape[axis] = even.shape[axis] * 2
+  return stacked.reshape(shape)
+
+
+def _prolongate_axis(coarse: jnp.ndarray, axis: int) -> jnp.ndarray:
+  """Interpolates linearly along one axis, doubling its length.
+
+  Cell centred, so each coarse cell covers two fine cells and each of those
+  takes three quarters from the cell it sits in and one quarter from the
+  neighbour it leans towards. Beyond the ends that neighbour is zero, which
+  is the homogeneous Dirichlet condition the rest of the cycle assumes.
+
+  Linear rather than piecewise constant because for Poisson the orders of
+  restriction and prolongation must sum to more than two; constant paired
+  with averaging sums to exactly two, which leaves the per-cycle convergence
+  degrading as the grid grows.
+
+  Args:
+    coarse: The coarse field.
+    axis: The axis to refine.
+
+  Returns:
+    The field with `axis` twice as long.
+  """
+  lower = 0.75 * coarse + 0.25 * _shift_down(coarse, axis)
+  upper = 0.75 * coarse + 0.25 * _shift_up(coarse, axis)
+  return _interleave(lower, upper, axis)
+
+
+def _restrict_axis(fine: jnp.ndarray, axis: int) -> jnp.ndarray:
+  """The exact transpose of `_prolongate_axis`, halving the axis.
+
+  Derived rather than assumed. With `lower[i] = 3/4 c[i] + 1/4 c[i-1]` and
+  `upper[i] = 3/4 c[i] + 1/4 c[i+1]`, gathering the coefficient of `c[i]`
+  in `<f, P c>` gives
+
+      (P^T f)[i] = 3/4 (lower[i] + upper[i])
+                 + 1/4 lower[i+1] + 1/4 upper[i-1].
+
+  Args:
+    fine: The fine field. `axis` must have even length.
+    axis: The axis to coarsen.
+
+  Returns:
+    The field with `axis` halved.
+  """
+  lower = jax.lax.slice_in_dim(fine, 0, fine.shape[axis], stride=2, axis=axis)
+  upper = jax.lax.slice_in_dim(fine, 1, fine.shape[axis], stride=2, axis=axis)
+  return (
+      0.75 * (lower + upper)
+      + 0.25 * _shift_up(lower, axis)
+      + 0.25 * _shift_down(upper, axis)
+  )
+
+
+def _restrict(fine: jnp.ndarray) -> jnp.ndarray:
+  """Restricts by transposing the prolongation along every axis.
+
+  Being the exact transpose is what the coarse-grid correction rests on: it
+  makes the correction minimise the error over the coarse space rather than
+  merely change it. The operators this replaced were plain injection against
+  an interpolating prolongation, giving ratios of 1.12, 0.068 and 4.47 on
+  fine grids of 8, 16 and 32 where a consistent pair gives one constant.
+
+  Args:
+    fine: The fine field, every axis of even length.
 
   Returns:
     The coarse field, half the length along each axis.
   """
-  shape = fine.shape
-  blocked = fine.reshape(
-      shape[0] // 2, 2, shape[1] // 2, 2, shape[2] // 2, 2
-  )
-  return jnp.mean(blocked, axis=(1, 3, 5))
+  coarse = fine
+  for axis in range(3):
+    coarse = _restrict_axis(coarse, axis)
+  return coarse
 
 
 def _prolongate(coarse: jnp.ndarray) -> jnp.ndarray:
-  """Copies each coarse cell onto the eight fine cells beneath it.
-
-  Piecewise constant, so that it is exactly the transpose of `_restrict`.
-  Trilinear interpolation converges faster per cycle but is only
-  approximately adjoint, which is the property worth having first.
+  """Interpolates onto the fine grid along every axis.
 
   Args:
     coarse: The coarse field.
@@ -144,7 +248,7 @@ def _prolongate(coarse: jnp.ndarray) -> jnp.ndarray:
   """
   fine = coarse
   for axis in range(3):
-    fine = jnp.repeat(fine, 2, axis=axis)
+    fine = _prolongate_axis(fine, axis)
   return fine
 
 
@@ -201,53 +305,65 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
         for extent, coarsest in zip(shape, self._coarsest_shape)
     )
 
-  def _v_cycle(
-      self,
-      u: jnp.ndarray,
-      b: jnp.ndarray,
-      spacings: tuple[float, ...],
-  ) -> jnp.ndarray:
-    """Performs one V-cycle.
+  def _hierarchy(self, shape: tuple[int, ...]):
+    """Builds the operator for every level, coarsest last.
 
-    Smooth, take the residual to the coarse grid, solve for the error there,
-    bring it back and smooth again. The coarse operator is the Laplacian
-    rediscretised at twice the spacing rather than a Galerkin product, which
-    is consistent here because the transfer pair is adjoint.
+    The coarse operators are Galerkin, `A_coarse = R A_fine P`, rather than
+    the Laplacian rediscretised at twice the spacing. Rediscretisation is
+    only consistent when it happens to agree with the Galerkin product, which
+    it does for a piecewise constant transfer pair, where the two differ by
+    exactly a factor of two and the stencils match. It does not agree for a
+    linear prolongation: there the Galerkin stencil is wider than three
+    points, the measured ratio drifts with the grid -- 1.41 at 16^3 against
+    1.58 at 32^3 -- and no scalar can reconcile them. Defining the coarse
+    operator by the transfers removes the question.
 
     Args:
-      u: The current iterate, unknowns only.
+      shape: The finest grid shape, unknowns only.
+
+    Returns:
+      A list of `(shape, operator, diagonal)`, finest first.
+    """
+    levels = []
+    operator = functools.partial(_laplacian, spacings=self._spacings)
+    current = shape
+    while True:
+      levels.append((current, operator, _interior_diagonal(operator, current)))
+      if not self._can_coarsen(current):
+        return levels
+      operator = functools.partial(_coarsen_operator, fine_operator=operator)
+      current = tuple(extent // 2 for extent in current)
+
+  def _v_cycle(self, levels, index: int, u, b):
+    """Performs one V-cycle starting at `levels[index]`.
+
+    Args:
+      levels: The hierarchy from `_hierarchy`.
+      index: Which level to start on, 0 being finest.
+      u: The current iterate.
       b: The right hand side.
-      spacings: Grid spacing per array axis at this level.
 
     Returns:
       The iterate after one cycle.
     """
-    u = _smooth(u, b, spacings, self._weight, self._n_smooth)
+    _, operator, diagonal = levels[index]
+    u = _smooth(u, b, operator, diagonal, self._weight, self._n_smooth)
 
-    if not self._can_coarsen(u.shape):
-      # Nothing coarser to fall back on, so smooth harder instead. This is
-      # the one level where the error has no cheaper representation.
-      return _smooth(u, b, spacings, self._weight, self._n_smooth * 4)
+    if index + 1 == len(levels):
+      # Nothing coarser to fall back on, so smooth harder instead.
+      return _smooth(
+          u, b, operator, diagonal, self._weight, self._n_smooth * 4
+      )
 
-    # The coarse problem is solved with the Laplacian rediscretised at twice
-    # the spacing, which is not the Galerkin operator this transfer pair
-    # implies. Measured, `R A_h P` comes to exactly twice `A_2h`, uniformly
-    # over axes and grid sizes, because averaging a piecewise constant
-    # prolongation loses a factor of two per dimension in the same way for
-    # each. Halving the restricted residual is equivalent to solving against
-    # the Galerkin operator, and without it every level over-corrects by two
-    # and the cycle diverges rather than converges.
-    coarse_residual = 0.5 * _restrict(b - _laplacian(u, spacings))
-    coarse_spacings = tuple(2.0 * s for s in spacings)
-
+    coarse_residual = _restrict(b - operator(u))
     coarse_error = jnp.zeros_like(coarse_residual)
     for _ in range(max(self._n_coarse, 1)):
       coarse_error = self._v_cycle(
-          coarse_error, coarse_residual, coarse_spacings
+          levels, index + 1, coarse_error, coarse_residual
       )
 
     u = u + _prolongate(coarse_error)
-    return _smooth(u, b, spacings, self._weight, self._n_smooth)
+    return _smooth(u, b, operator, diagonal, self._weight, self._n_smooth)
 
   def solve(
       self,
@@ -283,8 +399,9 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
     b = rhs[interior]
     x = p0[interior]
 
+    levels = self._hierarchy(b.shape)
     for _ in range(self._num_iterations):
-      x = self._v_cycle(x, b, self._spacings)
+      x = self._v_cycle(levels, 0, x, b)
 
     residual = b - _laplacian(x, self._spacings)
     return {

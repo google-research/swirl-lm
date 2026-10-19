@@ -340,6 +340,48 @@ def _prolongate(coarse: jnp.ndarray, ghosts) -> jnp.ndarray:
   return fine
 
 
+def _validate_power_of_two_interior(
+    grid_params: grid_parametrization.GridParametrization,
+) -> None:
+  """Requires every per-core interior extent to be a power of two.
+
+  Args:
+    grid_params: The grid parametrization.
+
+  Raises:
+    ValueError: If any interior extent is not a power of two, with the
+      `grid_size` values that would fix it.
+  """
+  halo = grid_params.halo_width
+  interior = (grid_params.core_nx, grid_params.core_ny, grid_params.core_nz)
+  offenders = [
+      (axis, extent)
+      for axis, extent in zip(('dim_0', 'dim_1', 'dim_2'), interior)
+      if extent < 2 or extent & (extent - 1) != 0
+  ]
+  if not offenders:
+    return
+
+  remedies = []
+  for axis, extent in offenders:
+    below = 1 << max(extent.bit_length() - 1, 1)
+    above = below * 2
+    remedies.append(
+        f'{axis} is {extent}; for an interior of {below} or {above} set '
+        f'`grid_size.{axis}` to {below + 2 * halo} or {above + 2 * halo}'
+    )
+
+  raise ValueError(
+      'The multigrid solver needs every per-core interior extent to be a '
+      f'power of two, and got {interior}. Each level halves the grid, so an '
+      'odd extent ends the hierarchy early and leaves the coarsest problem '
+      'too large to smooth away. Note `grid_size` counts the halos, so the '
+      f'interior is `grid_size - 2 * {halo}`. '
+      + '; '.join(remedies)
+      + '. Use the Jacobi or conjugate gradient solver for other extents.'
+  )
+
+
 class MultigridSolver(base_poisson_solver.PoissonSolver):
   """Multigrid Poisson solver using V-cycle with Jacobi smoothing."""
 
@@ -378,6 +420,10 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
           'cell. Use the Jacobi or conjugate gradient solver, which read the '
           'scale factors from `additional_states`.'
       )
+
+    # Coarsening halves each axis, so the hierarchy only reaches a small
+    # coarsest grid when every interior extent is a power of two.
+    _validate_power_of_two_interior(grid_params)
 
     mg_config = solver_option.multigrid
 

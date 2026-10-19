@@ -50,134 +50,102 @@ from swirl_lm.jax.utility import types
 ScalarField = types.ScalarField
 
 
-def _zero_borders(x: jnp.ndarray) -> jnp.ndarray:
-  """Zeros out the borders of the given 3D array (width 1)."""
-  inner = x[1:-1, 1:-1, 1:-1]
-  return jnp.pad(inner, ((1, 1), (1, 1), (1, 1)), mode='constant')
+def _laplacian(u: jnp.ndarray, spacings: tuple[float, ...]) -> jnp.ndarray:
+  """The second-order Laplacian of `u`, with Dirichlet-zero ghosts.
 
-
-def _laplacian_3d(
-    u: jnp.ndarray,
-    dz: float,
-    dx: float,
-    dy: float,
-) -> jnp.ndarray:
-  """Computes the 3D Laplacian using second-order finite differences.
-
-  Uses interior stencil with zero-padded shifts to enforce Dirichlet BCs.
+  The shifts are zero padded, which places a homogeneous Dirichlet condition
+  one cell outside each face. `u` therefore holds unknowns only: every cell
+  is solved for, and nothing in it is pinned.
 
   Args:
-    u: Input 3D array.
-    dz: Grid spacing in z.
-    dx: Grid spacing in x.
-    dy: Grid spacing in y.
+    u: The field, with no halos.
+    spacings: The grid spacing along each array axis, in array axis order.
 
   Returns:
-    The 3D Laplacian of u.
+    The Laplacian of `u`.
   """
-
-  # Shift up/down along each axis using slicing + zero padding.
-  def shift_fwd(arr, axis):
-    """Shift forward: arr[i] -> arr[i+1], pad zero at end."""
-    slices = [slice(None)] * 3
-    slices[axis] = slice(1, None)
-    pad_widths = [(0, 0)] * 3
-    pad_widths[axis] = (0, 1)
-    return jnp.pad(arr[tuple(slices)], pad_widths, mode='constant')
-
-  def shift_bwd(arr, axis):
-    """Shift backward: arr[i] -> arr[i-1], pad zero at start."""
-    slices = [slice(None)] * 3
-    slices[axis] = slice(None, -1)
-    pad_widths = [(0, 0)] * 3
-    pad_widths[axis] = (1, 0)
-    return jnp.pad(arr[tuple(slices)], pad_widths, mode='constant')
-
-  lap = (shift_fwd(u, 0) - 2.0 * u + shift_bwd(u, 0)) / (dz * dz)
-  lap = lap + (shift_fwd(u, 1) - 2.0 * u + shift_bwd(u, 1)) / (dx * dx)
-  lap = lap + (shift_fwd(u, 2) - 2.0 * u + shift_bwd(u, 2)) / (dy * dy)
+  lap = jnp.zeros_like(u)
+  for axis, spacing in enumerate(spacings):
+    forward = jnp.roll(u, -1, axis=axis).at[_last(u, axis)].set(0.0)
+    backward = jnp.roll(u, 1, axis=axis).at[_first(axis)].set(0.0)
+    lap = lap + (forward - 2.0 * u + backward) / (spacing * spacing)
   return lap
 
 
-def _weighted_jacobi_smooth(
+def _first(axis: int):
+  """An index selecting the first slice along `axis`."""
+  return (slice(None),) * axis + (0,)
+
+
+def _last(u: jnp.ndarray, axis: int):
+  """An index selecting the last slice along `axis`."""
+  return (slice(None),) * axis + (u.shape[axis] - 1,)
+
+
+def _smooth(
     u: jnp.ndarray,
     b: jnp.ndarray,
-    dz: float,
-    dx: float,
-    dy: float,
+    spacings: tuple[float, ...],
     weight: float,
     n_smooth: int,
 ) -> jnp.ndarray:
-  """Applies n_smooth iterations of weighted Jacobi smoothing.
-
-  Solves L(u) = b with: u_new = u + weight * (b - L(u)) / diag_coeff.
+  """Applies `n_smooth` weighted Jacobi sweeps.
 
   Args:
-    u: Current iterate.
-    b: Right hand side.
-    dz: Grid spacing in z.
-    dx: Grid spacing in x.
-    dy: Grid spacing in y.
-    weight: Jacobi relaxation weight (typically 2/3).
-    n_smooth: Number of smoothing iterations.
+    u: The current iterate.
+    b: The right hand side.
+    spacings: Grid spacing per array axis.
+    weight: The damping factor; 2/3 is the usual choice.
+    n_smooth: How many sweeps.
 
   Returns:
-    Smoothed iterate.
+    The smoothed iterate.
   """
-  diag_coeff = -2.0 * (1.0 / (dz * dz) + 1.0 / (dx * dx) + 1.0 / (dy * dy))
+  diagonal = -2.0 * sum(1.0 / (s * s) for s in spacings)
 
-  def body_fn(i: int, u: jnp.ndarray) -> jnp.ndarray:
-    del i
-    residual = b - _laplacian_3d(u, dz, dx, dy)
-    u = u + weight * residual / diag_coeff
-    return _zero_borders(u)
+  def sweep(_, current):
+    return current + weight * (b - _laplacian(current, spacings)) / diagonal
 
-  return jax.lax.fori_loop(0, n_smooth, body_fn, u)
+  return jax.lax.fori_loop(0, n_smooth, sweep, u)
 
 
 def _restrict(fine: jnp.ndarray) -> jnp.ndarray:
-  """Full-weighting restriction from fine grid to coarse grid.
+  """Averages each 2x2x2 block onto one coarse cell.
 
-  Uses standard 3D full-weighting stencil (average of 2x2x2 block).
-
-  Args:
-    fine: Fine grid array of shape (nz, nx, ny).
-
-  Returns:
-    Coarse grid array of shape (nz//2+1, nx//2+1, ny//2+1) approximately.
-  """
-  # Simple injection-style restriction: take every other point from the
-  # interior, pad with zeros.
-  inner = fine[1:-1, 1:-1, 1:-1]
-  coarse_inner = inner[::2, ::2, ::2]
-  return jnp.pad(coarse_inner, ((1, 1), (1, 1), (1, 1)), mode='constant')
-
-
-def _prolongate(
-    coarse: jnp.ndarray, fine_shape: tuple[int, ...]
-) -> jnp.ndarray:
-  """Bilinear prolongation from coarse grid to fine grid.
-
-  Uses trilinear interpolation to map from coarse to fine grid.
+  Paired with `_prolongate` this is an exact adjoint up to the constant
+  `1 / 2**3`: averaging is the transpose of copying, scaled by the block
+  size.
 
   Args:
-    coarse: Coarse grid array.
-    fine_shape: Target fine grid shape.
+    fine: The fine field. Every axis must have even length.
 
   Returns:
-    Prolongated array at fine grid resolution.
+    The coarse field, half the length along each axis.
   """
-  # Extract interior of coarse grid.
-  coarse_inner = coarse[1:-1, 1:-1, 1:-1]
+  shape = fine.shape
+  blocked = fine.reshape(
+      shape[0] // 2, 2, shape[1] // 2, 2, shape[2] // 2, 2
+  )
+  return jnp.mean(blocked, axis=(1, 3, 5))
 
-  # Target interior shape.
-  fz, fx, fy = fine_shape[0] - 2, fine_shape[1] - 2, fine_shape[2] - 2
 
-  # Use nearest-neighbor upsampling then pad. For a proper multigrid
-  # implementation, this would use trilinear interpolation. For now,
-  # jax.image.resize provides this.
-  fine_inner = jax.image.resize(coarse_inner, (fz, fx, fy), method='linear')
-  return jnp.pad(fine_inner, ((1, 1), (1, 1), (1, 1)), mode='constant')
+def _prolongate(coarse: jnp.ndarray) -> jnp.ndarray:
+  """Copies each coarse cell onto the eight fine cells beneath it.
+
+  Piecewise constant, so that it is exactly the transpose of `_restrict`.
+  Trilinear interpolation converges faster per cycle but is only
+  approximately adjoint, which is the property worth having first.
+
+  Args:
+    coarse: The coarse field.
+
+  Returns:
+    The fine field, twice the length along each axis.
+  """
+  fine = coarse
+  for axis in range(3):
+    fine = jnp.repeat(fine, 2, axis=axis)
+  return fine
 
 
 class MultigridSolver(base_poisson_solver.PoissonSolver):
@@ -213,75 +181,73 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
 
     self._use_a_inv = mg_config.use_a_inv
 
-    # Grid spacings.
-    spacings = grid_params.grid_spacings
-    self._dz = spacings[0]
-    self._dx = spacings[1]
-    self._dy = spacings[2]
+    # Kept in array axis order rather than named z, x, y: `grid_spacings` is
+    # already in `data_axis_order`, so axis 0 is whichever axis comes first,
+    # not necessarily z. Naming them otherwise invites a transposition that
+    # would be invisible on a cubic grid.
+    self._spacings = tuple(grid_params.grid_spacings)
 
   def _can_coarsen(self, shape: tuple[int, ...]) -> bool:
-    """Checks if the grid can be coarsened further."""
-    # Interior shape (excluding borders).
-    interior = tuple(s - 2 for s in shape)
+    """Whether every axis can be halved and still exceed the coarsest shape.
+
+    Args:
+      shape: The current grid shape, unknowns only.
+
+    Returns:
+      True if the grid can be coarsened.
+    """
     return all(
-        s > c and s % 2 == 0 for s, c in zip(interior, self._coarsest_shape)
+        extent % 2 == 0 and extent // 2 >= coarsest
+        for extent, coarsest in zip(shape, self._coarsest_shape)
     )
 
   def _v_cycle(
       self,
       u: jnp.ndarray,
       b: jnp.ndarray,
-      dz: float,
-      dx: float,
-      dy: float,
+      spacings: tuple[float, ...],
   ) -> jnp.ndarray:
-    """Performs one V-cycle of the multigrid method.
+    """Performs one V-cycle.
+
+    Smooth, take the residual to the coarse grid, solve for the error there,
+    bring it back and smooth again. The coarse operator is the Laplacian
+    rediscretised at twice the spacing rather than a Galerkin product, which
+    is consistent here because the transfer pair is adjoint.
 
     Args:
-      u: Current iterate.
-      b: Right hand side.
-      dz: Grid spacing in z.
-      dx: Grid spacing in x.
-      dy: Grid spacing in y.
+      u: The current iterate, unknowns only.
+      b: The right hand side.
+      spacings: Grid spacing per array axis at this level.
 
     Returns:
-      Updated iterate after one V-cycle.
+      The iterate after one cycle.
     """
-    fine_shape = u.shape
+    u = _smooth(u, b, spacings, self._weight, self._n_smooth)
 
-    # Pre-smooth.
-    u = _weighted_jacobi_smooth(u, b, dz, dx, dy, self._weight, self._n_smooth)
+    if not self._can_coarsen(u.shape):
+      # Nothing coarser to fall back on, so smooth harder instead. This is
+      # the one level where the error has no cheaper representation.
+      return _smooth(u, b, spacings, self._weight, self._n_smooth * 4)
 
-    if not self._can_coarsen(fine_shape):
-      # At coarsest level: do extra smoothing.
-      u = _weighted_jacobi_smooth(
-          u, b, dz, dx, dy, self._weight, self._n_smooth * 4
+    # The coarse problem is solved with the Laplacian rediscretised at twice
+    # the spacing, which is not the Galerkin operator this transfer pair
+    # implies. Measured, `R A_h P` comes to exactly twice `A_2h`, uniformly
+    # over axes and grid sizes, because averaging a piecewise constant
+    # prolongation loses a factor of two per dimension in the same way for
+    # each. Halving the restricted residual is equivalent to solving against
+    # the Galerkin operator, and without it every level over-corrects by two
+    # and the cycle diverges rather than converges.
+    coarse_residual = 0.5 * _restrict(b - _laplacian(u, spacings))
+    coarse_spacings = tuple(2.0 * s for s in spacings)
+
+    coarse_error = jnp.zeros_like(coarse_residual)
+    for _ in range(max(self._n_coarse, 1)):
+      coarse_error = self._v_cycle(
+          coarse_error, coarse_residual, coarse_spacings
       )
-      return u
 
-    # Compute residual.
-    residual = b - _laplacian_3d(u, dz, dx, dy)
-    residual = _zero_borders(residual)
-
-    # Restrict residual to coarse grid.
-    residual_c = _restrict(residual)
-
-    # Solve on coarse grid (recursively or with extra smoothing).
-    err_c = jnp.zeros_like(residual_c)
-    for _ in range(self._n_coarse):
-      err_c = self._v_cycle(err_c, residual_c, dz * 2, dx * 2, dy * 2)
-
-    # Prolongate error correction to fine grid.
-    err_f = _prolongate(err_c, fine_shape)
-
-    # Correct.
-    u = u + err_f
-    u = _zero_borders(u)
-
-    # Post-smooth.
-    u = _weighted_jacobi_smooth(u, b, dz, dx, dy, self._weight, self._n_smooth)
-
-    return u
+    u = u + _prolongate(coarse_error)
+    return _smooth(u, b, spacings, self._weight, self._n_smooth)
 
   def solve(
       self,
@@ -291,30 +257,42 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
       halo_update_fn: Callable[[ScalarField], ScalarField] | None = None,
       additional_states: dict[str, jax.Array] | None = None,
   ) -> base_poisson_solver.PoissonSolverSolution:
-    """Solves the Poisson equation using multigrid V-cycles.
+    """Solves the Poisson equation with multigrid V-cycles.
+
+    The halos are stripped on the way in and restored on the way out, so the
+    cycle works on unknowns alone. The boundary condition is homogeneous
+    Dirichlet one cell outside each face, which is what the zero-padded
+    shifts in `_laplacian` impose; `halo_update_fn` is not yet honoured, so a
+    case with Neumann faces is solving the wrong problem and a case on more
+    than one device is solving several unconnected ones.
 
     Args:
-      rhs: The right hand side of the Poisson equation.
-      p0: Initial guess for the solution.
-      mesh: A jax Mesh object representing the device topology.
-      halo_update_fn: Optional function to update halos. Not used.
-      additional_states: Additional static fields. Not used.
+      rhs: The right hand side.
+      p0: The initial guess.
+      mesh: The device mesh. Not yet used.
+      halo_update_fn: The boundary conditions. Not yet used.
+      additional_states: Not used.
 
     Returns:
-      A dict with the solution, residual norm, and iteration count.
+      The solution, the residual norm and the cycle count.
     """
     del mesh, halo_update_fn, additional_states
 
-    x = p0
+    halo = self._grid_params.halo_width
+    interior = (slice(halo, -halo),) * 3
+    b = rhs[interior]
+    x = p0[interior]
+
     for _ in range(self._num_iterations):
-      x = self._v_cycle(x, rhs, self._dz, self._dx, self._dy)
+      x = self._v_cycle(x, b, self._spacings)
 
-    # Compute final residual.
-    residual = rhs - _laplacian_3d(x, self._dz, self._dx, self._dy)
-    residual_l2 = float(jnp.sqrt(jnp.sum(residual**2)))
-
+    residual = b - _laplacian(x, self._spacings)
     return {
-        base_poisson_solver.X: x,
-        base_poisson_solver.RESIDUAL_L2_NORM: residual_l2,
-        base_poisson_solver.ITERATIONS: float(self._num_iterations),
+        base_poisson_solver.X: jnp.pad(x, ((halo, halo),) * 3),
+        base_poisson_solver.RESIDUAL_L2_NORM: jnp.sqrt(
+            jnp.sum(residual**2)
+        ),
+        base_poisson_solver.ITERATIONS: jnp.asarray(
+            self._num_iterations, jnp.int32
+        ),
     }

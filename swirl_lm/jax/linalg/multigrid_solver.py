@@ -42,6 +42,7 @@ from typing import Callable
 
 import jax
 import jax.numpy as jnp
+from swirl_lm.jax.communication import halo_exchange
 from swirl_lm.jax.linalg import base_poisson_solver
 from swirl_lm.jax.linalg import poisson_solver_pb2
 from swirl_lm.jax.utility import get_kernel_fn
@@ -134,27 +135,92 @@ def _smooth(
   return jax.lax.fori_loop(0, n_smooth, sweep, u)
 
 
-def _coarsen_operator(error, fine_operator):
+def _ghost_factors(halo_update_fn, grid_params, shape) -> tuple:
+  """Reads the boundary condition off `halo_update_fn`, face by face.
+
+  The transfer operators need to know what lies outside each face: a
+  zero-gradient condition reflects the first interior cell, a Dirichlet one
+  contributes nothing. The `PoissonSolver` interface hands over a halo update
+  rather than the boundary types, so rather than widen the interface, ask the
+  function. Setting the first interior cell to one and reading the ghost
+  beside it returns exactly the factor relating them: one for zero gradient,
+  zero for Dirichlet.
+
+  A single central cell is read rather than the mean of the face, because the
+  face includes the halos of the other two axes and a different condition
+  there would contaminate the average.
+
+  Args:
+    halo_update_fn: The halo update the problem is being solved against.
+    grid_params: The grid parametrization.
+    shape: The shape of the full array, halos included.
+
+  Returns:
+    Per axis, a `(low, high)` pair of ghost factors.
+  """
+  halo = grid_params.halo_width
+  centre = [extent // 2 for extent in shape]
+  factors = []
+  for axis in range(3):
+    per_face = []
+    for face in (0, 1):
+      probe = jnp.zeros(shape, jnp.float32)
+      first_interior = list(centre)
+      first_interior[axis] = halo if face == 0 else shape[axis] - halo - 1
+      probe = probe.at[tuple(first_interior)].set(1.0)
+
+      ghost = list(centre)
+      ghost[axis] = halo - 1 if face == 0 else shape[axis] - halo
+      per_face.append(halo_update_fn(probe)[tuple(ghost)])
+    factors.append(tuple(per_face))
+  return tuple(factors)
+
+
+def _coarsen_operator(error, fine_operator, ghosts):
   """`R A P`, the Galerkin coarse operator built from `fine_operator`.
 
   Args:
     error: The coarse field to apply it to.
     fine_operator: The operator one level finer.
+    ghosts: Per-axis `(low, high)` ghost factors.
 
   Returns:
     The coarse operator applied to `error`.
   """
-  return _restrict(fine_operator(_prolongate(error)))
+  return _restrict(fine_operator(_prolongate(error, ghosts)), ghosts)
 
 
-def _shift_up(u: jnp.ndarray, axis: int) -> jnp.ndarray:
-  """`u[i+1]`, with zero beyond the last cell."""
-  return jnp.roll(u, -1, axis=axis).at[_last(u, axis)].set(0.0)
+def _shift_up(u: jnp.ndarray, axis: int, ghost: float = 0.0) -> jnp.ndarray:
+  """`u[i+1]`, taking `ghost * u[-1]` beyond the last cell.
+
+  Args:
+    u: The field.
+    axis: The axis to shift along.
+    ghost: The factor relating the cell outside the high face to the last
+      cell inside it. One for a zero-gradient condition, zero for a
+      Dirichlet one.
+
+  Returns:
+    The shifted field.
+  """
+  shifted = jnp.roll(u, -1, axis=axis)
+  return shifted.at[_last(u, axis)].set(ghost * u[_last(u, axis)])
 
 
-def _shift_down(u: jnp.ndarray, axis: int) -> jnp.ndarray:
-  """`u[i-1]`, with zero before the first cell."""
-  return jnp.roll(u, 1, axis=axis).at[_first(axis)].set(0.0)
+def _shift_down(u: jnp.ndarray, axis: int, ghost: float = 0.0) -> jnp.ndarray:
+  """`u[i-1]`, taking `ghost * u[0]` before the first cell.
+
+  Args:
+    u: The field.
+    axis: The axis to shift along.
+    ghost: The factor relating the cell outside the low face to the first
+      cell inside it.
+
+  Returns:
+    The shifted field.
+  """
+  shifted = jnp.roll(u, 1, axis=axis)
+  return shifted.at[_first(axis)].set(ghost * u[_first(axis)])
 
 
 def _interleave(even: jnp.ndarray, odd: jnp.ndarray, axis: int) -> jnp.ndarray:
@@ -165,7 +231,9 @@ def _interleave(even: jnp.ndarray, odd: jnp.ndarray, axis: int) -> jnp.ndarray:
   return stacked.reshape(shape)
 
 
-def _prolongate_axis(coarse: jnp.ndarray, axis: int) -> jnp.ndarray:
+def _prolongate_axis(
+    coarse: jnp.ndarray, axis: int, ghosts: tuple[float, float]
+) -> jnp.ndarray:
   """Interpolates linearly along one axis, doubling its length.
 
   Cell centred, so each coarse cell covers two fine cells and each of those
@@ -181,19 +249,23 @@ def _prolongate_axis(coarse: jnp.ndarray, axis: int) -> jnp.ndarray:
   Args:
     coarse: The coarse field.
     axis: The axis to refine.
+    ghosts: The ghost factors for the low and high faces of this axis.
 
   Returns:
     The field with `axis` twice as long.
   """
-  lower = 0.75 * coarse + 0.25 * _shift_down(coarse, axis)
-  upper = 0.75 * coarse + 0.25 * _shift_up(coarse, axis)
+  low_ghost, high_ghost = ghosts
+  lower = 0.75 * coarse + 0.25 * _shift_down(coarse, axis, low_ghost)
+  upper = 0.75 * coarse + 0.25 * _shift_up(coarse, axis, high_ghost)
   return _interleave(lower, upper, axis)
 
 
-def _restrict_axis(fine: jnp.ndarray, axis: int) -> jnp.ndarray:
+def _restrict_axis(
+    fine: jnp.ndarray, axis: int, ghosts: tuple[float, float]
+) -> jnp.ndarray:
   """The exact transpose of `_prolongate_axis`, halving the axis.
 
-  Derived rather than assumed. With `lower[i] = 3/4 c[i] + 1/4 c[i-1]` and
+  With `lower[i] = 3/4 c[i] + 1/4 c[i-1]` and
   `upper[i] = 3/4 c[i] + 1/4 c[i+1]`, gathering the coefficient of `c[i]`
   in `<f, P c>` gives
 
@@ -203,20 +275,34 @@ def _restrict_axis(fine: jnp.ndarray, axis: int) -> jnp.ndarray:
   Args:
     fine: The fine field. `axis` must have even length.
     axis: The axis to coarsen.
+    ghosts: The ghost factors for the low and high faces of this axis.
 
   Returns:
     The field with `axis` halved.
   """
+  low_ghost, high_ghost = ghosts
   lower = jax.lax.slice_in_dim(fine, 0, fine.shape[axis], stride=2, axis=axis)
   upper = jax.lax.slice_in_dim(fine, 1, fine.shape[axis], stride=2, axis=axis)
-  return (
+
+  # The interior part. The shifts reach past the ends here, where there is no
+  # coarse cell at all, so they pad with zero regardless of the condition.
+  result = (
       0.75 * (lower + upper)
       + 0.25 * _shift_up(lower, axis)
       + 0.25 * _shift_down(upper, axis)
   )
 
+  # The boundary terms, which come from the ghost `c[-1] = g c[0]` appearing
+  # inside `lower[0]`, and `c[N] = g c[N-1]` inside `upper[N-1]`. They attach
+  # to those halves and not to the other: writing them the other way round
+  # keeps adjointness only where the factor is zero, so a Dirichlet face
+  # looks correct and a Neumann one silently is not.
+  first, last = _first(axis), _last(result, axis)
+  result = result.at[first].add(0.25 * low_ghost * lower[first])
+  return result.at[last].add(0.25 * high_ghost * upper[last])
 
-def _restrict(fine: jnp.ndarray) -> jnp.ndarray:
+
+def _restrict(fine: jnp.ndarray, ghosts) -> jnp.ndarray:
   """Restricts by transposing the prolongation along every axis.
 
   Being the exact transpose is what the coarse-grid correction rests on: it
@@ -227,28 +313,30 @@ def _restrict(fine: jnp.ndarray) -> jnp.ndarray:
 
   Args:
     fine: The fine field, every axis of even length.
+    ghosts: Per-axis `(low, high)` ghost factors.
 
   Returns:
     The coarse field, half the length along each axis.
   """
   coarse = fine
   for axis in range(3):
-    coarse = _restrict_axis(coarse, axis)
+    coarse = _restrict_axis(coarse, axis, ghosts[axis])
   return coarse
 
 
-def _prolongate(coarse: jnp.ndarray) -> jnp.ndarray:
+def _prolongate(coarse: jnp.ndarray, ghosts) -> jnp.ndarray:
   """Interpolates onto the fine grid along every axis.
 
   Args:
     coarse: The coarse field.
+    ghosts: Per-axis `(low, high)` ghost factors.
 
   Returns:
     The fine field, twice the length along each axis.
   """
   fine = coarse
   for axis in range(3):
-    fine = _prolongate_axis(fine, axis)
+    fine = _prolongate_axis(fine, axis, ghosts[axis])
   return fine
 
 
@@ -260,6 +348,7 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
       grid_params: grid_parametrization.GridParametrization,
       kernel_op: get_kernel_fn.ApplyKernelOp,
       solver_option: poisson_solver_pb2.PoissonSolver,
+      use_stretched_grid: tuple[bool, ...] = (False, False, False),
   ):
     """Initializes the multigrid solver.
 
@@ -267,8 +356,29 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
       grid_params: The grid parametrization.
       kernel_op: An object holding a library of kernel operations.
       solver_option: The solver configuration proto.
+      use_stretched_grid: Whether each dimension is stretched. Accepted so
+        that the factory can pass it; this solver cannot honour it and says
+        so rather than returning a plausible wrong answer.
+
+    Raises:
+      NotImplementedError: If any dimension uses a stretched grid.
     """
     super().__init__(grid_params, kernel_op, solver_option)
+
+    # The cycle carries one spacing per axis, and the coarse operators are
+    # built by halving it. A stretched grid has a spacing that varies cell by
+    # cell, supplied through `additional_states`, which nothing here reads.
+    # Jacobi handles it, via `_generate_weights_and_modified_rhs`; until this
+    # does too, refuse.
+    if any(use_stretched_grid):
+      raise NotImplementedError(
+          'The multigrid solver does not support stretched grids: it holds a '
+          'single spacing per axis and halves it on each coarsening, whereas '
+          f'{tuple(use_stretched_grid)} asks for a spacing that varies per '
+          'cell. Use the Jacobi or conjugate gradient solver, which read the '
+          'scale factors from `additional_states`.'
+      )
+
     mg_config = solver_option.multigrid
 
     self._num_iterations = mg_config.num_iterations
@@ -305,7 +415,7 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
         for extent, coarsest in zip(shape, self._coarsest_shape)
     )
 
-  def _hierarchy(self, shape: tuple[int, ...]):
+  def _hierarchy(self, shape: tuple[int, ...], fine_operator):
     """Builds the operator for every level, coarsest last.
 
     The coarse operators are Galerkin, `A_coarse = R A_fine P`, rather than
@@ -314,24 +424,28 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
     it does for a piecewise constant transfer pair, where the two differ by
     exactly a factor of two and the stencils match. It does not agree for a
     linear prolongation: there the Galerkin stencil is wider than three
-    points, the measured ratio drifts with the grid -- 1.41 at 16^3 against
-    1.58 at 32^3 -- and no scalar can reconcile them. Defining the coarse
-    operator by the transfers removes the question.
+    points, the measured ratio drifts with the grid, and no scalar can reconcile
+    them. Defining the coarse operator by the transfers removes the question.
 
     Args:
       shape: The finest grid shape, unknowns only.
+      fine_operator: The operator on the finest level, which carries the
+        boundary conditions. Every coarse operator is derived from it, so the
+        conditions propagate down the hierarchy without being restated.
 
     Returns:
       A list of `(shape, operator, diagonal)`, finest first.
     """
     levels = []
-    operator = functools.partial(_laplacian, spacings=self._spacings)
+    operator = fine_operator
     current = shape
     while True:
       levels.append((current, operator, _interior_diagonal(operator, current)))
       if not self._can_coarsen(current):
         return levels
-      operator = functools.partial(_coarsen_operator, fine_operator=operator)
+      operator = functools.partial(
+          _coarsen_operator, fine_operator=operator, ghosts=self._ghosts
+      )
       current = tuple(extent // 2 for extent in current)
 
   def _v_cycle(self, levels, index: int, u, b):
@@ -355,14 +469,14 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
           u, b, operator, diagonal, self._weight, self._n_smooth * 4
       )
 
-    coarse_residual = _restrict(b - operator(u))
+    coarse_residual = _restrict(b - operator(u), self._ghosts)
     coarse_error = jnp.zeros_like(coarse_residual)
     for _ in range(max(self._n_coarse, 1)):
       coarse_error = self._v_cycle(
           levels, index + 1, coarse_error, coarse_residual
       )
 
-    u = u + _prolongate(coarse_error)
+    u = u + _prolongate(coarse_error, self._ghosts)
     return _smooth(u, b, operator, diagonal, self._weight, self._n_smooth)
 
   def solve(
@@ -376,34 +490,72 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
     """Solves the Poisson equation with multigrid V-cycles.
 
     The halos are stripped on the way in and restored on the way out, so the
-    cycle works on unknowns alone. The boundary condition is homogeneous
-    Dirichlet one cell outside each face, which is what the zero-padded
-    shifts in `_laplacian` impose; `halo_update_fn` is not yet honoured, so a
-    case with Neumann faces is solving the wrong problem and a case on more
-    than one device is solving several unconnected ones.
+    cycle works on unknowns alone, with the boundary conditions applied by
+    `halo_update_fn` inside the operator. A case spread over more than one
+    device still solves several unconnected problems: `halo_update_fn` does
+    exchange between replicas, but only at the finest level, and the coarse
+    grids are not yet partitioned.
 
     Args:
       rhs: The right hand side.
       p0: The initial guess.
       mesh: The device mesh. Not yet used.
-      halo_update_fn: The boundary conditions. Not yet used.
-      additional_states: Not used.
+      halo_update_fn: The boundary conditions. Defaults to homogeneous
+        Neumann, matching the other solvers.
+      additional_states: Not used; a stretched grid is rejected in
+        `__init__` rather than silently ignored here.
 
     Returns:
       The solution, the residual norm and the cycle count.
     """
-    del mesh, halo_update_fn, additional_states
+    del additional_states
 
     halo = self._grid_params.halo_width
     interior = (slice(halo, -halo),) * 3
+
+    if halo_update_fn is None:
+      halo_update_fn = base_poisson_solver._halo_update_homogeneous_neumann(  # pylint: disable=protected-access
+          mesh, self._grid_params
+      )
+
+    def fine_operator(unknowns: jnp.ndarray) -> jnp.ndarray:
+      """The Laplacian subject to the configured boundary conditions.
+
+      Deliberately the same composition conjugate gradient uses: pad the
+      unknowns back out to a full array, let `halo_update_fn` fill the halos
+      with whatever the boundary conditions say, take the Laplacian, discard
+      the halos again. The cycle sees only unknowns; the conditions live
+      entirely in this function, and the Galerkin construction carries them
+      to every coarser level.
+
+      Args:
+        unknowns: The interior field.
+
+      Returns:
+        The operator applied to it, interior only.
+      """
+      padded = jnp.pad(unknowns, ((halo, halo),) * 3)
+      result = self._laplacian(padded, halo_update=halo_update_fn)
+      return halo_exchange.set_halos_to_zero(
+          result, halo, self._grid_params
+      )[interior]
+
+    # The transfers have to agree with the operator about what lies outside
+    # each face. While they assumed Dirichlet regardless, a Neumann problem
+    # converged two to three orders of magnitude worse than a Dirichlet one
+    # and degraded as the grid grew.
+    self._ghosts = _ghost_factors(
+        halo_update_fn, self._grid_params, rhs.shape
+    )
+
     b = rhs[interior]
     x = p0[interior]
 
-    levels = self._hierarchy(b.shape)
+    levels = self._hierarchy(b.shape, fine_operator)
     for _ in range(self._num_iterations):
       x = self._v_cycle(levels, 0, x, b)
 
-    residual = b - _laplacian(x, self._spacings)
+    residual = b - fine_operator(x)
     return {
         base_poisson_solver.X: jnp.pad(x, ((halo, halo),) * 3),
         base_poisson_solver.RESIDUAL_L2_NORM: jnp.sqrt(

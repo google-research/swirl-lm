@@ -602,8 +602,14 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
       x = self._v_cycle(levels, 0, x, b)
 
     residual = b - fine_operator(x)
+    # Restore the halos which were zeroed by `jnp.pad`.
+    # `velocity.correction_step` takes a centred difference of the returned
+    # field with no exchange in between, so a cleared halo becomes a one-sided
+    # jump at every interface instead of a gradient.
     return {
-        base_poisson_solver.X: jnp.pad(x, ((halo, halo),) * 3),
+        base_poisson_solver.X: halo_update_fn(
+            jnp.pad(x, ((halo, halo),) * 3)
+        ),
         base_poisson_solver.RESIDUAL_L2_NORM: jnp.sqrt(
             jnp.sum(residual**2)
         ),

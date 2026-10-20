@@ -668,6 +668,9 @@ class Pressure:
   def _max_iterations(self) -> int:
     """The iteration limit the configured solver was given.
 
+    Multigrid uses `num_iterations`, counting V-cycles rather than
+    iterations.
+
     Returns:
       The limit, or 0 if the selected solver does not declare one.
     """
@@ -675,7 +678,10 @@ class Pressure:
     if selected is None:
       return 0
     option = getattr(self._solver_option, selected)
-    return getattr(option, 'max_iterations', 0)
+    for field in ('max_iterations', 'num_iterations'):
+      if getattr(option, field, 0):
+        return getattr(option, field)
+    return 0
 
   def _report_poisson_residual(
       self,

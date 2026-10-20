@@ -340,6 +340,11 @@ def _prolongate(coarse: jnp.ndarray, ghosts) -> jnp.ndarray:
   return fine
 
 
+# The Galerkin coarse operator spans five points per axis, so the coarsest
+# grid has to hold at least that; eight is the first power of two that does.
+_MIN_COARSEST_EXTENT = 8
+
+
 def _validate_power_of_two_interior(
     grid_params: grid_parametrization.GridParametrization,
 ) -> None:
@@ -379,6 +384,31 @@ def _validate_power_of_two_interior(
       f'interior is `grid_size - 2 * {halo}`. '
       + '; '.join(remedies)
       + '. Use the Jacobi or conjugate gradient solver for other extents.'
+  )
+
+
+def _validate_coarsest_shape(shape: tuple[int, ...]) -> None:
+  """Requires the coarsest grid to be wide enough to hold the coarse stencil.
+
+  The Galerkin operators are not three-point. Linear prolongation paired with
+  averaging restriction widens a three-point fine stencil to five points per
+  axis, which cannot be represented on a coarse grid of four cells.
+
+  Args:
+    shape: The coarsest subgrid shape, in array axis order.
+
+  Raises:
+    ValueError: If any extent is below `_MIN_COARSEST_EXTENT`.
+  """
+  if all(extent >= _MIN_COARSEST_EXTENT for extent in shape):
+    return
+  raise ValueError(
+      f'The multigrid solver needs a coarsest subgrid of at least '
+      f'{_MIN_COARSEST_EXTENT} cells per axis, and got {shape}. The Galerkin '
+      'coarse operator spans five points per axis, so a smaller grid clips it '
+      'and the coarse-grid correction stops solving the problem it was handed. '
+      f'Set `coarsest_subgrid_shape` to {_MIN_COARSEST_EXTENT} or more on '
+      'every axis.'
   )
 
 
@@ -437,7 +467,8 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
       cs = mg_config.coarsest_subgrid_shape
       self._coarsest_shape = (cs.dim_z, cs.dim_x, cs.dim_y)
     else:
-      self._coarsest_shape = (4, 4, 4)
+      self._coarsest_shape = (_MIN_COARSEST_EXTENT,) * 3
+    _validate_coarsest_shape(self._coarsest_shape)
 
     self._use_a_inv = mg_config.use_a_inv
 

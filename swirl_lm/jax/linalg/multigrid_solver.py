@@ -137,59 +137,75 @@ def _smooth(
   return jax.lax.fori_loop(0, n_smooth, sweep, u)
 
 
-def _ghost_factors(halo_update_fn, grid_params, shape) -> tuple:
-  """Reads the boundary condition off `halo_update_fn`, face by face.
+_XYZ = ('x', 'y', 'z')
 
-  The transfer operators need to know what lies outside each face: a
-  zero-gradient condition reflects the first interior cell, a Dirichlet one
-  contributes nothing. The `PoissonSolver` interface hands over a halo update
-  rather than the boundary types, so rather than widen the interface, ask the
-  function. Setting the first interior cell to one and reading the ghost
-  beside it returns exactly the factor relating them: one for zero gradient,
-  zero for Dirichlet.
 
-  A single central cell is read rather than the mean of the face, because the
-  face includes the halos of the other two axes and a different condition
-  there would contaminate the average.
+def _make_exchange(mesh, grid_params, boundary_conditions):
+  """Builds `(u, axis) -> (beyond_low, beyond_high)` for any level's shape.
+
+  Transfers need a plane, which is produced by a halo exchange of width one.
+  Uses the neighbour's edge plane at an inter-device seam, and the boundary
+  condition's own plane at a face of the domain. One mechanism covers both,
+  which is why the ghost factors this replaces could not be made to work, since
+  at a seam there is no factor relating the cell outside a block to the cell
+  inside it.
+
+  `inplace_halo_exchange` serves every level unchanged because it reads all
+  extents from `array.shape` and takes the halo width as an argument,
+  consulting `grid_params` only for the axis-order permutation. The width is
+  one here regardless of the caller's, since one plane is all a transfer
+  reaches.
+
+  Three axis orders meet in this function and they do not agree, so each is
+  indexed by name rather than by position:
+
+  * `axis` is an index into the array, so the exchange is told
+    `data_axis_order[axis]`;
+  * `grid_params.periodic_dims` is in data axis order, indexed by `axis`;
+  * `boundary_conditions` comes from `Pressure._build_dp_bc`, which is in
+    x, y, z order, indexed by the axis's name.
 
   Args:
-    halo_update_fn: The halo update the problem is being solved against.
-    grid_params: The grid parametrization.
-    shape: The shape of the full array, halos included.
+    mesh: The device mesh.
+    grid_params: The grid parametrization, for the axis-order permutation.
+    boundary_conditions: The conditions the problem is posed with, per axis in
+      x, y, z order, as `Pressure._build_dp_bc` returns them.
 
   Returns:
-    Per axis, a `(low, high)` pair of ghost factors.
+    A function taking a field and an array axis and returning the two planes
+    immediately outside that axis's faces.
   """
-  halo = grid_params.halo_width
-  centre = [extent // 2 for extent in shape]
-  factors = []
-  for axis in range(3):
-    per_face = []
-    for face in (0, 1):
-      probe = jnp.zeros(shape, jnp.float32)
-      first_interior = list(centre)
-      first_interior[axis] = halo if face == 0 else shape[axis] - halo - 1
-      probe = probe.at[tuple(first_interior)].set(1.0)
 
-      ghost = list(centre)
-      ghost[axis] = halo - 1 if face == 0 else shape[axis] - halo
-      per_face.append(halo_update_fn(probe)[tuple(ghost)])
-    factors.append(tuple(per_face))
-  return tuple(factors)
+  def exchange(u: jnp.ndarray, axis: int):
+    axis_name = grid_params.data_axis_order[axis]
+    widths = [(0, 0)] * 3
+    widths[axis] = (1, 1)
+    padded = halo_exchange.inplace_halo_exchange(
+        jnp.pad(u, widths),
+        axes=(axis_name,),
+        mesh=mesh,
+        grid_params=grid_params,
+        periodic_dims=[grid_params.periodic_dims[axis]],
+        boundary_conditions=(boundary_conditions[_XYZ.index(axis_name)],),
+        halo_width=1,
+    )
+    return padded[_first(axis)], padded[_last(padded, axis)]
+
+  return exchange
 
 
-def _coarsen_operator(error, fine_operator, ghosts):
+def _coarsen_operator(error, fine_operator, exchange):
   """`R A P`, the Galerkin coarse operator built from `fine_operator`.
 
   Args:
     error: The coarse field to apply it to.
     fine_operator: The operator one level finer.
-    ghosts: Per-axis `(low, high)` ghost factors.
+    exchange: Supplies the planes outside each face, from `_make_exchange`.
 
   Returns:
     The coarse operator applied to `error`.
   """
-  return _restrict(fine_operator(_prolongate(error, ghosts)), ghosts)
+  return _restrict(fine_operator(_prolongate(error, exchange)), exchange)
 
 
 def _shift_up(
@@ -244,9 +260,7 @@ def _interleave(even: jnp.ndarray, odd: jnp.ndarray, axis: int) -> jnp.ndarray:
   return stacked.reshape(shape)
 
 
-def _prolongate_axis(
-    coarse: jnp.ndarray, axis: int, ghosts: tuple[float, float]
-) -> jnp.ndarray:
+def _prolongate_axis(coarse: jnp.ndarray, axis: int, exchange) -> jnp.ndarray:
   """Interpolates linearly along one axis, doubling its length.
 
   Cell centred, so each coarse cell covers two fine cells and each of those
@@ -262,22 +276,18 @@ def _prolongate_axis(
   Args:
     coarse: The coarse field.
     axis: The axis to refine.
-    ghosts: The ghost factors for the low and high faces of this axis.
+    exchange: Supplies the planes outside each face.
 
   Returns:
     The field with `axis` twice as long.
   """
-  low_ghost, high_ghost = ghosts
-  beyond_low = low_ghost * coarse[_first(axis)]
-  beyond_high = high_ghost * coarse[_last(coarse, axis)]
+  beyond_low, beyond_high = exchange(coarse, axis)
   lower = 0.75 * coarse + 0.25 * _shift_down(coarse, axis, beyond_low)
   upper = 0.75 * coarse + 0.25 * _shift_up(coarse, axis, beyond_high)
   return _interleave(lower, upper, axis)
 
 
-def _restrict_axis(
-    fine: jnp.ndarray, axis: int, ghosts: tuple[float, float]
-) -> jnp.ndarray:
+def _restrict_axis(fine: jnp.ndarray, axis: int, exchange) -> jnp.ndarray:
   """The exact transpose of `_prolongate_axis`, halving the axis.
 
   With `lower[i] = 3/4 c[i] + 1/4 c[i-1]` and
@@ -290,23 +300,23 @@ def _restrict_axis(
   Args:
     fine: The fine field. `axis` must have even length.
     axis: The axis to coarsen.
-    ghosts: The ghost factors for the low and high faces of this axis.
+    exchange: Supplies the planes outside each face.
 
   Returns:
     The field with `axis` halved.
   """
-  low_ghost, high_ghost = ghosts
   lower = jax.lax.slice_in_dim(fine, 0, fine.shape[axis], stride=2, axis=axis)
   upper = jax.lax.slice_in_dim(fine, 1, fine.shape[axis], stride=2, axis=axis)
 
-  # What lies past each end, which the transpose takes from the ghost
-  # `c[-1] = g c[0]` appearing inside `lower[0]`, and `c[N] = g c[N-1]` inside
-  # `upper[N-1]`. Note the crossing: the plane past the high face of `lower`
-  # comes from `upper`, and vice versa. Writing them the other way round keeps
-  # adjointness only where the factor is zero, so a Dirichlet face would look
-  # correct while a Neumann one silently was not.
-  beyond_high = high_ghost * upper[_last(upper, axis)]
-  beyond_low = low_ghost * lower[_first(axis)]
+  # What lies past each end. The transpose takes it from the ghost `c[-1]`
+  # appearing inside `lower[0]`, and `c[N]` inside `upper[N-1]`, so the plane
+  # is the exchange's (of the half it belongs to). Note the crossing: the
+  # plane past the high face of `lower` is exchanged from `upper`, and vice
+  # versa. Writing them the other way round keeps adjointness only where the
+  # outside cell is zero, so a Dirichlet face would look correct while a
+  # Neumann one silently was not.
+  _, beyond_high = exchange(upper, axis)
+  beyond_low, _ = exchange(lower, axis)
   return (
       0.75 * (lower + upper)
       + 0.25 * _shift_up(lower, axis, beyond_high)
@@ -314,7 +324,7 @@ def _restrict_axis(
   )
 
 
-def _restrict(fine: jnp.ndarray, ghosts) -> jnp.ndarray:
+def _restrict(fine: jnp.ndarray, exchange) -> jnp.ndarray:
   """Restricts by transposing the prolongation along every axis.
 
   Being the exact transpose is what the coarse-grid correction rests on: it
@@ -325,30 +335,30 @@ def _restrict(fine: jnp.ndarray, ghosts) -> jnp.ndarray:
 
   Args:
     fine: The fine field, every axis of even length.
-    ghosts: Per-axis `(low, high)` ghost factors.
+    exchange: Supplies the planes outside each face.
 
   Returns:
     The coarse field, half the length along each axis.
   """
   coarse = fine
   for axis in range(3):
-    coarse = _restrict_axis(coarse, axis, ghosts[axis])
+    coarse = _restrict_axis(coarse, axis, exchange)
   return coarse
 
 
-def _prolongate(coarse: jnp.ndarray, ghosts) -> jnp.ndarray:
+def _prolongate(coarse: jnp.ndarray, exchange) -> jnp.ndarray:
   """Interpolates onto the fine grid along every axis.
 
   Args:
     coarse: The coarse field.
-    ghosts: Per-axis `(low, high)` ghost factors.
+    exchange: Supplies the planes outside each face.
 
   Returns:
     The fine field, twice the length along each axis.
   """
   fine = coarse
   for axis in range(3):
-    fine = _prolongate_axis(fine, axis, ghosts[axis])
+    fine = _prolongate_axis(fine, axis, exchange)
   return fine
 
 
@@ -571,7 +581,7 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
       if not self._can_coarsen(current):
         return levels
       operator = functools.partial(
-          _coarsen_operator, fine_operator=operator, ghosts=self._ghosts
+          _coarsen_operator, fine_operator=operator, exchange=self._exchange
       )
       current = tuple(extent // 2 for extent in current)
 
@@ -596,14 +606,14 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
           u, b, operator, diagonal, self._weight, self._n_smooth * 4
       )
 
-    coarse_residual = _restrict(b - operator(u), self._ghosts)
+    coarse_residual = _restrict(b - operator(u), self._exchange)
     coarse_error = jnp.zeros_like(coarse_residual)
     for _ in range(max(self._n_coarse, 1)):
       coarse_error = self._v_cycle(
           levels, index + 1, coarse_error, coarse_residual
       )
 
-    u = u + _prolongate(coarse_error, self._ghosts)
+    u = u + _prolongate(coarse_error, self._exchange)
     return _smooth(u, b, operator, diagonal, self._weight, self._n_smooth)
 
   def solve(
@@ -673,8 +683,17 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
     # each face. While they assumed Dirichlet regardless, a Neumann problem
     # converged two to three orders of magnitude worse than a Dirichlet one
     # and degraded as the grid grew.
-    self._ghosts = _ghost_factors(
-        halo_update_fn, self._grid_params, rhs.shape
+    if not self.boundary_conditions:
+      raise ValueError(
+          'The multigrid solver needs the boundary conditions the problem is '
+          'posed with, and `boundary_conditions` is empty. `solve` is given a '
+          'halo update, which applies them but cannot be asked what they are, '
+          'and the coarse levels exchange at their own shapes so they cannot '
+          'reuse it. `Pressure` sets this from `_build_dp_bc`; a caller '
+          'constructing the solver directly must set it too.'
+      )
+    self._exchange = _make_exchange(
+        mesh, self._grid_params, self.boundary_conditions
     )
 
     b = rhs[interior]

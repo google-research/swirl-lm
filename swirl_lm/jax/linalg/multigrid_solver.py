@@ -38,6 +38,7 @@ operates on single-device 3D arrays using JAX operations.
 
 
 import functools
+import math
 from typing import Callable
 
 import jax
@@ -45,6 +46,7 @@ import jax.numpy as jnp
 from swirl_lm.jax.communication import halo_exchange
 from swirl_lm.jax.linalg import base_poisson_solver
 from swirl_lm.jax.linalg import poisson_solver_pb2
+from swirl_lm.jax.utility import common_ops
 from swirl_lm.jax.utility import get_kernel_fn
 from swirl_lm.jax.utility import grid_parametrization
 from swirl_lm.jax.utility import types
@@ -190,37 +192,48 @@ def _coarsen_operator(error, fine_operator, ghosts):
   return _restrict(fine_operator(_prolongate(error, ghosts)), ghosts)
 
 
-def _shift_up(u: jnp.ndarray, axis: int, ghost: float = 0.0) -> jnp.ndarray:
-  """`u[i+1]`, taking `ghost * u[-1]` beyond the last cell.
+def _shift_up(
+    u: jnp.ndarray, axis: int, beyond_high: jnp.ndarray
+) -> jnp.ndarray:
+  """`u[i+1]`, taking `beyond_high` in place of the cell past the last.
+
+  A plane rather than a factor times the edge cell. Everything inside the
+  domain can be written either way, but only a plane can carry a neighbouring
+  device's data, and a factor cannot: at an inter-device seam there is no
+  multiple of this block's edge cell that equals the neighbour's first cell.
+  Taking the plane is what will let the same code serve a partitioned grid.
 
   Args:
     u: The field.
     axis: The axis to shift along.
-    ghost: The factor relating the cell outside the high face to the last
-      cell inside it. One for a zero-gradient condition, zero for a
-      Dirichlet one.
+    beyond_high: What lies immediately past the high face, shaped like one
+      slice of `u` along `axis`.
 
   Returns:
     The shifted field.
   """
   shifted = jnp.roll(u, -1, axis=axis)
-  return shifted.at[_last(u, axis)].set(ghost * u[_last(u, axis)])
+  return shifted.at[_last(u, axis)].set(beyond_high)
 
 
-def _shift_down(u: jnp.ndarray, axis: int, ghost: float = 0.0) -> jnp.ndarray:
-  """`u[i-1]`, taking `ghost * u[0]` before the first cell.
+def _shift_down(
+    u: jnp.ndarray, axis: int, beyond_low: jnp.ndarray
+) -> jnp.ndarray:
+  """`u[i-1]`, taking `beyond_low` in place of the cell before the first.
+
+  See `_shift_up` for why this is a plane and not a factor.
 
   Args:
     u: The field.
     axis: The axis to shift along.
-    ghost: The factor relating the cell outside the low face to the first
-      cell inside it.
+    beyond_low: What lies immediately before the low face, shaped like one
+      slice of `u` along `axis`.
 
   Returns:
     The shifted field.
   """
   shifted = jnp.roll(u, 1, axis=axis)
-  return shifted.at[_first(axis)].set(ghost * u[_first(axis)])
+  return shifted.at[_first(axis)].set(beyond_low)
 
 
 def _interleave(even: jnp.ndarray, odd: jnp.ndarray, axis: int) -> jnp.ndarray:
@@ -255,8 +268,10 @@ def _prolongate_axis(
     The field with `axis` twice as long.
   """
   low_ghost, high_ghost = ghosts
-  lower = 0.75 * coarse + 0.25 * _shift_down(coarse, axis, low_ghost)
-  upper = 0.75 * coarse + 0.25 * _shift_up(coarse, axis, high_ghost)
+  beyond_low = low_ghost * coarse[_first(axis)]
+  beyond_high = high_ghost * coarse[_last(coarse, axis)]
+  lower = 0.75 * coarse + 0.25 * _shift_down(coarse, axis, beyond_low)
+  upper = 0.75 * coarse + 0.25 * _shift_up(coarse, axis, beyond_high)
   return _interleave(lower, upper, axis)
 
 
@@ -284,22 +299,19 @@ def _restrict_axis(
   lower = jax.lax.slice_in_dim(fine, 0, fine.shape[axis], stride=2, axis=axis)
   upper = jax.lax.slice_in_dim(fine, 1, fine.shape[axis], stride=2, axis=axis)
 
-  # The interior part. The shifts reach past the ends here, where there is no
-  # coarse cell at all, so they pad with zero regardless of the condition.
-  result = (
+  # What lies past each end, which the transpose takes from the ghost
+  # `c[-1] = g c[0]` appearing inside `lower[0]`, and `c[N] = g c[N-1]` inside
+  # `upper[N-1]`. Note the crossing: the plane past the high face of `lower`
+  # comes from `upper`, and vice versa. Writing them the other way round keeps
+  # adjointness only where the factor is zero, so a Dirichlet face would look
+  # correct while a Neumann one silently was not.
+  beyond_high = high_ghost * upper[_last(upper, axis)]
+  beyond_low = low_ghost * lower[_first(axis)]
+  return (
       0.75 * (lower + upper)
-      + 0.25 * _shift_up(lower, axis)
-      + 0.25 * _shift_down(upper, axis)
+      + 0.25 * _shift_up(lower, axis, beyond_high)
+      + 0.25 * _shift_down(upper, axis, beyond_low)
   )
-
-  # The boundary terms, which come from the ghost `c[-1] = g c[0]` appearing
-  # inside `lower[0]`, and `c[N] = g c[N-1]` inside `upper[N-1]`. They attach
-  # to those halves and not to the other: writing them the other way round
-  # keeps adjointness only where the factor is zero, so a Dirichlet face
-  # looks correct and a Neumann one silently is not.
-  first, last = _first(axis), _last(result, axis)
-  result = result.at[first].add(0.25 * low_ghost * lower[first])
-  return result.at[last].add(0.25 * high_ghost * upper[last])
 
 
 def _restrict(fine: jnp.ndarray, ghosts) -> jnp.ndarray:
@@ -412,6 +424,38 @@ def _validate_coarsest_shape(shape: tuple[int, ...]) -> None:
   )
 
 
+def _validate_single_device(mesh: jax.sharding.Mesh) -> None:
+  """Refuses a partitioned mesh, which this solver cannot yet solve on.
+
+  `solve` strips the halos on the way in, so the cycle runs on unknowns that
+  have no overlap with the neighbouring device. This will cause problems with
+  the folowing: the transfers close every inter-device seam with a
+  homogeneous Dirichlet condition rather than reading the neighbour, the ghost
+  factors measure that seam and report it as Dirichlet, and the returned
+  residual norm is one shard's rather than the whole domain's.
+
+  This raises until those are fixed, so a decomposition that cannot be solved
+  stops rather than returning something plausible. `fire_multigrid.pbtxt` pins
+  one core for this reason.
+
+  Args:
+    mesh: The device mesh.
+
+  Raises:
+    NotImplementedError: If the mesh holds more than one device.
+  """
+  shape = dict(mesh.shape)
+  if math.prod(shape.values()) <= 1:
+    return
+  raise NotImplementedError(
+      f'The multigrid solver runs on one device and got a mesh of {shape}. '
+      'Its coarse grids are not partitioned, so each device would solve its '
+      'own disconnected problem and report a residual for its own shard. Use '
+      'the Jacobi or conjugate gradient solver on more than one device, or '
+      'set `computation_shape` to a single core.'
+  )
+
+
 class MultigridSolver(base_poisson_solver.PoissonSolver):
   """Multigrid Poisson solver using V-cycle with Jacobi smoothing."""
 
@@ -462,10 +506,16 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
     self._weight = mg_config.weight
     self._n_coarse = mg_config.n_coarse
 
-    # Coarsest subgrid shape (stop coarsening when any dim <= this).
+    # Coarsest subgrid shape: coarsening stops when halving any axis would
+    # take it below this. Held in array axis order, like every other triple
+    # here, so the proto's x, y and z are permuted rather than assumed: the
+    # previous `(dim_z, dim_x, dim_y)` hard-coded `data_axis_order == 'zxy'`
+    # which is the required order in TensorFlow.
     if mg_config.HasField('coarsest_subgrid_shape'):
       cs = mg_config.coarsest_subgrid_shape
-      self._coarsest_shape = (cs.dim_z, cs.dim_x, cs.dim_y)
+      self._coarsest_shape = tuple(
+          grid_params.to_data_axis_order(cs.dim_x, cs.dim_y, cs.dim_z)
+      )
     else:
       self._coarsest_shape = (_MIN_COARSEST_EXTENT,) * 3
     _validate_coarsest_shape(self._coarsest_shape)
@@ -587,6 +637,8 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
     """
     del additional_states
 
+    _validate_single_device(mesh)
+
     halo = self._grid_params.halo_width
     interior = (slice(halo, -halo),) * 3
 
@@ -641,8 +693,14 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
         base_poisson_solver.X: halo_update_fn(
             jnp.pad(x, ((halo, halo),) * 3)
         ),
+        # Reduced across devices, not a local sum: with `out_specs=P()` an
+        # unreduced norm silently returns whichever shard the caller happens
+        # to read. `global_dot` rather than `compute_norm`, which all-gathers
+        # to produce a scalar. `residual` is interior-only (both `b` and the
+        # operator's output carry the unknowns alone) so no cell is counted
+        # twice and the halos need no clearing first.
         base_poisson_solver.RESIDUAL_L2_NORM: jnp.sqrt(
-            jnp.sum(residual**2)
+            common_ops.global_dot(residual, residual, mesh)
         ),
         base_poisson_solver.ITERATIONS: jnp.asarray(
             self._num_iterations, jnp.int32

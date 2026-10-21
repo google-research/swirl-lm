@@ -185,6 +185,16 @@ class Pressure:
     # Set the initial flow-dependent pressure BCs.
     self._update_pressure_bc()
 
+    # Hand the solver the conditions `dp` is posed with, from the same call
+    # `_dp_halo_update_fn` makes, so the two cannot drift. Multigrid reads
+    # these to build the exchanges for its coarse levels, which run at their
+    # own shapes and so cannot reuse the closure passed to `solve`.
+    #
+    # After `_update_pressure_bc` for the same reason the reprojection
+    # decision below is: `_build_dp_bc` reads `self._bc['p']`, which that call
+    # is what populates.
+    self._solver.boundary_conditions = self._build_dp_bc()
+
     # Conjugate gradient reprojects onto the range of the operator by removing
     # the mean, which is right for an all-Neumann problem, whose null space is
     # the constant, and wrong for one with a Dirichlet face, where the mean is

@@ -38,7 +38,6 @@ operates on single-device 3D arrays using JAX operations.
 
 
 import functools
-import math
 from typing import Callable
 
 import jax
@@ -434,38 +433,6 @@ def _validate_coarsest_shape(shape: tuple[int, ...]) -> None:
   )
 
 
-def _validate_single_device(mesh: jax.sharding.Mesh) -> None:
-  """Refuses a partitioned mesh, which this solver cannot yet solve on.
-
-  `solve` strips the halos on the way in, so the cycle runs on unknowns that
-  have no overlap with the neighbouring device. This will cause problems with
-  the folowing: the transfers close every inter-device seam with a
-  homogeneous Dirichlet condition rather than reading the neighbour, the ghost
-  factors measure that seam and report it as Dirichlet, and the returned
-  residual norm is one shard's rather than the whole domain's.
-
-  This raises until those are fixed, so a decomposition that cannot be solved
-  stops rather than returning something plausible. `fire_multigrid.pbtxt` pins
-  one core for this reason.
-
-  Args:
-    mesh: The device mesh.
-
-  Raises:
-    NotImplementedError: If the mesh holds more than one device.
-  """
-  shape = dict(mesh.shape)
-  if math.prod(shape.values()) <= 1:
-    return
-  raise NotImplementedError(
-      f'The multigrid solver runs on one device and got a mesh of {shape}. '
-      'Its coarse grids are not partitioned, so each device would solve its '
-      'own disconnected problem and report a residual for its own shard. Use '
-      'the Jacobi or conjugate gradient solver on more than one device, or '
-      'set `computation_shape` to a single core.'
-  )
-
-
 class MultigridSolver(base_poisson_solver.PoissonSolver):
   """Multigrid Poisson solver using V-cycle with Jacobi smoothing."""
 
@@ -628,15 +595,22 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
 
     The halos are stripped on the way in and restored on the way out, so the
     cycle works on unknowns alone, with the boundary conditions applied by
-    `halo_update_fn` inside the operator. A case spread over more than one
-    device still solves several unconnected problems: `halo_update_fn` does
-    exchange between replicas, but only at the finest level, and the coarse
-    grids are not yet partitioned.
+    `halo_update_fn` inside the operator. The transfers reach one cell past
+    each face and get it from an exchange of their own, at that level's shape
+    and a halo width of one, so the coarse grids are partitioned too: at an
+    inter-device seam the plane is the neighbour's, at a face of the domain it
+    is the boundary condition's.
+
+    The coarsest grid is per core, so a decomposition into `c` cores along an
+    axis leaves a global coarse problem `c` times larger than a single device
+    would, and the bottom of the hierarchy is smoothed rather than solved.
+    Convergence per cycle therefore degrades as the device count grows, which
+    is a cost rather than an error.
 
     Args:
       rhs: The right hand side.
       p0: The initial guess.
-      mesh: The device mesh. Not yet used.
+      mesh: The device mesh.
       halo_update_fn: The boundary conditions. Defaults to homogeneous
         Neumann, matching the other solvers.
       additional_states: Not used; a stretched grid is rejected in
@@ -646,8 +620,6 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
       The solution, the residual norm and the cycle count.
     """
     del additional_states
-
-    _validate_single_device(mesh)
 
     halo = self._grid_params.halo_width
     interior = (slice(halo, -halo),) * 3

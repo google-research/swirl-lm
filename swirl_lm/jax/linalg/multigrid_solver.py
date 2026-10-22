@@ -363,7 +363,17 @@ def _prolongate(coarse: jnp.ndarray, exchange) -> jnp.ndarray:
 
 # The Galerkin coarse operator spans five points per axis, so the coarsest
 # grid has to hold at least that; eight is the first power of two that does.
+# This is a bound on the *global* coarse extent, which is what the stencil
+# sees. It was measured on one device, where global and per-core are the same
+# thing.
 _MIN_COARSEST_EXTENT = 8
+
+# The smallest a per-core block may become. Two cells would be enough for the
+# transfers, which only de-interleave with stride two, but not for
+# `_interior_diagonal`: every device probes its own local center, so the
+# probes sit one block apart, and the Galerkin operator reaches two cells. At
+# four the supports touch while the readback points stay clear of each other.
+_MIN_PER_CORE_EXTENT = 4
 
 
 def _validate_power_of_two_interior(
@@ -483,10 +493,13 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
     self._weight = mg_config.weight
     self._n_coarse = mg_config.n_coarse
 
-    # Coarsest subgrid shape: coarsening stops when halving any axis would
-    # take it below this. Held in array axis order, like every other triple
-    # here, so the proto's x, y and z are permuted rather than assumed: the
-    # previous `(dim_z, dim_x, dim_y)` hard-coded `data_axis_order == 'zxy'`
+    # Coarsest shape: coarsening stops when halving any axis would take the
+    # *global* extent below this. Named `coarsest_subgrid_shape` in the proto,
+    # which reads as per-core, but the bound it expresses is on the stencil and
+    # the stencil spans the global grid. The two coincide on one device, which
+    # is where the value came from. Held in array axis order, like every other
+    # triple here, so the proto's x, y and z are permuted rather than assumed:
+    # the previous `(dim_z, dim_x, dim_y)` hard-coded `data_axis_order == 'zxy'`
     # which is the required order in TensorFlow.
     if mg_config.HasField('coarsest_subgrid_shape'):
       cs = mg_config.coarsest_subgrid_shape
@@ -497,6 +510,14 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
       self._coarsest_shape = (_MIN_COARSEST_EXTENT,) * 3
     _validate_coarsest_shape(self._coarsest_shape)
 
+    # Devices per axis, in array axis order, so `_can_coarsen` can reason
+    # about the global extent rather than the local one.
+    self._cores = tuple(
+        grid_params.to_data_axis_order(
+            grid_params.cx, grid_params.cy, grid_params.cz
+        )
+    )
+
     self._use_a_inv = mg_config.use_a_inv
 
     # Kept in array axis order rather than named z, x, y: `grid_spacings` is
@@ -506,17 +527,26 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
     self._spacings = tuple(grid_params.grid_spacings)
 
   def _can_coarsen(self, shape: tuple[int, ...]) -> bool:
-    """Whether every axis can be halved and still exceed the coarsest shape.
+    """Whether every axis can be halved and leave a usable grid.
+
+    The coarsest shape bounds the **global** extent, because that is what the
+    five-point Galerkin stencil has to fit inside.
+    `_MIN_PER_CORE_EXTENT` bounds the local block, because a block has
+    to hold two cells to be de-interleaved at all.
 
     Args:
-      shape: The current grid shape, unknowns only.
+      shape: The current per-core grid shape, unknowns only.
 
     Returns:
       True if the grid can be coarsened.
     """
     return all(
-        extent % 2 == 0 and extent // 2 >= coarsest
-        for extent, coarsest in zip(shape, self._coarsest_shape)
+        extent % 2 == 0
+        and extent // 2 >= _MIN_PER_CORE_EXTENT
+        and cores * (extent // 2) >= coarsest
+        for extent, cores, coarsest in zip(
+            shape, self._cores, self._coarsest_shape
+        )
     )
 
   def _hierarchy(self, shape: tuple[int, ...], fine_operator):

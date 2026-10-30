@@ -78,6 +78,19 @@ _CORES_Y = flags.DEFINE_integer(
 _CORES_Z = flags.DEFINE_integer(
     'cores_z', None, 'Overrides cores_z in the config.'
 )
+_SOLVER = flags.DEFINE_enum(
+    'solver',
+    None,
+    ['JACOBI', 'CONJUGATE_GRADIENT', 'MULTIGRID'],
+    'Overrides the Poisson solver in the config. MULTIGRID has additional '
+    'constrains on the mesh.',
+)
+_PRESSURE_ITERATIONS = flags.DEFINE_integer(
+    'pressure_iterations',
+    None,
+    'Overrides the iteration count of the selected solver: sweeps for '
+    'Jacobi, iterations for conjugate gradient, V-cycles for multigrid.',
+)
 _PROBE_DISCARD = flags.DEFINE_float(
     'probe_discard',
     0.5,
@@ -103,6 +116,10 @@ def _make_case() -> cylinder_pb2.CylinderCase:
     case.reynolds_number = _REYNOLDS_NUMBER.value
   if _CELLS_PER_DIAMETER.value is not None:
     case.cells_per_diameter = _CELLS_PER_DIAMETER.value
+  if _SOLVER.value is not None:
+    case.solver = cylinder_pb2.CylinderCase.Solver.Value(_SOLVER.value)
+  if _PRESSURE_ITERATIONS.value is not None:
+    case.pressure_iterations = _PRESSURE_ITERATIONS.value
   for flag, field in (
       (_CORES_X, 'cores_x'), (_CORES_Y, 'cores_y'), (_CORES_Z, 'cores_z')
   ):

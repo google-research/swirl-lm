@@ -79,6 +79,8 @@ ARGS=(
 )
 [[ -n "${RE:-}" ]] && ARGS+=(--reynolds_number="${RE}")
 [[ -n "${CELLS:-}" ]] && ARGS+=(--cells_per_diameter="${CELLS}")
+[[ -n "${SOLVER:-}" ]] && ARGS+=(--solver="${SOLVER}")
+[[ -n "${PITER:-}" ]] && ARGS+=(--pressure_iterations="${PITER}")
 
 mkdir -p "${OUTPUT}"
 cd "${ROOT}"

@@ -123,6 +123,7 @@ class Cylinder:
         else self.case.cfl * self.dx / self.u_inf
     )
 
+    self._check_multigrid()
     self.params = self._build_params()
     self.gp = self.params.grid_params
 
@@ -220,6 +221,124 @@ class Cylinder:
         )
     return extent
 
+  def _solver_text(self) -> str:
+    """The Poisson solver block, indented to sit inside `solver {}`.
+
+    `pressure_iterations` is the iteration count for all three, so it means
+    sweeps, iterations or V-cycles depending on which is selected.
+
+    Returns:
+      The configuration text for the selected solver.
+
+    Raises:
+      ValueError: If the solver is unrecognised.
+    """
+    case = self.case
+    solver = case.solver
+    if solver == cylinder_pb2.CylinderCase.JACOBI:
+      return (
+          f'    jacobi {{\n'
+          f'      max_iterations: {case.pressure_iterations}\n'
+          f'      halo_width: {case.halo_width}\n'
+          f'      omega: 0.67\n'
+          f'    }}'
+      )
+    if solver == cylinder_pb2.CylinderCase.CONJUGATE_GRADIENT:
+      # `atol` is relative, which is what `l2_norm_reduction` selects: the
+      # norm of the right hand side scales with the mesh and the flow.
+      # `reprojection` is left unset because it depends on the boundary
+      # conditions (must be off when `pressure_outlet` is set).
+      return (
+          f'    conjugate_gradient {{\n'
+          f'      max_iterations: {case.pressure_iterations}\n'
+          f'      halo_width: {case.halo_width}\n'
+          f'      atol: 1e-8\n'
+          f'      l2_norm_reduction: true\n'
+          f'    }}'
+      )
+    if solver == cylinder_pb2.CylinderCase.MULTIGRID:
+      # Two weighted Jacobi sweeps either side of the coarse correction, the
+      # damping of 2/3 being the standard smoother choice, and a coarsest grid
+      # of eight: the Galerkin coarse operator spans five points per axis and
+      # four cells cannot hold it.
+      return (
+          f'    multigrid {{\n'
+          f'      num_iterations: {case.pressure_iterations}\n'
+          f'      n_smooth: 2\n'
+          f'      weight: 0.6667\n'
+          f'      n_coarse: 1\n'
+          # `dim_0/1/2`, not `dim_x/y/z`: this text is parsed against the
+          # TensorFlow `swirl_lm.CoordinateInt`, whose fields are numbered.
+          f'      coarsest_subgrid_shape {{ dim_0: 8 dim_1: 8 dim_2: 8 }}\n'
+          f'    }}'
+      )
+    raise ValueError(
+        f'Unrecognised solver {solver}; expected one of '
+        f'{[cylinder_pb2.CylinderCase.Solver.Name(v) for v in (0, 1, 2)]}.'
+    )
+
+  def _check_multigrid(self) -> None:
+    """Checks the mesh against what the multigrid hierarchy requires.
+
+    More explicit than raising from inside the hierarchy builder, instructs
+    which parameter to change.
+
+    Raises:
+      ValueError: If the grid is not one multigrid can build a hierarchy on.
+    """
+    if self.case.solver != cylinder_pb2.CylinderCase.MULTIGRID:
+      return
+    case = self.case
+    interior = (
+        self.fx // case.cores_x,
+        self.fy // case.cores_y,
+        self.fz // case.cores_z,
+    )
+    names = ('x', 'y', 'z')
+    knobs = {
+        'x': '`cells_per_diameter`, `length_upstream` or `length_downstream`',
+        'y': '`cells_per_diameter` or `half_width`',
+        'z': '`spanwise_cells`',
+    }
+    bad = [
+        (name, extent)
+        for name, extent in zip(names, interior)
+        if extent < 2 or extent & (extent - 1) != 0
+    ]
+    if bad:
+      detail = ', '.join(f'{name} = {extent}' for name, extent in bad)
+      raise ValueError(
+          f'MULTIGRID needs every per-core interior extent to be a power of '
+          f'two, and this case gives {detail}. Adjust '
+          f'{", ".join(knobs[name] for name, _ in bad)}, or the '
+          f'decomposition. The published grid of this case is not a power of '
+          f'two in x or y, so a multigrid run is a different mesh from the '
+          f'validation one and should not be compared against it directly.'
+      )
+
+    # The hierarchy halves all three axes together and stops when any of them
+    # would fall below the coarsest shape, so the shortest axis sets the depth.
+    # With no coarsening at all the V-cycle is just its smoother.
+    depth = 0
+    shape = list(interior)
+    cores = (case.cores_x, case.cores_y, case.cores_z)
+    while all(
+        extent % 2 == 0 and extent // 2 >= 4 and core * (extent // 2) >= 8
+        for extent, core in zip(shape, cores)
+    ):
+      shape = [extent // 2 for extent in shape]
+      depth += 1
+    if depth == 0:
+      raise ValueError(
+          f'MULTIGRID cannot coarsen this grid even once: the per-core '
+          f'interior is {interior} and the hierarchy halves every axis '
+          f'together down to a floor of eight per axis, so the shortest axis '
+          f'decides. Raise `spanwise_cells` (16 gives one coarsening, 32 two, '
+          f'64 three), keeping `span` in step so the cells stay isotropic. As '
+          f'it stands multigrid would cost compile time and run as plain '
+          f'weighted Jacobi.'
+      )
+
   def config_text(self) -> str:
     """The solver configuration this case expands into, as a text proto.
 
@@ -297,11 +416,7 @@ grid_params {{
 }}
 pressure {{
   solver {{
-    jacobi {{
-      max_iterations: {case.pressure_iterations}
-      halo_width: {case.halo_width}
-      omega: 0.67
-    }}
+{self._solver_text()}
   }}
   # Pins the pressure level at the outlet. Without it every non-periodic face
   # gets a homogeneous Neumann condition, the Poisson problem is singular, and

@@ -84,7 +84,22 @@ message CylinderCase {
 
   // Repetitions of the ghost-value update per application.
   optional int32 num_sweeps = 18 [default = 2];
-  // Jacobi iterations in the pressure solve.
+  // The iteration count for whichever solver `solver` selects.
   optional int32 pressure_iterations = 19 [default = 10];
   optional int32 num_sub_iterations = 20 [default = 3];
+
+  // Which Poisson solver the pressure step uses.
+  //
+  // MULTIGRID constrains the mesh and this case does not satisfy it by
+  // default. Every per-core interior extent must be a power of two, and the
+  // hierarchy coarsens all three axes together down to a floor of eight per
+  // axis, so the span sets the depth: `spanwise_cells` of 4 admits no
+  // coarsening at all and multigrid degenerates to its smoother. `Cylinder`
+  // checks this and names the required config changes.
+  enum Solver {
+    JACOBI = 0;
+    CONJUGATE_GRADIENT = 1;
+    MULTIGRID = 2;
+  }
+  optional Solver solver = 22 [default = JACOBI];
 }

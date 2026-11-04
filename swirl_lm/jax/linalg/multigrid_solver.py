@@ -32,13 +32,21 @@ It implements a V-cycle multigrid method with weighted Jacobi smoothing,
 standard restriction (full weighting), and prolongation (bilinear
 interpolation).
 
+Coarsening is per axis. Each level halves whichever axes can be halved and
+leaves the rest at full resolution, so the grid does not have to be a power
+of two and a thin axis does not cap the hierarchy at the depth it alone can
+reach. For an operator whose spacing is far larger along one axis that is not
+a concession but the right coarse space: the smoother leaves error that is
+smooth only along the strongly coupled axes, and those are the axes the
+coarse grid has to represent.
+
 This is the JAX port of `swirl_lm.linalg.multigrid`. The multigrid algorithm
 operates on single-device 3D arrays using JAX operations.
 """
 
 
 import functools
-from typing import Callable
+from typing import Callable, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -193,18 +201,24 @@ def _make_exchange(mesh, grid_params, boundary_conditions):
   return exchange
 
 
-def _coarsen_operator(error, fine_operator, exchange):
+def _coarsen_operator(error, fine_operator, exchange, axes):
   """`R A P`, the Galerkin coarse operator built from `fine_operator`.
+
+  `axes` has to be the same subset the cycle restricts and prolongates with
+  at this level.
 
   Args:
     error: The coarse field to apply it to.
     fine_operator: The operator one level finer.
     exchange: Supplies the planes outside each face, from `_make_exchange`.
+    axes: The axes coarsened between the fine level and this one.
 
   Returns:
     The coarse operator applied to `error`.
   """
-  return _restrict(fine_operator(_prolongate(error, exchange)), exchange)
+  return _restrict(
+      fine_operator(_prolongate(error, exchange, axes)), exchange, axes
+  )
 
 
 def _shift_up(
@@ -323,8 +337,10 @@ def _restrict_axis(fine: jnp.ndarray, axis: int, exchange) -> jnp.ndarray:
   )
 
 
-def _restrict(fine: jnp.ndarray, exchange) -> jnp.ndarray:
-  """Restricts by transposing the prolongation along every axis.
+def _restrict(
+    fine: jnp.ndarray, exchange, axes: tuple[int, ...]
+) -> jnp.ndarray:
+  """Restricts by transposing the prolongation along each axis in `axes`.
 
   Being the exact transpose is what the coarse-grid correction rests on: it
   makes the correction minimise the error over the coarse space rather than
@@ -332,40 +348,54 @@ def _restrict(fine: jnp.ndarray, exchange) -> jnp.ndarray:
   an interpolating prolongation, giving ratios of 1.12, 0.068 and 4.47 on
   fine grids of 8, 16 and 32 where a consistent pair gives one constant.
 
+  Adjointness survives any subset: the per-axis restriction is the exact
+  transpose of the per-axis prolongation, and factors acting on different
+  axes commute, so the composite over a subset is the transpose of the
+  composite over that same subset whatever order they are applied in.
+
   Args:
-    fine: The fine field, every axis of even length.
+    fine: The fine field, of even length along each axis in `axes`.
     exchange: Supplies the planes outside each face.
+    axes: The axes to coarsen. Axes outside it are passed through untouched.
 
   Returns:
-    The coarse field, half the length along each axis.
+    The coarse field, half the length along each axis in `axes`.
   """
   coarse = fine
-  for axis in range(3):
+  for axis in axes:
     coarse = _restrict_axis(coarse, axis, exchange)
   return coarse
 
 
-def _prolongate(coarse: jnp.ndarray, exchange) -> jnp.ndarray:
-  """Interpolates onto the fine grid along every axis.
+def _prolongate(
+    coarse: jnp.ndarray, exchange, axes: tuple[int, ...]
+) -> jnp.ndarray:
+  """Interpolates onto the fine grid along each axis in `axes`.
 
   Args:
     coarse: The coarse field.
     exchange: Supplies the planes outside each face.
+    axes: The axes to refine. Axes outside it are passed through untouched.
 
   Returns:
-    The fine field, twice the length along each axis.
+    The fine field, twice the length along each axis in `axes`.
   """
   fine = coarse
-  for axis in range(3):
+  for axis in axes:
     fine = _prolongate_axis(fine, axis, exchange)
   return fine
 
 
-# The Galerkin coarse operator spans five points per axis, so the coarsest
-# grid has to hold at least that; eight is the first power of two that does.
-# This is a bound on the *global* coarse extent, which is what the stencil
-# sees. It was measured on one device, where global and per-core are the same
-# thing.
+# The Galerkin coarse operator spans five points along each **coarsened**
+# axis, so the coarsest grid has to hold at least that; eight is the first
+# power of two that does. This is a bound on the *global* coarse extent,
+# which is what the stencil sees. It was measured on one device, where global
+# and per-core are identical.
+#
+# It bounds coarsened axes only, and an axis the hierarchy never halves keeps
+# the three-point stencil it started with, so there is no five-point support to
+# clip and a short axis cannot clip one. A four-cell span is safe for exactly
+# that reason.
 _MIN_COARSEST_EXTENT = 8
 
 # The smallest a per-core block may become. Two cells would be enough for the
@@ -382,45 +412,185 @@ _MIN_PER_CORE_EXTENT = 4
 _MAX_COARSENINGS = 4
 
 
-def _validate_power_of_two_interior(
+class _Level(NamedTuple):
+  """One level of the hierarchy, with the step down to the next."""
+
+  shape: tuple[int, ...]
+  operator: Callable[[jnp.ndarray], jnp.ndarray]
+  diagonal: jnp.ndarray
+  # The axes halved between this level and the next, empty on the coarsest.
+  # Recorded forwards because that is the direction every reader needs: the
+  # same tuple is bound into the next level's Galerkin operator and used by
+  # both transfers of the cycle that descends from here.
+  coarsen_axes: tuple[int, ...]
+
+
+def _coarsened(shape: tuple[int, ...], axes: tuple[int, ...]):
+  """`shape` with the axes in `axes` halved and the rest left alone."""
+  return tuple(
+      extent // 2 if axis in axes else extent
+      for axis, extent in enumerate(shape)
+  )
+
+
+def _coarsenable_axes(
+    shape: tuple[int, ...],
+    cores: tuple[int, ...],
+    coarsest: tuple[int, ...],
+) -> tuple[int, ...]:
+  """The axes that can be halved and leave a usable grid.
+
+  Coarsening is per axis: an axis that cannot be halved is kept at full
+  resolution while the others are halved.
+
+  The coarsest shape bounds the **global** extent to accommodate the
+  five-point Galerkin stencil. `_MIN_PER_CORE_EXTENT` bounds the local block,
+  because `_interior_diagonal` probes each device's own centre and the probes
+  have to stay clear of one another.
+
+  `shape`, `cores` and `coarsest` must be in the same axis order, and the
+  returned indices are in that order. Whether the result is empty does not
+  depend on that order, which is what lets the constructor ask the question
+  in x, y, z order while the hierarchy works in array axis order.
+
+  Args:
+    shape: The current per-core grid shape, unknowns only.
+    cores: Devices along each axis.
+    coarsest: The smallest global extent each axis may be taken to.
+
+  Returns:
+    The indices of the coarsenable axes, ascending.
+  """
+  return tuple(
+      axis
+      for axis, (extent, cores_, coarsest_) in enumerate(
+          zip(shape, cores, coarsest)
+      )
+      if extent % 2 == 0
+      and extent // 2 >= _MIN_PER_CORE_EXTENT
+      and cores_ * (extent // 2) >= coarsest_
+  )
+
+
+def _coarsening_plan(
+    shape: tuple[int, ...],
+    cores: tuple[int, ...],
+    coarsest: tuple[int, ...],
+) -> list[tuple[int, ...]]:
+  """The axes to halve at each level, finest first.
+
+  The depth cap is enforced here, as the bound on this loop, rather than inside
+  `_coarsenable_axes`. The predicate stays a local, order-free test on one
+  shape; how many levels have already been taken is a property of the path to
+  that shape, not of the shape, and folding the two together would also cost
+  the partition-invariance argument its readability.
+
+  Args:
+    shape: The finest per-core grid shape, unknowns only.
+    cores: Devices along each axis.
+    coarsest: The smallest global extent each axis may be taken to.
+
+  Returns:
+    One tuple of axes per coarsening, at most `_MAX_COARSENINGS` of them.
+    Empty if nothing can be coarsened.
+  """
+  plan = []
+  current = shape
+  while len(plan) < _MAX_COARSENINGS:
+    axes = _coarsenable_axes(current, cores, coarsest)
+    if not axes:
+      break
+    plan.append(axes)
+    current = _coarsened(current, axes)
+  return plan
+
+
+def _validate_coarsenable(
     grid_params: grid_parametrization.GridParametrization,
+    coarsest_xyz: tuple[int, ...],
 ) -> None:
-  """Requires every per-core interior extent to be a power of two.
+  """Refuses a grid that wants coarsening but admits none.
+
+  Coarsening is per axis. An axis that cannot be halved is simply kept at full
+  resolution. Two edge cases may occur:
+  - A grid already at or below `coarsest_subgrid_shape` on every axis
+    has nothing to coarsen: the V-cycle correctly degenerates to its
+    smoother.
+  - A grid above that floor which still cannot be halved (e.g., odd node extent,
+    or split into per-core blocks too small for the diagonal probe) is refused
+    here rather than silently costing a hierarchy's compile time to run weighted
+    Jacobi.
+
+  Order is in x, y, z rather than array axis order.
 
   Args:
     grid_params: The grid parametrization.
+    coarsest_xyz: The coarsest global extent per axis, in x, y, z order,
+      before it is permuted into array axis order.
 
   Raises:
-    ValueError: If any interior extent is not a power of two, with the
-      `grid_size` values that would fix it.
+    ValueError: If no axis can be halved and the grid is not already at the
+      coarsest shape, naming why each axis cannot be halved.
   """
-  halo = grid_params.halo_width
   interior = (grid_params.core_nx, grid_params.core_ny, grid_params.core_nz)
-  offenders = [
-      (axis, extent)
-      for axis, extent in zip(('dim_0', 'dim_1', 'dim_2'), interior)
-      if extent < 2 or extent & (extent - 1) != 0
-  ]
-  if not offenders:
+  cores = (grid_params.cx, grid_params.cy, grid_params.cz)
+  if _coarsenable_axes(interior, cores, coarsest_xyz):
     return
 
-  remedies = []
-  for axis, extent in offenders:
-    below = 1 << max(extent.bit_length() - 1, 1)
-    above = below * 2
-    remedies.append(
-        f'{axis} is {extent}; for an interior of {below} or {above} set '
-        f'`grid_size.{axis}` to {below + 2 * halo} or {above + 2 * halo}'
-    )
+  # Already at the floor on every axis: nothing to coarsen, nothing wrong.
+  if all(
+      cores_ * extent <= coarsest_
+      for extent, cores_, coarsest_ in zip(interior, cores, coarsest_xyz)
+  ):
+    return
+
+  halo = grid_params.halo_width
+  reasons = []
+  for axis, (extent, cores_, coarsest_) in enumerate(
+      zip(interior, cores, coarsest_xyz)
+  ):
+    name = f'dim_{axis}'
+    if extent % 2:
+      reasons.append(
+          f'{name} is {extent}, which is odd; set `grid_size.{name}` to '
+          f'{extent + 1 + 2 * halo} for an interior of {extent + 1}'
+      )
+    elif extent // 2 < _MIN_PER_CORE_EXTENT:
+      reasons.append(
+          f'{name} is {extent} per core, which halves to {extent // 2}, '
+          f'below the floor of {_MIN_PER_CORE_EXTENT} that the diagonal '
+          f'probe needs; set `grid_size.{name}` to '
+          f'{2 * _MIN_PER_CORE_EXTENT + 2 * halo} or more'
+      )
+    else:
+      # Only offer to lower the floor when there is room to lower it.
+      remedy = (
+          f'raise `grid_size.{name}`'
+          if coarsest_ <= _MIN_COARSEST_EXTENT
+          else (
+              f'raise `grid_size.{name}` or lower '
+              f'`coarsest_subgrid_shape.dim_{axis}` to as little as '
+              f'{_MIN_COARSEST_EXTENT}'
+          )
+      )
+      reasons.append(
+          f'{name} is {extent} per core on {cores_} cores, which halves to a '
+          f'global {cores_ * (extent // 2)}, below the coarsest extent '
+          f'{coarsest_}; {remedy}'
+      )
 
   raise ValueError(
-      'The multigrid solver needs every per-core interior extent to be a '
-      f'power of two, and got {interior}. Each level halves the grid, so an '
-      'odd extent ends the hierarchy early and leaves the coarsest problem '
-      'too large to smooth away. Note `grid_size` counts the halos, so the '
-      f'interior is `grid_size - 2 * {halo}`. '
-      + '; '.join(remedies)
-      + '. Use the Jacobi or conjugate gradient solver for other extents.'
+      'The multigrid solver cannot halve a single axis of this grid, so its '
+      "V-cycle would be weighted Jacobi with a hierarchy's compile time on "
+      f'top, and got a per-core interior of {interior}. An axis is coarsened '
+      f'while it is even, stays at {_MIN_PER_CORE_EXTENT} cells or more per '
+      'core once halved, and keeps a global extent of at least '
+      f'`coarsest_subgrid_shape`, which is {coarsest_xyz}. '
+      + '; '.join(reasons)
+      + f'. Note `grid_size` counts the halos, so the interior is '
+      f'`grid_size - 2 * {halo}`. Coarsening is per axis, so one axis is '
+      'enough and a thin periodic span does not have to be widened. Use the '
+      'Jacobi or conjugate gradient solver for a grid that cannot give one.'
   )
 
 
@@ -488,10 +658,6 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
           'scale factors from `additional_states`.'
       )
 
-    # Coarsening halves each axis, so the hierarchy only reaches a small
-    # coarsest grid when every interior extent is a power of two.
-    _validate_power_of_two_interior(grid_params)
-
     mg_config = solver_option.multigrid
 
     self._num_iterations = mg_config.num_iterations
@@ -509,15 +675,22 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
     # which is the required order in TensorFlow.
     if mg_config.HasField('coarsest_subgrid_shape'):
       cs = mg_config.coarsest_subgrid_shape
-      self._coarsest_shape = tuple(
-          grid_params.to_data_axis_order(cs.dim_x, cs.dim_y, cs.dim_z)
-      )
+      coarsest_xyz = (cs.dim_x, cs.dim_y, cs.dim_z)
     else:
-      self._coarsest_shape = (_MIN_COARSEST_EXTENT,) * 3
+      coarsest_xyz = (_MIN_COARSEST_EXTENT,) * 3
+    self._coarsest_shape = tuple(
+        grid_params.to_data_axis_order(*coarsest_xyz)
+    )
     _validate_coarsest_shape(self._coarsest_shape)
 
-    # Devices per axis, in array axis order, so `_can_coarsen` can reason
-    # about the global extent rather than the local one.
+    # Refuse a grid no axis of which can be halved. Checked here rather than
+    # at the top of the constructor because it needs the coarsest shape, and
+    # asked in x, y, z order (the order `coarsest_xyz` is still in) so
+    # that the message can name the `grid_size` fields the caller set.
+    _validate_coarsenable(grid_params, coarsest_xyz)
+
+    # Devices per axis, in array axis order, so the hierarchy can reason about
+    # the global extent rather than the per-core one.
     self._cores = tuple(
         grid_params.to_data_axis_order(
             grid_params.cx, grid_params.cy, grid_params.cz
@@ -532,29 +705,6 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
     # would be invisible on a cubic grid.
     self._spacings = tuple(grid_params.grid_spacings)
 
-  def _can_coarsen(self, shape: tuple[int, ...]) -> bool:
-    """Whether every axis can be halved and leave a usable grid.
-
-    The coarsest shape bounds the **global** extent, because that is what the
-    five-point Galerkin stencil has to fit inside.
-    `_MIN_PER_CORE_EXTENT` bounds the local block, because a block has
-    to hold two cells to be de-interleaved at all.
-
-    Args:
-      shape: The current per-core grid shape, unknowns only.
-
-    Returns:
-      True if the grid can be coarsened.
-    """
-    return all(
-        extent % 2 == 0
-        and extent // 2 >= _MIN_PER_CORE_EXTENT
-        and cores * (extent // 2) >= coarsest
-        for extent, cores, coarsest in zip(
-            shape, self._cores, self._coarsest_shape
-        )
-    )
-
   def _hierarchy(self, shape: tuple[int, ...], fine_operator):
     """Builds the operator for every level, coarsest last.
 
@@ -567,9 +717,6 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
     points, the measured ratio drifts with the grid, and no scalar can reconcile
     them. Defining the coarse operator by the transfers removes the question.
 
-    The hierarchy stops at `_MAX_COARSENINGS` coarsenings even where the grid
-    would admit more, because a fifth level diverges.
-
     Args:
       shape: The finest grid shape, unknowns only.
       fine_operator: The operator on the finest level, which carries the
@@ -577,19 +724,26 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
         conditions propagate down the hierarchy without being restated.
 
     Returns:
-      A list of `(shape, operator, diagonal)`, finest first.
+      A list of `_Level`, finest first.
     """
+    plan = _coarsening_plan(shape, self._cores, self._coarsest_shape)
     levels = []
     operator = fine_operator
     current = shape
-    while True:
-      levels.append((current, operator, _interior_diagonal(operator, current)))
-      if len(levels) > _MAX_COARSENINGS or not self._can_coarsen(current):
-        return levels
-      operator = functools.partial(
-          _coarsen_operator, fine_operator=operator, exchange=self._exchange
+    # One record per coarsening, plus the coarsest.
+    for axes in (*plan, ()):
+      levels.append(
+          _Level(current, operator, _interior_diagonal(operator, current), axes)
       )
-      current = tuple(extent // 2 for extent in current)
+      if axes:
+        operator = functools.partial(
+            _coarsen_operator,
+            fine_operator=operator,
+            exchange=self._exchange,
+            axes=axes,
+        )
+        current = _coarsened(current, axes)
+    return levels
 
   def _v_cycle(self, levels, index: int, u, b):
     """Performs one V-cycle starting at `levels[index]`.
@@ -603,23 +757,27 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
     Returns:
       The iterate after one cycle.
     """
-    _, operator, diagonal = levels[index]
+    level = levels[index]
+    operator, diagonal = level.operator, level.diagonal
+    axes = level.coarsen_axes
     u = _smooth(u, b, operator, diagonal, self._weight, self._n_smooth)
 
-    if index + 1 == len(levels):
-      # Nothing coarser to fall back on, so smooth harder instead.
+    if not axes:
+      # Nothing coarser to fall back on, so smooth harder instead. Testing
+      # the axes rather than the position in the list also rules out
+      # descending through a transfer pair that would do nothing.
       return _smooth(
           u, b, operator, diagonal, self._weight, self._n_smooth * 4
       )
 
-    coarse_residual = _restrict(b - operator(u), self._exchange)
+    coarse_residual = _restrict(b - operator(u), self._exchange, axes)
     coarse_error = jnp.zeros_like(coarse_residual)
     for _ in range(max(self._n_coarse, 1)):
       coarse_error = self._v_cycle(
           levels, index + 1, coarse_error, coarse_residual
       )
 
-    u = u + _prolongate(coarse_error, self._exchange)
+    u = u + _prolongate(coarse_error, self._exchange, axes)
     return _smooth(u, b, operator, diagonal, self._weight, self._n_smooth)
 
   def solve(
@@ -640,11 +798,15 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
     inter-device seam the plane is the neighbour's, at a face of the domain it
     is the boundary condition's.
 
-    The coarsest grid is per core, so a decomposition into `c` cores along an
-    axis leaves a global coarse problem `c` times larger than a single device
-    would, and the bottom of the hierarchy is smoothed rather than solved.
-    Convergence per cycle therefore degrades as the device count grows, which
-    is a cost rather than an error.
+    Coarsening is per axis: each level halves the axes that can be halved and
+    leaves the rest, so an axis too short or too odd to coarsen stops itself
+    rather than the hierarchy. The depth is currently capped at
+    `_MAX_COARSENINGS`.
+
+    The bottom of the hierarchy is smoothed rather than solved, so how small
+    the coarsest grid gets is a cost in convergence per cycle rather than an
+    error. An axis that never coarsens keeps its full extent there, which on
+    a quasi-two-dimensional grid is the bulk of what the bottom level holds.
 
     Args:
       rhs: The right hand side.

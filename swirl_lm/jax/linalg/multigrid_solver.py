@@ -375,6 +375,12 @@ _MIN_COARSEST_EXTENT = 8
 # four the supports touch while the readback points stay clear of each other.
 _MIN_PER_CORE_EXTENT = 4
 
+# TODO: 5 coarsenings diverges, need to investigate.
+# It counts coarsenings rather than axis halvings because every candidate
+# scales with the number of nested `R A P` wrappings, and a level adds one of
+# those however many axes it touches.
+_MAX_COARSENINGS = 4
+
 
 def _validate_power_of_two_interior(
     grid_params: grid_parametrization.GridParametrization,
@@ -561,6 +567,9 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
     points, the measured ratio drifts with the grid, and no scalar can reconcile
     them. Defining the coarse operator by the transfers removes the question.
 
+    The hierarchy stops at `_MAX_COARSENINGS` coarsenings even where the grid
+    would admit more, because a fifth level diverges.
+
     Args:
       shape: The finest grid shape, unknowns only.
       fine_operator: The operator on the finest level, which carries the
@@ -575,7 +584,7 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
     current = shape
     while True:
       levels.append((current, operator, _interior_diagonal(operator, current)))
-      if not self._can_coarsen(current):
+      if len(levels) > _MAX_COARSENINGS or not self._can_coarsen(current):
         return levels
       operator = functools.partial(
           _coarsen_operator, fine_operator=operator, exchange=self._exchange

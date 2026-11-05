@@ -14,9 +14,7 @@
 """Flow past a circular cylinder, the immersed boundary validation case.
 
 This is the case Ghias, Mittal and Dong use to validate their ghost-cell
-method (J. Comput. Phys. 225 (2007) 528-553, section 3.3), and it is here for
-the same reason: it has published answers, and it exercises a curved boundary
-that no height-field description could represent.
+method (J. Comput. Phys. 225 (2007) 528-553, section 3.3).
 
 Usage mirrors the other examples, except that the case parameters come from a
 `CylinderCase` proto and the solver configuration is derived from them:
@@ -32,11 +30,7 @@ Usage mirrors the other examples, except that the case parameters come from a
   print(simulation.recirculation_length(state))
   ```
 
-Deriving the solver configuration rather than writing it by hand is
-deliberate. The Reynolds number, the viscosity, the grid spacing, the time
-step and the immersed boundary geometry all have to agree, and the usual way
-one of these runs goes wrong is that the Reynolds number is changed and the
-viscosity is not. Here `nu = u_inf * d / Re` by construction.
+Note: The viscosity follows from the Reynolds number `nu = u_inf * d / Re`.
 
 What to expect:
 
@@ -61,6 +55,7 @@ from swirl_lm.base import parameters_pb2
 from swirl_lm.jax.base import parameters as parameters_lib
 from swirl_lm.jax.boundary_condition import immersed_boundary_ghost_point
 from swirl_lm.jax.examples.cylinder import cylinder_pb2
+from swirl_lm.jax.linalg import multigrid_solver
 from swirl_lm.jax.utility import types
 
 
@@ -73,6 +68,14 @@ VELOCITY = ('u', 'v', 'w')
 # this width regardless of the configuration, so every per-core extent has to
 # be divisible by it as well as by the configured `kernel_size`.
 _CONVECTION_KERNEL_SIZE = 4
+
+# The multigrid bounds, taken from the solver rather than restated, so the
+# generated `coarsest_subgrid_shape` and the check below cannot drift from
+# what the hierarchy actually enforces.
+# pylint: disable=protected-access
+_MULTIGRID_COARSEST_EXTENT = multigrid_solver._MIN_COARSEST_EXTENT
+_MULTIGRID_MIN_PER_CORE = multigrid_solver._MIN_PER_CORE_EXTENT
+# pylint: enable=protected-access
 
 
 class Cylinder:
@@ -115,8 +118,7 @@ class Cylinder:
 
     # The CFL is set from the free-stream speed, but the flow accelerates to
     # roughly twice that around the cylinder, so the number the solver
-    # reports comes out about twice `cfl`. Measured on a coarse Re = 40 run,
-    # `cfl = 0.5` reported 1.04.
+    # reports comes out about twice `cfl`.
     self.dt = (
         self.case.dt
         if self.case.HasField('dt')
@@ -194,14 +196,6 @@ class Cylinder:
       )
     extent = interior // cores + 2 * self.case.halo_width
 
-    # A per-core extent that is not divisible by a kernel width sends that
-    # kernel down a slice fallback which disagrees with the convolution path
-    # for some stencils -- `kf2+` by a whole cell, and `shift_up`/`shift_dn`
-    # swapped. Nothing warns. See MEMORY.md, kernel-operator defects.
-    #
-    # Two widths are in play and only one of them is configurable: the case's
-    # `kernel_size`, and the 4 that `convection.py` and `interpolation.py`
-    # hard-code when they build their own operator.
     for width, source in (
         (self.case.kernel_size, '`kernel_size`'),
         (_CONVECTION_KERNEL_SIZE, 'the width convection.py hard-codes'),
@@ -258,9 +252,11 @@ class Cylinder:
       )
     if solver == cylinder_pb2.CylinderCase.MULTIGRID:
       # Two weighted Jacobi sweeps either side of the coarse correction, the
-      # damping of 2/3 being the standard smoother choice, and a coarsest grid
-      # of eight: the Galerkin coarse operator spans five points per axis and
-      # four cells cannot hold it.
+      # damping of 2/3 being the standard smoother choice. The coarsest
+      # extent bounds a *coarsened* axis, where the Galerkin operator spans
+      # five points; the span is never coarsened, so its three-point stencil
+      # is unaffected by the bound applying to it.
+      extent = _MULTIGRID_COARSEST_EXTENT
       return (
           f'    multigrid {{\n'
           f'      num_iterations: {case.pressure_iterations}\n'
@@ -269,7 +265,8 @@ class Cylinder:
           f'      n_coarse: 1\n'
           # `dim_0/1/2`, not `dim_x/y/z`: this text is parsed against the
           # TensorFlow `swirl_lm.CoordinateInt`, whose fields are numbered.
-          f'      coarsest_subgrid_shape {{ dim_0: 8 dim_1: 8 dim_2: 8 }}\n'
+          f'      coarsest_subgrid_shape {{ dim_0: {extent} dim_1: {extent} '
+          f'dim_2: {extent} }}\n'
           f'    }}'
       )
     raise ValueError(
@@ -280,64 +277,53 @@ class Cylinder:
   def _check_multigrid(self) -> None:
     """Checks the mesh against what the multigrid hierarchy requires.
 
-    More explicit than raising from inside the hierarchy builder, instructs
-    which parameter to change.
+    More explicit than letting the solver raise: this names the case
+    parameter to change rather than the `grid_size` field it expands into.
+    It also records `self.multigrid_plan`, the axes halved at each level, so
+    a run can report the hierarchy it actually got rather than the one the
+    configuration implies.
 
     Raises:
-      ValueError: If the grid is not one multigrid can build a hierarchy on.
+      ValueError: If MULTIGRID is selected and no axis can be halved.
     """
+    self.multigrid_plan: list[tuple[int, ...]] = []
     if self.case.solver != cylinder_pb2.CylinderCase.MULTIGRID:
       return
+
     case = self.case
     interior = (
         self.fx // case.cores_x,
         self.fy // case.cores_y,
         self.fz // case.cores_z,
     )
-    names = ('x', 'y', 'z')
-    knobs = {
-        'x': '`cells_per_diameter`, `length_upstream` or `length_downstream`',
-        'y': '`cells_per_diameter` or `half_width`',
-        'z': '`spanwise_cells`',
-    }
-    bad = [
-        (name, extent)
-        for name, extent in zip(names, interior)
-        if extent < 2 or extent & (extent - 1) != 0
-    ]
-    if bad:
-      detail = ', '.join(f'{name} = {extent}' for name, extent in bad)
-      raise ValueError(
-          f'MULTIGRID needs every per-core interior extent to be a power of '
-          f'two, and this case gives {detail}. Adjust '
-          f'{", ".join(knobs[name] for name, _ in bad)}, or the '
-          f'decomposition. The published grid of this case is not a power of '
-          f'two in x or y, so a multigrid run is a different mesh from the '
-          f'validation one and should not be compared against it directly.'
-      )
-
-    # The hierarchy halves all three axes together and stops when any of them
-    # would fall below the coarsest shape, so the shortest axis sets the depth.
-    # With no coarsening at all the V-cycle is just its smoother.
-    depth = 0
-    shape = list(interior)
     cores = (case.cores_x, case.cores_y, case.cores_z)
-    while all(
-        extent % 2 == 0 and extent // 2 >= 4 and core * (extent // 2) >= 8
-        for extent, core in zip(shape, cores)
-    ):
-      shape = [extent // 2 for extent in shape]
-      depth += 1
-    if depth == 0:
-      raise ValueError(
-          f'MULTIGRID cannot coarsen this grid even once: the per-core '
-          f'interior is {interior} and the hierarchy halves every axis '
-          f'together down to a floor of eight per axis, so the shortest axis '
-          f'decides. Raise `spanwise_cells` (16 gives one coarsening, 32 two, '
-          f'64 three), keeping `span` in step so the cells stay isotropic. As '
-          f'it stands multigrid would cost compile time and run as plain '
-          f'weighted Jacobi.'
-      )
+    # These triples are in x, y, z order, which here is also the array axis
+    # order: the generated configuration leaves `data_axis_order` unset and
+    # its default is 'xyz'. The plan's axis indices therefore mean x, y, z.
+    self.multigrid_plan = multigrid_solver._coarsening_plan(  # pylint: disable=protected-access
+        interior, cores, (_MULTIGRID_COARSEST_EXTENT,) * 3
+    )
+    if self.multigrid_plan:
+      return
+
+    knobs = (
+        ('x', '`cells_per_diameter`, `length_upstream` or `length_downstream`'),
+        ('y', '`cells_per_diameter` or `half_width`'),
+        ('z', '`spanwise_cells`'),
+    )
+    raise ValueError(
+        f'MULTIGRID cannot halve a single axis of this grid, so its V-cycle '
+        f"would be weighted Jacobi with a hierarchy's compile time on top. "
+        f'The per-core interior is {interior} on '
+        f'{case.cores_x}x{case.cores_y}x{case.cores_z} cores. An axis is '
+        f'coarsened while it stays even, holds at least '
+        f'{_MULTIGRID_MIN_PER_CORE} cells per core once halved, and keeps a '
+        f'global extent of at least {_MULTIGRID_COARSEST_EXTENT}. Coarsening '
+        f'is per axis, so one qualifying axis is enough and the span does '
+        f'not have to be widened: raise whichever is cheapest, '
+        + ', '.join(f'{name} via {knob}' for name, knob in knobs)
+        + '. Or use the Jacobi or conjugate gradient solver.'
+    )
 
   def config_text(self) -> str:
     """The solver configuration this case expands into, as a text proto.
@@ -356,15 +342,10 @@ class Cylinder:
       # Inlet and both lateral faces carry the free stream; only the outlet is
       # zero gradient.
       #
-      # The lateral faces matter more than they look. Leaving them zero
-      # gradient makes `find_bc_type.is_outflow` classify them as outlets --
-      # all three components Neumann is its entire test -- so the sides of the
-      # domain become outlets, nothing constrains transverse momentum, and the
-      # wake drifts off the centreline and leaves through the side. That is
-      # what the first Re = 100 run did. Ghias et al. section 2.4 (p. 533)
-      # specify the free stream here: "If the flow being simulated is
-      # unconfined then at the transverse boundaries we specify the free
-      # stream velocity and density."
+      # Note: Lateral walls cannot be set to outlets (all-Neumann), since the
+      # transverse momentum needs to be constrained. Else the wake drifts off
+      # the centreline and leaves through the side. Follows Ghias et al.
+      # section 2.4 (p. 533).
       faces = []
       for dim, location in ((0, 0), (1, 0), (1, 1)):
         faces.append(
@@ -421,13 +402,10 @@ pressure {{
   # Pins the pressure level at the outlet. Without it every non-periodic face
   # gets a homogeneous Neumann condition, the Poisson problem is singular, and
   # the unconverged residual acts as a spurious global pressure gradient. Only
-  # correct because the lateral faces above are Dirichlet: while they were
-  # zero gradient they classified as OUTFLOW, and this would have pinned p = 0
-  # along both sides of the domain and driven flow through them.
+  # correct because the lateral faces above are Dirichlet.
   pressure_outlet: true
   # The density is constant, so `drho` is identically zero and filtering it is
-  # pure waste -- at run time, and at compile time where XLA constant-folds
-  # the stencil over the whole grid. Verified bit-identical. See MEMORY.md.
+  # unnecessary.
   num_d_rho_filter: 0
 }}
 thermodynamics {{ constant_density {{}} }}
@@ -501,10 +479,6 @@ boundary_models {{
       logical_coordinates: tuple[int, int, int],
   ) -> dict[str, ScalarField]:
     """Uniform flow everywhere, plus the immersed boundary geometry.
-
-    Starting from a uniform stream rather than from rest lets the wake
-    develop from the impulsive start, which is the usual way these cases are
-    run and reaches the periodic state sooner.
 
     Args:
       params: Simulation parameters.
@@ -689,7 +663,7 @@ boundary_models {{
 
   def summary(self) -> str:
     """A one-line description of the resolved case, for logging."""
-    return (
+    text = (
         f'cylinder: Re = {self.case.reynolds_number:g}, d = '
         f'{self.diameter:g} m, u_inf = {self.u_inf:g} m/s, nu = {self.nu:.4g} '
         f'm^2/s; domain {self.lx:g} x {self.ly:g} x {self.lz:g} m on '
@@ -697,6 +671,15 @@ boundary_models {{
         f'({self.case.cells_per_diameter}/d); dt = {self.dt:.4g} s on '
         f'{self.case.cores_x}x{self.case.cores_y}x{self.case.cores_z} cores'
     )
+    if self.multigrid_plan:
+      steps = ', '.join(
+          ''.join('xyz'[axis] for axis in axes) for axes in self.multigrid_plan
+      )
+      text += (
+          f'; multigrid over {len(self.multigrid_plan) + 1} levels, '
+          f'coarsening {steps}'
+      )
+    return text
 
 
 def _mesh_for(params: parameters_lib.SwirlLMParameters):

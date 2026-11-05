@@ -92,12 +92,9 @@ message CylinderCase {
 
   // Which Poisson solver the pressure step uses.
   //
-  // MULTIGRID constrains the mesh and this case does not satisfy it by
-  // default. Every per-core interior extent must be a power of two, and the
-  // hierarchy coarsens all three axes together down to a floor of eight per
-  // axis, so the span sets the depth: `spanwise_cells` of 4 admits no
-  // coarsening at all and multigrid degenerates to its smoother. `Cylinder`
-  // checks this and names the required config changes.
+  // MULTIGRID coarsens each axis on its own: a level halves whichever axes
+  // can be halved and leaves the rest untouched. The grid therefore does not
+  // have to be a power of two.
   enum Solver {
     JACOBI = 0;
     CONJUGATE_GRADIENT = 1;

@@ -55,7 +55,7 @@ def get_shape(x: Tiles) -> Tuple[int, int, int]:
   shape_dims_0_1 = x[0].shape
   if not isinstance(shape_dims_0_1, tuple):
     shape_dims_0_1 = shape_dims_0_1.as_list()
-  return (*shape_dims_0_1, shape_dim_2)
+  return (*shape_dims_0_1, shape_dim_2)  # pyrefly: ignore[bad-return]
 
 
 def stack(x: Tiles, axis: int = -1) -> TensorOrArray:

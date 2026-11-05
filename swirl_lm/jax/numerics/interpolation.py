@@ -104,7 +104,9 @@ def _get_weno_conv_kernel_op(
         'b1_1': ([1.0, 0.0, -1.0], 1),
         'b2_1': ([1.0, -4.0, 3.0], 2),
     })
-  return get_kernel_fn.ApplyKernelConvOp(4, grid_params, kernel_lib)
+  return get_kernel_fn.ApplyKernelConvOp(
+      grid_params.kernel_size, grid_params, kernel_lib
+  )
 
 
 def _get_weno_slice_kernel_op(
@@ -409,7 +411,9 @@ def flux_limiter(
     )
   if kernel_type == 'conv':
     kernel_op = get_kernel_fn.ApplyKernelConvOp(
-        4, grid_params, {'shift_kernel': ([1.0, 0.0, 0.0], 1)}
+        grid_params.kernel_size,
+        grid_params,
+        {'shift_kernel': ([1.0, 0.0, 0.0], 1)},
     )
   elif kernel_type == 'slice':
     kernel_op = get_kernel_fn.ApplyKernelSliceOp(

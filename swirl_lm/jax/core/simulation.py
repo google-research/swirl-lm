@@ -56,6 +56,7 @@ from swirl_lm.jax.equations import common
 from swirl_lm.jax.equations import pressure as pressure_lib
 from swirl_lm.jax.equations import scalars as scalars_lib
 from swirl_lm.jax.equations import velocity as velocity_lib
+from swirl_lm.jax.linalg import poisson_solver_pb2 as jax_ps_pb2
 from swirl_lm.jax.physics import thermodynamics as thermodynamics_lib
 from swirl_lm.jax.physics.turbulence import sgs_model as sgs_model_lib
 from swirl_lm.jax.utility import types
@@ -73,6 +74,60 @@ _KEY_DP = common.KEY_DP
 _KEY_RHO_U = common.KEY_RHO_U
 _KEY_RHO_V = common.KEY_RHO_V
 _KEY_RHO_W = common.KEY_RHO_W
+
+
+# `swirl_lm.CoordinateInt` numbers its fields while the JAX message of the
+# same name names them, so a copy by field name needs this one translation.
+_COORDINATE_ALIASES = {'dim_0': 'dim_x', 'dim_1': 'dim_y', 'dim_2': 'dim_z'}
+
+
+def _is_repeated(descriptor) -> bool:
+  """Whether `descriptor` describes a repeated field.
+
+  Protobuf replaced `label` and `LABEL_REPEATED` with `is_repeated`. Implemented
+  this function for backward compatibility.
+
+  Args:
+    descriptor: A protobuf field descriptor.
+
+  Returns:
+    True if the field is repeated.
+  """
+  if hasattr(descriptor, 'is_repeated'):
+    return descriptor.is_repeated
+  return descriptor.label == descriptor.LABEL_REPEATED
+
+
+def _copy_set_fields(source, target) -> None:
+  """Copies every field explicitly set on `source` onto `target`, by name.
+
+  Fields the target does not declare are skipped (e.g., `halo_width`, read from
+  grid parametrization in JAX). Fields the source left unset are intentionally
+  not touched.
+
+  Args:
+    source: The message to copy from.
+    target: The message to copy onto, modified in place.
+  """
+  for descriptor, value in source.ListFields():
+    name = descriptor.name
+    if name not in target.DESCRIPTOR.fields_by_name:
+      name = _COORDINATE_ALIASES.get(name, name)
+      if name not in target.DESCRIPTOR.fields_by_name:
+        continue
+
+    if descriptor.type == descriptor.TYPE_MESSAGE:
+      if _is_repeated(descriptor):
+        for element in value:
+          _copy_set_fields(element, getattr(target, name).add())
+      else:
+        nested = getattr(target, name)
+        nested.SetInParent()
+        _copy_set_fields(value, nested)
+    elif _is_repeated(descriptor):
+      getattr(target, name).extend(value)
+    else:
+      setattr(target, name, value)
 
 
 class Simulation:
@@ -130,42 +185,41 @@ class Simulation:
 
   @staticmethod
   def _pressure_solver_option(params):
-    """Extracts the Poisson solver option from the pressure config.
+    """Converts the TensorFlow pressure solver option into the JAX one.
 
-    Converts the TF pressure proto's solver field to the JAX PoissonSolver
-    proto. The TF Jacobi message uses field 2 for halo_width; the JAX one
-    does not have halo_width (it's obtained from grid_params).
+    Copies whatever the configuration actually set.
+    An unsupported solver raises instead of defaulting to a different one.
+
+    Args:
+      params: The simulation parameters.
+
+    Returns:
+      The JAX solver option, or None if the configuration selects none.
+
+    Raises:
+      ValueError: If the selected solver has no counterpart on the JAX side.
     """
-    from swirl_lm.jax.linalg import poisson_solver_pb2 as jax_ps_pb2  # pylint: disable=g-import-not-at-top
-
     if params.pressure is None or not params.pressure.HasField('solver'):
       return None
 
     tf_solver = params.pressure.solver
-    jax_solver = jax_ps_pb2.PoissonSolver()
+    selected = tf_solver.WhichOneof('solver')
+    if selected is None:
+      return None
 
-    if tf_solver.HasField('jacobi'):
-      jax_solver.jacobi.max_iterations = tf_solver.jacobi.max_iterations
-      jax_solver.jacobi.omega = tf_solver.jacobi.omega
-    elif tf_solver.HasField('conjugate_gradient'):
-      jax_solver.conjugate_gradient.max_iterations = (
-          tf_solver.conjugate_gradient.max_iterations
+    jax_solver = jax_ps_pb2.PoissonSolver()
+    if selected not in jax_solver.DESCRIPTOR.fields_by_name:
+      raise ValueError(
+          f'The pressure configuration selects the {selected} solver, which '
+          'the JAX port does not provide. Silently running a different one '
+          'is worse than stopping here.'
       )
-      jax_solver.conjugate_gradient.halo_width = (
-          tf_solver.conjugate_gradient.halo_width
-      )
-      jax_solver.conjugate_gradient.atol = tf_solver.conjugate_gradient.atol
-      jax_solver.conjugate_gradient.reprojection = (
-          tf_solver.conjugate_gradient.reprojection
-      )
-    elif tf_solver.HasField('fast_diagonalization'):
-      jax_solver.fast_diagonalization.halo_width = (
-          tf_solver.fast_diagonalization.halo_width
-      )
-      jax_solver.fast_diagonalization.cutoff = (
-          tf_solver.fast_diagonalization.cutoff
-      )
-    # Other solver types fall through and will use the default CG solver.
+
+    target = getattr(jax_solver, selected)
+    # Presence even when every field is left at its default, so that
+    # `HasField('solver')` below sees the choice.
+    target.SetInParent()
+    _copy_set_fields(getattr(tf_solver, selected), target)
 
     return jax_solver if jax_solver.HasField('solver') else None
 

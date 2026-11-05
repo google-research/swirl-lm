@@ -46,9 +46,11 @@ from typing import Callable, Optional, TypeAlias
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from swirl_lm.jax.communication import halo_exchange as halo_ex
 from swirl_lm.jax.linalg import base_poisson_solver
 from swirl_lm.jax.utility import common_ops
+from swirl_lm.jax.utility import get_kernel_fn
 from swirl_lm.jax.utility import types
 
 ScalarField: TypeAlias = types.ScalarField
@@ -58,6 +60,16 @@ X = base_poisson_solver.X
 RESIDUAL_L2_NORM = base_poisson_solver.RESIDUAL_L2_NORM
 COMPONENT_WISE_DISTANCE = base_poisson_solver.COMPONENT_WISE_DISTANCE
 ITERATIONS = base_poisson_solver.ITERATIONS
+
+# How often to recompute the residual from its definition rather than from the
+# recursion `r <- r - alpha A d`. The recursion drifts in finite precision,
+# especially in float32: measured against a manufactured solution, asking
+# for a relative residual of 1e-10 on a 64^3 grid had the recursive estimate
+# reach 8.5e-11 while the true residual was at 1.5e-4.
+# Discrepancy grows with the grid size. True residual needs to be recomputed at
+# the cost of one extra operator application per interval. The interval has to
+# be shorter than a typical solve.
+_RESIDUAL_RESTART_INTERVAL = 20
 
 # Type aliases for the linear operator and dot product callables.
 LinearOp = Callable[[ScalarField], ScalarField]
@@ -182,6 +194,16 @@ def conjugate_gradient_solver(
     x_next = x + alpha * d
     r_next = r - alpha * a_d
 
+    # Periodically recompute the residual from its definition. Without this
+    # the iteration stops on an estimate that no longer reflects the true
+    # residual, reporting successful convergence while the solution is far from
+    # solving the system.
+    r_next = jax.lax.cond(
+        (i + 1) % _RESIDUAL_RESTART_INTERVAL == 0,
+        lambda: b - linear_operator(x_next),
+        lambda: r_next,
+    )
+
     if reprojection:
       x_next = reprojection(x_next)
       r_next = reprojection(r_next)
@@ -244,6 +266,129 @@ class ConjugateGradientSolver(base_poisson_solver.PoissonSolver):
     super().__init__(grid_params, kernel_op, solver_option)
     self._cg_option = solver_option.conjugate_gradient
 
+  def _band_preconditioner(
+      self,
+      halo_update_fn: Callable[[ScalarField], ScalarField],
+  ) -> Callable[[ScalarField], ScalarField]:
+    """Builds the band preconditioner the configuration asks for.
+
+    Ported from the TensorFlow implementation in
+    `swirl_lm/linalg/poisson_solver.py`. The construction is adapted such
+    that it can be applied as a single convolution.
+
+    Let `A_d` be the one-dimensional Laplacian along the direction with the
+    smallest grid spacing, and `x` a symmetric band approximation of its
+    inverse. The preconditioner is then
+
+        M^-1 = x (1 - O + O^2 - O^3 + ...),   O = (A_j + A_k) x,
+
+    with `j` and `k` the remaining two directions, truncated at
+    `taylor_expansion_order`. With no expansion it degenerates to `x` applied
+    along the dominating direction alone, or, with `symmetric` set, to the sum
+    of `x` applied along all three.
+
+    Args:
+      halo_update_fn: The boundary conditions the system is solved against.
+
+    Returns:
+      A callable applying `M^-1`.
+
+    Raises:
+      ValueError: If the coefficients are not an odd-length, non-trivial
+        stencil that fits inside the halos, or if `dominating_direction` is
+        not an axis index.
+    """
+    config = self._cg_option.preconditioner.band_preconditioner
+    coefficients = list(config.coefficients)
+    halo_width = self._grid_params.halo_width
+
+    # The same constraints the TensorFlow implementation validates, checked
+    # here rather than in a separate validator so a bad configuration fails
+    # where it is used.
+    if len(coefficients) % 2 == 0:
+      raise ValueError(
+          'The band preconditioner needs an odd number of coefficients so '
+          f'that it is centred; got {len(coefficients)}.'
+      )
+    if len(coefficients) // 2 > halo_width:
+      raise ValueError(
+          f'The band preconditioner reaches {len(coefficients) // 2} cells, '
+          f'further than the halo width of {halo_width}.'
+      )
+    if sum(abs(c) for c in coefficients) < 1e-6:
+      raise ValueError('The band preconditioner coefficients are all zero.')
+
+    axes = ('x', 'y', 'z')
+    spacings = self._grid_params.to_xyz_order(self._grid_params.grid_spacings)
+
+    if config.HasField('dominating_direction'):
+      dominating = config.dominating_direction
+      if dominating not in (0, 1, 2):
+        raise ValueError(
+            f'dominating_direction must be 0, 1 or 2; got {dominating}.'
+        )
+    else:
+      dominating = int(np.argmin(spacings))
+
+    # Only meaningful when one direction really does dominate: the expansion
+    # is in `O`, whose size is set by how much coarser the other two are.
+    if config.HasField('dominating_grid_spacing_gap') and spacings[
+        dominating
+    ] >= sorted(spacings)[1] + config.dominating_grid_spacing_gap:
+      raise ValueError(
+          'The band preconditioner expands about a dominating direction, but '
+          f'the grid spacings {tuple(spacings)} have no clear minimum within '
+          f'{config.dominating_grid_spacing_gap}.'
+      )
+
+    kernel_op = get_kernel_fn.ApplyKernelConvOp(
+        self._grid_params.kernel_size,
+        self._grid_params,
+        {'band': (coefficients, len(coefficients) // 2)},
+    )
+
+    def band(f: ScalarField, indices) -> list[ScalarField]:
+      """Applies `x` along each requested axis, scaled by that spacing."""
+      return [
+          spacings[i] ** 2 * kernel_op.apply_kernel_op(f, 'band', axes[i])
+          for i in indices
+      ]
+
+    def o_operator(f: ScalarField) -> ScalarField:
+      """`O f`, the cross-direction Laplacian of the banded field."""
+      banded = band(halo_update_fn(f), [dominating])[0]
+      others = [axes[i] for i in range(3) if i != dominating]
+      terms = self._laplacian_terms(banded, halo_update=None, axes=others)
+      return sum(terms.values())  # pyrefly: ignore[bad-return]
+
+    order = config.taylor_expansion_order
+
+    def preconditioner(f: ScalarField) -> ScalarField:
+      # The halos have to be filled before the band filter reads them;
+      # without this the operator is not even symmetric, which conjugate
+      # gradient cannot survive.
+      f = halo_update_fn(f)
+
+      if order < 1:
+        if config.symmetric:
+          return sum(band(f, (0, 1, 2)))  # pyrefly: ignore[bad-return]
+        return band(f, [dominating])[0]
+
+      # Accumulate `f - O f + O^2 f - ...`, smallest terms first, since the
+      # powers shrink and adding them in that order loses less.
+      powers = []
+      current = f
+      for _ in range(order):
+        current = o_operator(current if not powers else halo_update_fn(current))
+        powers.append(current)
+      total = jnp.zeros_like(f)
+      for power_index in range(len(powers) - 1, -1, -1):
+        sign = -1.0 if power_index % 2 == 0 else 1.0
+        total = total + sign * powers[power_index]
+      return band(halo_update_fn(total + f), [dominating])[0]
+
+    return preconditioner
+
   def solve(
       self,
       rhs: ScalarField,
@@ -282,13 +427,22 @@ class ConjugateGradientSolver(base_poisson_solver.PoissonSolver):
 
     dot = functools.partial(common_ops.global_dot, mesh=mesh)
 
-    # Reprojection: subtract mean to handle singular systems.
+    # Reprojection: subtract the mean, to handle a singular operator whose
+    # null space is the constant. Only meaningful when the operator really is
+    # singular (i.e., all Neumann boundary conditions). On a problem with a
+    # Dirichlet face the mean belongs to the solution and must not be removed.
     reprojection_fn = None
     if self._cg_option.reprojection:
 
       def reprojection_fn(v: ScalarField) -> ScalarField:  # pylint: disable=function-redefined
+        # The halos must be put back to zero. Every vector in the iteration
+        # carries zeroed halos, which is what makes `global_dot` an
+        # interior-only inner product despite summing the whole local array;
+        # subtracting a scalar would leave `-mean` in the halos and corrupt
+        # every inner product, and with them `alpha`, `beta` and the
+        # convergence test.
         mean = common_ops.global_mean(v, mesh, hw, hw, hw, self._grid_params)
-        return v - mean
+        return halo_ex.set_halos_to_zero(v - mean, hw, self._grid_params)
 
     # Componentwise convergence check.
     cw_distance_fn = None
@@ -304,6 +458,12 @@ class ConjugateGradientSolver(base_poisson_solver.PoissonSolver):
         distance = jnp.abs(diff) - tol_field
         return jax.lax.pmax(jnp.max(distance), axis_name=mesh.axis_names)
 
+    preconditioner_fn = None
+    if self._cg_option.HasField(
+        'preconditioner'
+    ) and self._cg_option.preconditioner.HasField('band_preconditioner'):
+      preconditioner_fn = self._band_preconditioner(halo_update_fn)
+
     # Clear halos on rhs for the solver.
     rhs_cleared = halo_ex.set_halos_to_zero(rhs, hw, self._grid_params)
 
@@ -311,7 +471,7 @@ class ConjugateGradientSolver(base_poisson_solver.PoissonSolver):
     if reprojection_fn is not None:
       rhs_cleared = reprojection_fn(rhs_cleared)
 
-    return conjugate_gradient_solver(
+    solution = conjugate_gradient_solver(
         linear_operator=linear_op,
         dot=dot,
         b=rhs_cleared,
@@ -321,7 +481,16 @@ class ConjugateGradientSolver(base_poisson_solver.PoissonSolver):
         l2_norm_reduction=self._cg_option.l2_norm_reduction,
         component_wise_distance_fn=cw_distance_fn,
         reprojection=reprojection_fn,
+        preconditioner=preconditioner_fn,
     )
+
+    # Hand back a solution whose halos satisfy the boundary conditions, which
+    # is assumed by every caller of `X`. `velocity.correction_step` then takes a
+    # centred difference of it which should see a gradient at each halo
+    # interface instead of a one-sided jump.
+    # `ThreeWeight` and `FastDiagonalization` already return an updated halo.
+    solution[X] = halo_update_fn(solution[X])  # pyrefly: ignore[bad-argument-type]
+    return solution
 
   def residual(
       self,

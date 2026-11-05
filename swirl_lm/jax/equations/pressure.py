@@ -40,6 +40,7 @@ added as separate methods when those physics modules are ported.
 """
 
 
+from collections.abc import Callable
 import functools
 
 from google.protobuf import text_format
@@ -161,6 +162,8 @@ class Pressure:
           _DEFAULT_SOLVER_PARAMS, poisson_solver_pb2.PoissonSolver()
       )
 
+    self._bc = dict(params.bc)
+
     self._solver = poisson_solver.poisson_solver_factory(
         self._grid_params,
         self._kernel_op,
@@ -168,7 +171,6 @@ class Pressure:
         use_stretched_grid=tuple(params.use_stretched_grid),
     )
     self._num_d_rho_filter = num_d_rho_filter
-    self._bc = dict(params.bc)
 
     # Pre-register filter kernels used by drho filtering so that
     # jax.lax.fori_loop in the step can call filter_op without triggering
@@ -182,6 +184,24 @@ class Pressure:
 
     # Set the initial flow-dependent pressure BCs.
     self._update_pressure_bc()
+
+    # Conjugate gradient reprojects onto the range of the operator by removing
+    # the mean, which is right for an all-Neumann problem, whose null space is
+    # the constant, and wrong for one with a Dirichlet face, where the mean is
+    # part of the solution. Determine from the boundary conditions whether to
+    # subtract mean, unless explicitly configured otherwise.
+    #
+    # Decision needs to be made after `_update_pressure_bc`, which turns
+    # `pressure_outlet` into the Dirichlet face that makes the operator
+    # non-singular. Deciding before it reads the boundary conditions as
+    # configured rather than as they end up (i.e., flow-dependent), and every
+    # case that pins its outlet would reproject when it must not. The solver
+    # holds the option message by reference and reads `reprojection` when it
+    # solves, so settling it here still reaches it.
+    if self._solver_option.HasField('conjugate_gradient'):
+      cg_option = self._solver_option.conjugate_gradient
+      if not cg_option.HasField('reprojection'):
+        cg_option.reprojection = not self._has_dirichlet_pressure_bc()
 
   def _update_pressure_bc(self) -> None:
     """Updates the boundary condition of pressure based on the flow type.
@@ -584,6 +604,31 @@ class Pressure:
 
     return correction
 
+  def _has_dirichlet_pressure_bc(self) -> bool:
+    """Whether any non-periodic face carries a Dirichlet condition on `p`.
+
+    Determines whether the Poisson operator is singular. With every
+    non-periodic face set to Neumann, the constant is in its null space, so the
+    solution is only determined up to a constant. One Dirichlet face pins it.
+
+    Returns:
+      True if at least one non-periodic face has a Dirichlet condition on `p`.
+    """
+    periodic = list(self._grid_params.to_xyz_order(self._params.periodic_dims))  # pyrefly: ignore[bad-argument-type]
+    bc_p = self._bc.get('p')
+    if bc_p is None:
+      return False
+    return any(
+        not periodic[dim]
+        and bc_p[dim] is not None  # pyrefly: ignore[unsupported-operation]
+        and any(
+            bc_p[dim][face] is not None  # pyrefly: ignore[unsupported-operation]
+            and bc_p[dim][face][0] == halo_exchange_utils.BCType.DIRICHLET  # pyrefly: ignore[unsupported-operation]
+            for face in range(2)
+        )
+        for dim in range(3)
+    )
+
   def _build_dp_bc(
       self,
   ) -> halo_exchange_utils.BoundaryConditionsSpec:
@@ -619,6 +664,186 @@ class Pressure:
             hi = (halo_exchange_utils.BCType.DIRICHLET, 0.0)
         bc_dp_list.append((lo, hi))
     return tuple(bc_dp_list)
+
+  def _max_iterations(self) -> int:
+    """The iteration limit the configured solver was given.
+
+    Returns:
+      The limit, or 0 if the selected solver does not declare one.
+    """
+    selected = self._solver_option.WhichOneof('solver')
+    if selected is None:
+      return 0
+    option = getattr(self._solver_option, selected)
+    return getattr(option, 'max_iterations', 0)
+
+  def _report_poisson_residual(
+      self,
+      dp: ScalarField,
+      b: ScalarField,
+      mesh: jax.sharding.Mesh,
+      halo_update_fn: Callable[[ScalarField], ScalarField],
+      singular: bool,
+      iterations: jax.Array | None = None,
+  ) -> None:
+    """Prints the relative L2 residual of the pressure solve.
+
+    Reports `||A dp - b|| / ||b||` rather than the absolute residual, so the
+    number is comparable across cases and across grid refinements. The norms
+    are taken over the interior: `compute_residual` zeroes the halos of the
+    residual, and `b` is zeroed here to match, so each cell counts once even
+    though neighbouring replicas hold copies of each other's edge cells.
+
+    Called only when `params.log_poisson_residual` is set. The line is emitted
+    by every replica, carrying the same globally reduced value, because an
+    `axis_index` predicate around a debug callback is not supported under SPMD
+    partitioning.
+
+    Args:
+      dp: The pressure correction the solver returned.
+      b: The right hand side it was given.
+      mesh: The device mesh.
+      halo_update_fn: The boundary conditions `dp` was solved against. Passing
+        this for cases whose boundary conditions are not all Neumann.
+      singular: Whether the problem is all-Neumann, in which case the mean is
+        removed from `b` before measuring, since a singular operator cannot
+        resolve a constant shift.
+      iterations: How many iterations the solve took, when it reports that.
+    """
+    halo_width = self._grid_params.halo_width
+    norms, _ = self._solver.compute_residual(
+        mesh,
+        dp,
+        b,
+        norm_types=(common_ops.NormType.L2,),
+        halo_update_fn=halo_update_fn,
+        remove_mean_from_rhs=singular,
+    )
+    b_interior = halo_exchange.set_halos_to_zero(
+        b, halo_width, self._grid_params
+    )
+    b_norm = common_ops.compute_norm(
+        b_interior, {common_ops.NormType.L2}, mesh
+    )['L2']
+    # `compute_norm` returns shape-(1,) arrays; a format spec needs a scalar.
+    residual_norm = jnp.squeeze(norms['L2'])
+    rhs_norm = jnp.squeeze(b_norm)
+    relative = residual_norm / jnp.where(rhs_norm > 0.0, rhs_norm, 1.0)
+    if iterations is None:
+      jax.debug.print(
+          'Poisson residual: relative={relative:.3e} absolute={absolute:.3e} '
+          'rhs={rhs:.3e}',
+          relative=relative,
+          absolute=residual_norm,
+          rhs=rhs_norm,
+      )
+    else:
+      limit = self._max_iterations()
+      jax.debug.print(
+          'Poisson residual: relative={relative:.3e} absolute={absolute:.3e} '
+          'rhs={rhs:.3e} iterations={iterations}/{limit}'
+          ' at_limit={at_limit}',
+          relative=relative,
+          absolute=residual_norm,
+          rhs=rhs_norm,
+          iterations=iterations,
+          limit=limit,
+          at_limit=iterations >= limit,
+      )
+
+  def _report_continuity_residual(
+      self,
+      states: ScalarFieldMap,
+      states_0: ScalarFieldMap,
+      dp: ScalarField,
+      divergence_term: ScalarField,
+      physical_rhs: ScalarField,
+      mesh: jax.sharding.Mesh,
+      additional_states: ScalarFieldMap,
+  ) -> None:
+    """Prints how far the corrected momentum is from satisfying continuity.
+
+    The Poisson residual tells how well the linear system was solved. It does
+    not tell whether the correction removed any divergence.
+    The solver inverts the compact `kdd` Laplacian while
+    `velocity.correction_step` reaches the divergence through
+    `deriv_centered` twice, and the two differ most on the odd-even mode. This
+    replicates the correction and measures what it achieved.
+
+    The target may not always be zero divergence. At low Mach number continuity
+    reads `div(rho u) = -drho/dt + src_rho`. With combustion, the
+    corrected momentum should carry a large divergence, and comparing
+    `||div(rho u)||` before and after would be misleading.
+    Reported instead is the residual of that equation,
+    `||div(rho u)/dt - rhs_phys||`, where `rhs_phys` is the right hand side
+    without the numerical consistency term, measured before and after the
+    correction. For a constant-density case with no mass source `rhs_phys`
+    is the divergence term, so the two formulations coincide.
+
+    Called only when `params.log_poisson_residual` is set. The correction is
+    recomputed rather than shared with `correction_step`, so this must stay in
+    step with `velocity.correction_step` if that changes.
+
+    Args:
+      states: Flow field variables from the latest prediction.
+      states_0: Flow field variables from the previous time step.
+      dp: The pressure correction the solver returned.
+      divergence_term: `div(rho u) / dt` as the right hand side used it.
+      physical_rhs: The right hand side without the numerical consistency
+        term, which is what continuity asks `div(rho u) / dt` to equal.
+      mesh: The device mesh.
+      additional_states: Helper variables, for the stretched-grid factors.
+    """
+    dt = self._params.dt
+    halo_width = self._grid_params.halo_width
+    anelastic = (
+        self._params.solver_mode == thermodynamics_pb2.Thermodynamics.ANELASTIC
+    )
+    rho_mid = (
+        states['rho']
+        if anelastic
+        else 0.5 * (states['rho'] + states_0['rho'])
+    )
+
+    corrected = {}
+    for key, axis in zip(('rho_u', 'rho_v', 'rho_w'), ('x', 'y', 'z')):
+      grad_dp = self._deriv_lib.deriv_centered(dp, axis, additional_states)
+      if anelastic:
+        corrected[key] = states[key] - dt * rho_mid * grad_dp
+      else:
+        corrected[key] = states[key] - dt * grad_dp
+
+    divergence_after = self._compute_divergence_term(
+        corrected['rho_u'],
+        corrected['rho_v'],
+        corrected['rho_w'],
+        dt,
+        additional_states,
+    )
+
+    def norm(field: ScalarField) -> jax.Array:
+      interior = halo_exchange.set_halos_to_zero(
+          field, halo_width, self._grid_params
+      )
+      return jnp.squeeze(
+          common_ops.compute_norm(interior, {common_ops.NormType.L2}, mesh)[
+              'L2'
+          ]
+      )
+
+    # Continuity requires `div(rho u)/dt = rhs_phys` once the correction is
+    # applied, so with `dp = 0` the residual is `rhs_phys` itself, and after
+    # the correction it is `rhs_phys` less what the correction removed. For a
+    # constant-density case with no mass source `rhs_phys` is the divergence
+    # term and these reduce to the divergence before and after.
+    before = norm(physical_rhs)
+    after = norm(physical_rhs - (divergence_term - divergence_after))
+    jax.debug.print(
+        'Continuity: before={before:.3e} after={after:.3e} ratio={ratio:.3e}',
+        before=before,
+        after=after,
+        ratio=after / jnp.where(before > 0.0, before, 1.0),
+    )
 
   def _dp_halo_update_fn(
       self,
@@ -775,22 +1000,30 @@ class Pressure:
     dp: ScalarField = jnp.asarray(poisson_solution[base_poisson_solver.X])
 
     # Remove global mean for all-Neumann problems (no Dirichlet BC).
-    has_dirichlet_bc = any(
-        not periodic[dim]
-        and self._bc.get('p') is not None
-        and self._bc['p'] is not None
-        and self._bc['p'][dim] is not None
-        and any(
-            self._bc['p'][dim][face] is not None  # pyrefly: ignore[unsupported-operation]
-            and self._bc['p'][dim][face][0] == halo_exchange_utils.BCType.DIRICHLET  # pyrefly: ignore[unsupported-operation]
-            for face in range(2)
-        )
-        for dim in range(3)
-    )
+    has_dirichlet_bc = self._has_dirichlet_pressure_bc()
 
     if not has_dirichlet_bc:
       dp = dp - common_ops.global_mean(
           dp, mesh, halo_width, halo_width, halo_width, self._grid_params
+      )
+
+    if self._params.log_poisson_residual:
+      self._report_poisson_residual(
+          dp,
+          b,
+          mesh,
+          halo_update_fn,
+          singular=not has_dirichlet_bc,
+          iterations=poisson_solution.get(base_poisson_solver.ITERATIONS),  # pyrefly: ignore[bad-argument-type]
+      )
+      self._report_continuity_residual(
+          states,
+          states_0,
+          dp,
+          divergence_term,
+          b - numerical_consistency,
+          mesh,
+          additional_states,
       )
 
     return {

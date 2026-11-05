@@ -162,7 +162,7 @@ def first_order_upwinding(
     The upwinding first-order derivative of `f`, i.e. `df / dx`.
   """
   kernel_op = get_kernel_fn.ApplyKernelConvOp(
-      4, grid_params, {'shift': ([0.0, 0.0, 1.0], 1)}
+      grid_params.kernel_size, grid_params, {'shift': ([0.0, 0.0, 1.0], 1)}
   )
 
   dfdx_backward_deriv = deriv_lib.deriv_node_to_face(f, axis, additional_states)
@@ -513,7 +513,7 @@ def face_interp_fn_first_order_upwind(
     A function that returns upwind values of a variable on faces.
   """
   kernel_op = get_kernel_fn.ApplyKernelConvOp(
-      4,
+      grid_params.kernel_size,
       grid_params,
       {
           'shift': ([1.0, 0.0, 0.0], 1),
@@ -545,7 +545,7 @@ def face_interp_fn_quick(
     A function that interpolates values of a variable onto faces.
   """
   kernel_op = get_kernel_fn.ApplyKernelConvOp(
-      4, grid_params, {'kf2-': ([-0.125, 0.75, 0.375], 2)}
+      grid_params.kernel_size, grid_params, {'kf2-': ([-0.125, 0.75, 0.375], 2)}
   )
 
   def quick_fn(state: ScalarField) -> tuple[ScalarField, ScalarField]:
@@ -667,7 +667,9 @@ def convection_from_flux(
   """
   # Re-creating kernel_op for performance (matching TF implementation pattern).
   del kernel_op
-  kernel_op = get_kernel_fn.ApplyKernelConvOp(4, grid_params)
+  kernel_op = get_kernel_fn.ApplyKernelConvOp(
+      grid_params.kernel_size, grid_params
+  )
   deriv_lib = deriv_lib.create_copy_with_custom_kernel_op(kernel_op)
 
   if flux_scheme == numerics_pb2.NUMERICAL_FLUX_UPWINDING:

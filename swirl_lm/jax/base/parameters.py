@@ -405,6 +405,12 @@ class SwirlLMParameters:
     self._preprocessing_states_update_fn: Callable | None = None  # pylint: disable=g-bare-generic
     self._postprocessing_states_update_fn: Callable | None = None  # pylint: disable=g-bare-generic
 
+    # === Diagnostics (set externally by simulation apps) ===
+    # Whether the pressure solve reports its relative residual. Read at trace
+    # time, so when it is false neither the extra operator application nor the
+    # host callback that prints it enters the compiled graph at all.
+    self.log_poisson_residual: bool = False
+
     # === Additional state partition specs and distributors ===
     self.additional_state_partition_specs: dict[str, P] = {}
     self.additional_state_distributors: dict[str, Callable] = {}  # pylint: disable=g-bare-generic

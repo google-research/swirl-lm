@@ -192,32 +192,33 @@ COEFFS = {
     'centered_difference_4_order_2': [1.0, -4.0, 6.0, -4.0, 1.0],
 }
 
-SHIFTS = {
-    # Note: shift=-1 corresponds to index [i+1].
-    # Centered sum
-    'centered_sum': [-1, 0, 1],
-    # Backward sum
-    'backward_sum': [1, 0],
-    # Centered finite difference of the first derivative
-    'centered_difference_1': [1, 0, -1],
-    # Centered finite difference of the first derivative with fourth order
-    # approximation.
-    'centered_difference_1_order_4': [2, 1, 0, -1, -2],
-    # Backward finite difference of the first derivative
-    'backward_difference_1': [1, 0],
-    # Forward finite difference of the first derivative
-    'forward_difference_1': [0, -1],
-    # Second-order approximation of the centered finite difference of
-    # the second derivative
-    'centered_difference_2_order_2': [-1, 0, 1],
-    # 2nd-order approximation of the flux on the face of a cell following a
-    # QUICK scheme
-    'face_flux_quick': [1, 0, -1],
-    # First order forward difference of the third order derivative.
-    'forward_difference_3_order_1': [1, 0, -1, -2],
-    # Second order central difference of the fourth order derivative.
-    'centered_difference_4_order_2': [-2, -1, 0, 1, 2],
+# The single source both backends derive from: `(coefficients, offset)` per
+# kernel name, where `offset` names the coefficient that lands on the output
+# cell, so that
+#
+#     out[i] = sum_j coeffs[j] * array[i + j - offset].
+#
+# The convolution backend consumes this directly; the slice backend converts it
+# with `_to_slice_stencil`.
+_BUILTIN_STENCILS: dict[str, tuple[list[float], int]] = {
+    'kS': (COEFFS['centered_sum'], 1),
+    'ks': (COEFFS['backward_sum'], 1),
+    'kD': (COEFFS['centered_difference_1'], 1),
+    'kd': (COEFFS['backward_difference_1'], 1),
+    'kd+': (COEFFS['forward_difference_1'], 0),
+    'kdd': (COEFFS['centered_difference_2_order_2'], 1),
+    'kf2': (COEFFS['face_flux_quick'], 1),
+    'kf2+': (COEFFS['face_flux_quick'][::-1], 1),
+    'k3d1+': (COEFFS['forward_difference_3_order_1'], 2),
+    'kD4': (COEFFS['centered_difference_1_order_4'], 2),
+    'k4d2': (COEFFS['centered_difference_4_order_2'], 2),
 }
+
+# A convolution cannot carry a stencil wider than the kernel, so these two are
+# absent from the convolution table below `kernel_size = 4`. They remain in the
+# slice table at any kernel size, which is a separate inconsistency this change
+# deliberately leaves as it found it.
+_WIDE_STENCILS = ('kD4', 'k4d2')
 
 
 def _validate_offset_and_stencil(
@@ -540,31 +541,10 @@ def _convop_kernel_dict(
     standard kernel dict.
   """
   jnp_kernels = {
-      'kS': _make_convop_kernel(COEFFS['centered_sum'], kernel_size),
-      'ks': _make_convop_kernel(COEFFS['backward_sum'], kernel_size, offset=1),
-      'kD': _make_convop_kernel(COEFFS['centered_difference_1'], kernel_size),
-      'kd': _make_convop_kernel(
-          COEFFS['backward_difference_1'], kernel_size, offset=1
-      ),
-      'kd+': _make_convop_kernel(
-          COEFFS['forward_difference_1'], kernel_size, offset=0
-      ),
-      'kdd': _make_convop_kernel(
-          COEFFS['centered_difference_2_order_2'], kernel_size
-      ),
-      'kf2': _make_convop_kernel(COEFFS['face_flux_quick'], kernel_size),
-      'kf2+': _make_convop_kernel(COEFFS['face_flux_quick'][::-1], kernel_size),
-      'k3d1+': _make_convop_kernel(
-          COEFFS['forward_difference_3_order_1'], kernel_size
-      ),
+      name: _make_convop_kernel(coeffs, kernel_size, offset=offset)
+      for name, (coeffs, offset) in _BUILTIN_STENCILS.items()
+      if kernel_size >= 4 or name not in _WIDE_STENCILS
   }
-  if kernel_size >= 4:
-    jnp_kernels['kD4'] = _make_convop_kernel(
-        COEFFS['centered_difference_1_order_4'], kernel_size
-    )
-    jnp_kernels['k4d2'] = _make_convop_kernel(
-        COEFFS['centered_difference_4_order_2'], kernel_size
-    )
   if custom_kernel_dict:
     _add_customized_conv_kernel(
         jnp_kernels,
@@ -613,8 +593,7 @@ class ApplyKernelConvOp(ApplyKernelOp):
     if custom_kernel_dict:
       for name, (coeffs, offset) in custom_kernel_dict.items():
         if name not in self._slice_kernels:
-          shifts = [j - offset for j in range(len(coeffs))]  # pyrefly: ignore[unsupported-operation]
-          self._slice_kernels[name] = _discard_zero_coefficients(coeffs, shifts)  # pyrefly: ignore[bad-argument-type]
+          self._slice_kernels[name] = _to_slice_stencil(coeffs, offset)  # pyrefly: ignore[bad-argument-type]
 
   def add_kernel(self, custom_kernel_dict: ExternalDictKernelType):
     """Adds a customized kernel to the kernel library."""
@@ -629,8 +608,7 @@ class ApplyKernelConvOp(ApplyKernelOp):
     # format {name: {'coeff': ..., 'shift': ...}}.
     for name, (coeffs, offset) in custom_kernel_dict.items():
       if name not in self._slice_kernels:
-        shifts = [j - offset for j in range(len(coeffs))]  # pyrefly: ignore[unsupported-operation]
-        self._slice_kernels[name] = _discard_zero_coefficients(coeffs, shifts)  # pyrefly: ignore[bad-argument-type]
+        self._slice_kernels[name] = _to_slice_stencil(coeffs, offset)  # pyrefly: ignore[bad-argument-type]
 
   def apply_kernel_op(
       self, array: ScalarField, name: str, axis: str
@@ -677,6 +655,34 @@ def _discard_zero_coefficients(
       new_coeff.append(c)
       new_shift.append(s)
   return {'coeff': tuple(new_coeff), 'shift': tuple(new_shift)}
+
+
+def _to_slice_stencil(
+    coeffs: list[float] | tuple[float, ...], offset: int
+) -> SliceKernelType:
+  """Rewrites a convolution stencil in the slice backend's convention.
+
+  The two backends index in opposite directions, which is why this lives in
+  one place. A convolution stencil `(coeffs, offset)` means
+
+      out[i] = sum_j coeffs[j] * array[i + j - offset],
+
+  with `offset` naming the entry that lands on the output cell. The slice
+  backend takes shifts in the sense of `np.roll`, as
+  `common_ops.finite_diff_with_slice` documents, so a shift `s` contributes
+  `array[i - s]`. The shift for coefficient `j` is therefore `offset - j`,
+  not `j - offset`.
+
+  Args:
+    coeffs: The stencil coefficients, in index order.
+    offset: The index within `coeffs` that lands on the output cell.
+
+  Returns:
+    The slice-backend stencil, with zero coefficients dropped.
+  """
+  return _discard_zero_coefficients(
+      coeffs, [offset - j for j in range(len(coeffs))]
+  )
 
 
 def _add_customized_slice_kernel(
@@ -730,43 +736,8 @@ def _slice_kernel_dict(
   """
 
   jnp_kernels = {
-      'kS': _discard_zero_coefficients(
-          COEFFS['centered_sum'], SHIFTS['centered_sum']
-      ),
-      'ks': _discard_zero_coefficients(
-          COEFFS['backward_sum'], SHIFTS['backward_sum']
-      ),
-      'kD': _discard_zero_coefficients(
-          COEFFS['centered_difference_1'], SHIFTS['centered_difference_1']
-      ),
-      'kd': _discard_zero_coefficients(
-          COEFFS['backward_difference_1'], SHIFTS['backward_difference_1']
-      ),
-      'kd+': _discard_zero_coefficients(
-          COEFFS['forward_difference_1'], SHIFTS['forward_difference_1']
-      ),
-      'kdd': _discard_zero_coefficients(
-          COEFFS['centered_difference_2_order_2'],
-          SHIFTS['centered_difference_2_order_2'],
-      ),
-      'kf2': _discard_zero_coefficients(
-          COEFFS['face_flux_quick'], SHIFTS['face_flux_quick']
-      ),
-      'kf2+': _discard_zero_coefficients(
-          COEFFS['face_flux_quick'][::-1], SHIFTS['face_flux_quick'][::-1]
-      ),
-      'k3d1+': _discard_zero_coefficients(
-          COEFFS['forward_difference_3_order_1'],
-          SHIFTS['forward_difference_3_order_1'],
-      ),
-      'kD4': _discard_zero_coefficients(
-          COEFFS['centered_difference_1_order_4'],
-          SHIFTS['centered_difference_1_order_4'],
-      ),
-      'k4d2': _discard_zero_coefficients(
-          COEFFS['centered_difference_4_order_2'],
-          SHIFTS['centered_difference_4_order_2'],
-      ),
+      name: _to_slice_stencil(coeffs, offset)
+      for name, (coeffs, offset) in _BUILTIN_STENCILS.items()
   }
   if custom_kernel_dict:
     _add_customized_slice_kernel(jnp_kernels, custom_kernel_dict)

@@ -60,14 +60,10 @@ print(cx, cy, cz, cx * cy * cz)
 PY
 )
 
-if [[ "${JAX_PLATFORMS}" == *"cuda"* || "${JAX_PLATFORMS}" == *"gpu"* ]]; then
-  # The scheduler decides how many GPUs exist; cylinder_main compares that
-  # against the decomposition and says so if they differ.
-  #
-  # cuDNN has no algorithm for the stencil convolutions this solver emits, so
-  # autotuning fails outright on GPU. See MEMORY.md, kernel-operator defects.
-  export XLA_FLAGS="--xla_gpu_autotune_level=0 ${XLA_FLAGS:-}"
-else
+# On GPU the scheduler decides how many devices exist; cylinder_main compares
+# that against the decomposition and says so if they differ. On CPU the device
+# count has to be asked for.
+if [[ "${JAX_PLATFORMS}" != *"cuda"* && "${JAX_PLATFORMS}" != *"gpu"* ]]; then
   export XLA_FLAGS="--xla_force_host_platform_device_count=${NCORES} ${XLA_FLAGS:-}"
 fi
 

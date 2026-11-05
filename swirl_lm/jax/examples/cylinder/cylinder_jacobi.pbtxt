@@ -7,7 +7,11 @@
 #
 # For the steady validation point set `reynolds_number: 40`; the wake then
 # closes into a symmetric bubble about 2.2 diameters long and nothing sheds.
-# Nothing else needs to change -- the viscosity follows from this number.
+# Nothing else needs to change. The viscosity follows from the Reynolds number.
+#
+# Weighted Jacobi is the cheapest solver per iteration and the slowest to
+# converge. Used here as reference to compare the other two pressure solvers
+# against.
 
 reynolds_number: 100.0
 diameter: 1.0
@@ -31,12 +35,12 @@ halo_width: 2
 # Must divide every per-core extent, as must the 4 that convection.py
 # hard-codes; `Cylinder` checks both and raises. A non-dividing extent
 # silently selects a finite-difference path that disagrees with the usual one
-# for some stencils. See MEMORY.md.
+# for some stencils.
 kernel_size: 4
 
 # The decomposition, and the only thing that decides how many devices are
-# used. run_cylinder.sh reads these, derives the simulated device count on
-# CPU from their product, and overrides them from CORES_X/CORES_Y/CORES_Z.
+# used. run_cylinder.sh reads these and derives the simulated device count on
+# CPU from their product.
 #
 # Which splits are legal: every per-core extent, halos included, must divide
 # by the kernel widths, which here allows cores_x in {1,2,4,5,8} and cores_y
@@ -44,13 +48,6 @@ kernel_size: 4
 # `spanwise_cells >= 4*cores_z`, so with 4 spanwise cells cores_z must be 1;
 # cores_z: 4 would need spanwise_cells: 16. `Cylinder` raises on an illegal
 # combination and names the knob to change.
-#
-# Which splits are *good*: measured on this case, none of them makes the
-# ghost-point method fall back -- 0 capped probes and 0 nearest-fluid cells
-# even with cores_y: 2, which puts the seam straight through the cylinder.
-# The span stays the cheapest axis in principle (its image-point reach is
-# exactly 0 cells, the body being invariant along it), but x and y cost
-# nothing here either.
 cores_x: 1
 cores_y: 1
 cores_z: 1
@@ -59,10 +56,17 @@ cores_z: 1
 # the cylinder, so the CFL the solver reports is about twice this.
 cfl: 0.3
 num_sweeps: 2
-pressure_iterations: 10
 num_sub_iterations: 3
 
+# Weighted Jacobi sweeps per pressure solve. Note: Ten is far too few to
+# converge the Poisson problem. Computed Strouhal number will be wrong.
+solver: JACOBI
+pressure_iterations: 10
+
 # Wake probe for the shedding frequency, in diameters. Offset off the axis
-# because the transverse velocity vanishes on it by symmetry.
+# because the transverse velocity vanishes on it by symmetry. Half the record
+# is dropped as the start-up transient, the wake needing a few flow-through
+# times to establish.
 probe_downstream: 3.0
 probe_offset: 0.5
+probe_discard: 0.5

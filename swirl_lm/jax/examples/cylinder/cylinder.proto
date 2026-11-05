@@ -20,14 +20,13 @@ package research.simulation;
 // immersed boundary method, after Ghias, Mittal and Dong, J. Comput. Phys.
 // 225 (2007) 528-553, section 3.3.
 //
-// Unlike the other examples this describes the *case* rather than the solver.
-// `cylinder.Cylinder` expands it into a full `SwirlLMParameters`, which keeps
-// the quantities that have to agree in agreement: the viscosity follows from
-// the Reynolds number, the grid from the resolution, the time step from the
-// CFL number, and the immersed boundary geometry from the diameter and
-// centre. Writing the solver config by hand instead invites the classic
-// failure of changing the Reynolds number and leaving the viscosity behind,
-// which produces a plausible-looking run at the wrong Reynolds number.
+// This file describes the *case* rather than the solver. `cylinder.Cylinder`
+// expands it into a full `SwirlLMParameters`, which keeps the quantities that
+// have to agree in agreement: the viscosity follows from the Reynolds number,
+// the grid from the resolution, the time step from the CFL number, and the
+// immersed boundary geometry from the diameter and center. Intentionally
+// avoiding writing the solver config by hand to avoid a Reynolds number and
+// viscosity mismatch.
 //
 // Lengths are in diameters and velocities in units of the inflow speed, so
 // the defaults describe a domain rather than a particular size.
@@ -58,8 +57,7 @@ message CylinderCase {
   // Width of the convolution kernel used for the finite-difference stencils.
   // It must divide every per-core extent: a non-dividing extent silently
   // drops into a slice fallback that disagrees with the convolution path for
-  // some kernels. See MEMORY.md, kernel-operator defects. `Cylinder` checks
-  // this and raises.
+  // some kernels. `Cylinder` checks this and raises.
   optional int32 kernel_size = 21 [default = 4];
 
   // Device decomposition. Splitting along the span is the cheap direction:
@@ -77,10 +75,14 @@ message CylinderCase {
   optional float dt = 15;
 
   // Where to sample the transverse velocity for the shedding frequency, in
-  // diameters downstream of the centre and off the wake axis. The signal is
+  // diameters downstream of the center and off the wake axis. The signal is
   // weak on the axis itself by symmetry, so the offset matters.
   optional float probe_downstream = 16 [default = 3.0];
   optional float probe_offset = 17 [default = 0.5];
+  // Fraction of the probe record to discard as a start-up transient before
+  // the shedding frequency is estimated. The wake takes a few flow-through
+  // times to establish, and those samples would widen the spectral peak.
+  optional float probe_discard = 23 [default = 0.5];
 
   // Repetitions of the ghost-value update per application.
   optional int32 num_sweeps = 18 [default = 2];

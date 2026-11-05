@@ -14,14 +14,12 @@
 """Re-reads a saved wake probe and reports the shedding frequency.
 
 The probe record is written by `cylinder_main` as `wake_probe.npy`, one
-sample per step. Because it is saved, the frequency can be re-examined
-without repeating the simulation -- which matters, because the single number
-the run logs depends on how much of the record is discarded as transient, and
-a result that moves when that choice moves is not yet converged.
+sample per step. The frequency can be re-examined without repeating the
+simulation.
 
   python -m swirl_lm.jax.examples.cylinder.analyze_probe \
       --probe=/path/to/wake_probe.npy \
-      --config_filepath=swirl_lm/jax/examples/cylinder/cylinder.pbtxt
+      --config_filepath=swirl_lm/jax/examples/cylinder/cylinder_cg.pbtxt
 """
 
 from absl import app

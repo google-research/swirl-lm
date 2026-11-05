@@ -1,0 +1,71 @@
+# proto-file: swirl_lm/jax/examples/cylinder/cylinder.proto
+# proto-message: CylinderCase
+#
+# Flow past a circular cylinder at Re = 100, the shedding validation point
+# for the ghost-point immersed boundary. Expect a Karman street with a
+# Strouhal number near 0.165.
+#
+# For the steady validation point set `reynolds_number: 40`; the wake then
+# closes into a symmetric bubble about 2.2 diameters long and nothing sheds.
+# Nothing else needs to change. The viscosity follows from the Reynolds number.
+#
+# This file selects multigrid, on the same mesh as cylinder_cg.pbtxt so the
+# two are directly comparable. Coarsening is per axis: x and y halve four
+# times and the four-cell span is never coarsened.
+
+reynolds_number: 100.0
+diameter: 1.0
+inflow_speed: 1.0
+
+# The domain in diameters. Eight upstream keeps the inlet out of the way of
+# the body, and twenty-four downstream leaves room for several shed vortices
+# before the outlet.
+length_upstream: 8.0
+length_downstream: 24.0
+half_width: 10.0
+span: 1.0
+
+# Twenty points across the diameter resolves the boundary layer adequately at
+# this Reynolds number. Raise it for a grid-convergence check; the error
+# should fall at roughly second order.
+cells_per_diameter: 20
+spanwise_cells: 4
+halo_width: 2
+
+# Must divide every per-core extent, as must the 4 that convection.py
+# hard-codes; `Cylinder` checks both and raises. A non-dividing extent
+# silently selects a finite-difference path that disagrees with the usual one
+# for some stencils.
+kernel_size: 4
+
+# The decomposition, and the only thing that decides how many devices are
+# used. run_cylinder.sh reads these and derives the simulated device count on
+# CPU from their product.
+#
+# Which splits are legal: every per-core extent, halos included, must divide
+# by the kernel widths, which here allows cores_x in {1,2,4,5,8} and cores_y
+# in {1,2,4,5}. Splitting the span additionally needs
+# `spanwise_cells >= 4*cores_z`, so with 4 spanwise cells cores_z must be 1;
+# cores_z: 4 would need spanwise_cells: 16. `Cylinder` raises on an illegal
+# combination and names the knob to change.
+cores_x: 1
+cores_y: 1
+cores_z: 1
+
+# Based on the free-stream speed. The flow roughly doubles in speed around
+# the cylinder, so the CFL the solver reports is about twice this.
+cfl: 0.3
+num_sweeps: 2
+num_sub_iterations: 3
+
+# V-cycles per pressure solve. Eight is a starting point.
+solver: MULTIGRID
+pressure_iterations: 8
+
+# Wake probe for the shedding frequency, in diameters. Offset off the axis
+# because the transverse velocity vanishes on it by symmetry. Half the record
+# is dropped as the start-up transient, the wake needing a few flow-through
+# times to establish.
+probe_downstream: 3.0
+probe_offset: 0.5
+probe_discard: 0.5

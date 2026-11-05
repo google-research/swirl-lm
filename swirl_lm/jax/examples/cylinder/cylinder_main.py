@@ -17,6 +17,10 @@ Unlike the other examples the config file holds a `CylinderCase`, not a
 `SwirlLMParameters`; the solver configuration is derived from it so the
 Reynolds number and the viscosity cannot disagree. `--dump_config` writes the
 derived configuration out so a run can record exactly what it solved.
+
+The resolution, the decomposition, the Poisson solver and its iteration count
+are all read from the config file. `--reynolds_number` is the one case parameter
+kept as a flag, because the viscosity follows from it.
 """
 
 import os
@@ -64,39 +68,6 @@ _REYNOLDS_NUMBER = flags.DEFINE_float(
     None,
     'Overrides the Reynolds number in the config. The viscosity follows.',
 )
-_CELLS_PER_DIAMETER = flags.DEFINE_integer(
-    'cells_per_diameter',
-    None,
-    'Overrides the resolution in the config, for a convergence study.',
-)
-_CORES_X = flags.DEFINE_integer(
-    'cores_x', None, 'Overrides cores_x in the config.'
-)
-_CORES_Y = flags.DEFINE_integer(
-    'cores_y', None, 'Overrides cores_y in the config.'
-)
-_CORES_Z = flags.DEFINE_integer(
-    'cores_z', None, 'Overrides cores_z in the config.'
-)
-_SOLVER = flags.DEFINE_enum(
-    'solver',
-    None,
-    ['JACOBI', 'CONJUGATE_GRADIENT', 'MULTIGRID'],
-    'Overrides the Poisson solver in the config. MULTIGRID has additional '
-    'constrains on the mesh.',
-)
-_PRESSURE_ITERATIONS = flags.DEFINE_integer(
-    'pressure_iterations',
-    None,
-    'Overrides the iteration count of the selected solver: sweeps for '
-    'Jacobi, iterations for conjugate gradient, V-cycles for multigrid.',
-)
-_PROBE_DISCARD = flags.DEFINE_float(
-    'probe_discard',
-    0.5,
-    'Fraction of the probe record to discard as transient before estimating '
-    'the shedding frequency.',
-)
 _DUMP_CONFIG = flags.DEFINE_bool(
     'dump_config',
     True,
@@ -107,34 +78,18 @@ FLAGS = flags.FLAGS
 
 
 def _make_case() -> cylinder_pb2.CylinderCase:
-  """Reads the case file, applying any command-line overrides."""
+  """Reads the case file, applying the one command-line override."""
   case = cylinder_pb2.CylinderCase()
   if FLAGS.config_filepath:
     with open(FLAGS.config_filepath, 'r') as f:
       text_format.Parse(f.read(), case)
   if _REYNOLDS_NUMBER.value is not None:
     case.reynolds_number = _REYNOLDS_NUMBER.value
-  if _CELLS_PER_DIAMETER.value is not None:
-    case.cells_per_diameter = _CELLS_PER_DIAMETER.value
-  if _SOLVER.value is not None:
-    case.solver = cylinder_pb2.CylinderCase.Solver.Value(_SOLVER.value)
-  if _PRESSURE_ITERATIONS.value is not None:
-    case.pressure_iterations = _PRESSURE_ITERATIONS.value
-  for flag, field in (
-      (_CORES_X, 'cores_x'), (_CORES_Y, 'cores_y'), (_CORES_Z, 'cores_z')
-  ):
-    if flag.value is not None:
-      setattr(case, field, flag.value)
   return case
 
 
 def _check_device_count(case: cylinder_pb2.CylinderCase) -> None:
   """Compares the requested decomposition with the devices actually present.
-
-  `driver.create_mesh` takes `jax.devices()[:cx*cy*cz]`, so asking for fewer
-  cores than there are devices silently leaves the rest idle -- a four-GPU job
-  quietly running on one. That is worth saying out loud rather than
-  discovering from the wall-clock time.
 
   Args:
     case: The resolved case parameters.
@@ -155,8 +110,8 @@ def _check_device_count(case: cylinder_pb2.CylinderCase) -> None:
   if available > wanted:
     logging.warning(
         'Using %d of %d available %s device(s): the configuration asks for '
-        '%dx%dx%d. The remaining %d will sit idle. Set --cores_x/--cores_y/'
-        '--cores_z so their product is %d to use them all.',
+        '%dx%dx%d. The remaining %d will sit idle. Set cores_x/cores_y/'
+        'cores_z in the config file so their product is %d to use them all.',
         wanted, available, jax.default_backend(),
         case.cores_x, case.cores_y, case.cores_z,
         available - wanted, available,
@@ -177,11 +132,7 @@ def main(_):
       f.write(simulation.config_text())
     logging.info('Derived solver configuration written to %s', path)
 
-  # Sample the transverse velocity in the wake every step. This is the only
-  # practical way to get the shedding frequency: one period is a few hundred
-  # steps, so resolving it by checkpointing would need a full solution dump
-  # every few tens of steps -- tens of gigabytes -- while the probe is one
-  # float per step.
+  # Sample the transverse velocity in the wake every step.
   mesh = driver_lib.create_mesh(params)
   record: list[np.ndarray] = []
 
@@ -219,13 +170,13 @@ def main(_):
     # Drop the start-up transient before estimating the frequency: the wake
     # takes a few flow-through times to establish, and those samples would
     # otherwise widen the spectral peak.
-    keep = signal[int(_PROBE_DISCARD.value * signal.size):]
+    keep = signal[int(simulation.case.probe_discard * signal.size):]
     periods = keep.size * simulation.dt * 0.165 / simulation.diameter
     if periods < 8.0:
       logging.warning(
           'the probe record after discarding the transient covers only %.1f '
           'shedding periods; the frequency estimate will be coarse. Run '
-          'longer, or lower --probe_discard.',
+          'longer, or lower `probe_discard` in the config file.',
           periods,
       )
     strouhal = simulation.strouhal_number(keep)

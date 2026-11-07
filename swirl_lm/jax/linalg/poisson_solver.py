@@ -74,7 +74,7 @@ def poisson_solver_factory(
     )
   elif solver_option.HasField('multigrid'):
     return multigrid_solver.MultigridSolver(
-        grid_params, kernel_op, solver_option
+        grid_params, kernel_op, solver_option, use_stretched_grid
     )
   else:
     raise ValueError(

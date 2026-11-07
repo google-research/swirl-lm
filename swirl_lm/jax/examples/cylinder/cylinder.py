@@ -215,6 +215,10 @@ class Cylinder:
         )
     return extent
 
+  def _coarsest_extent(self) -> int:
+    """The configured coarsest global extent, or the solver's own floor."""
+    return self.case.multigrid_coarsest_extent or _MULTIGRID_COARSEST_EXTENT
+
   def _solver_text(self) -> str:
     """The Poisson solver block, indented to sit inside `solver {}`.
 
@@ -256,11 +260,11 @@ class Cylinder:
       # extent bounds a *coarsened* axis, where the Galerkin operator spans
       # five points; the span is never coarsened, so its three-point stencil
       # is unaffected by the bound applying to it.
-      extent = _MULTIGRID_COARSEST_EXTENT
+      extent = self._coarsest_extent()
       return (
           f'    multigrid {{\n'
           f'      num_iterations: {case.pressure_iterations}\n'
-          f'      n_smooth: 2\n'
+          f'      n_smooth: {case.multigrid_n_smooth}\n'
           f'      weight: 0.6667\n'
           f'      n_coarse: 1\n'
           # `dim_0/1/2`, not `dim_x/y/z`: this text is parsed against the
@@ -300,8 +304,9 @@ class Cylinder:
     # These triples are in x, y, z order, which here is also the array axis
     # order: the generated configuration leaves `data_axis_order` unset and
     # its default is 'xyz'. The plan's axis indices therefore mean x, y, z.
+    coarsest = self._coarsest_extent()
     self.multigrid_plan = multigrid_solver._coarsening_plan(  # pylint: disable=protected-access
-        interior, cores, (_MULTIGRID_COARSEST_EXTENT,) * 3
+        interior, cores, (coarsest,) * 3
     )
     if self.multigrid_plan:
       return
@@ -318,7 +323,7 @@ class Cylinder:
         f'{case.cores_x}x{case.cores_y}x{case.cores_z} cores. An axis is '
         f'coarsened while it stays even, holds at least '
         f'{_MULTIGRID_MIN_PER_CORE} cells per core once halved, and keeps a '
-        f'global extent of at least {_MULTIGRID_COARSEST_EXTENT}. Coarsening '
+        f'global extent of at least {coarsest}. Coarsening '
         f'is per axis, so one qualifying axis is enough and the span does '
         f'not have to be widened: raise whichever is cheapest, '
         + ', '.join(f'{name} via {knob}' for name, knob in knobs)

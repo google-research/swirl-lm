@@ -58,9 +58,15 @@ cfl: 0.3
 num_sweeps: 2
 num_sub_iterations: 3
 
-# V-cycles per pressure solve. Eight is a starting point.
+# V-cycles per pressure solve. One is enough: the projection sits inside
+# `num_sub_iterations`, which absorbs an under-solved cycle.
 solver: MULTIGRID
-pressure_iterations: 8
+pressure_iterations: 1
+
+# Two levels on this mesh. The coarsest extent stops the hierarchy after one
+# halving of x and y; the span is never coarsened.
+multigrid_n_smooth: 1
+multigrid_coarsest_extent: 200
 
 # Wake probe for the shedding frequency, in diameters. Offset off the axis
 # because the transverse velocity vanishes on it by symmetry. Half the record

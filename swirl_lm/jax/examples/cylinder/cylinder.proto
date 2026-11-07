@@ -90,6 +90,13 @@ message CylinderCase {
   optional int32 pressure_iterations = 19 [default = 10];
   optional int32 num_sub_iterations = 20 [default = 3];
 
+  // Weighted-Jacobi sweeps either side of the multigrid coarse correction.
+  optional int32 multigrid_n_smooth = 24 [default = 1];
+  // Smallest global extent a coarsened axis may be taken to, which is what
+  // decides the hierarchy depth. Zero uses the solver's own floor, which
+  // coarsens as far as the mesh allows.
+  optional int32 multigrid_coarsest_extent = 25 [default = 0];
+
   // Which Poisson solver the pressure step uses.
   //
   // MULTIGRID coarsens each axis on its own: a level halves whichever axes

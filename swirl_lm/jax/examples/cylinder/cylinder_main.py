@@ -74,6 +74,13 @@ _DUMP_CONFIG = flags.DEFINE_bool(
     'Write the derived solver configuration next to the checkpoints.',
 )
 
+_LOG_POISSON_RESIDUAL = flags.DEFINE_bool(
+    'log_poisson_residual',
+    False,
+    'Report the pressure solve relative residual and the continuity ratio '
+    'every sub-iteration. Costs one extra operator application per solve.',
+)
+
 FLAGS = flags.FLAGS
 
 
@@ -123,6 +130,7 @@ def main(_):
   _check_device_count(case)
   simulation = cylinder.Cylinder(case)
   params = simulation.params
+  params.log_poisson_residual = _LOG_POISSON_RESIDUAL.value
   logging.info('%s', simulation.summary())
 
   if _DUMP_CONFIG.value and FLAGS.checkpoint_dir:

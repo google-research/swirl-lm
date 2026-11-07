@@ -61,28 +61,6 @@ from swirl_lm.jax.utility import types
 ScalarField = types.ScalarField
 
 
-def _laplacian(u: jnp.ndarray, spacings: tuple[float, ...]) -> jnp.ndarray:
-  """The second-order Laplacian of `u`, with Dirichlet-zero ghosts.
-
-  The shifts are zero padded, which places a homogeneous Dirichlet condition
-  one cell outside each face. `u` therefore holds unknowns only: every cell
-  is solved for, and nothing in it is pinned.
-
-  Args:
-    u: The field, with no halos.
-    spacings: The grid spacing along each array axis, in array axis order.
-
-  Returns:
-    The Laplacian of `u`.
-  """
-  lap = jnp.zeros_like(u)
-  for axis, spacing in enumerate(spacings):
-    forward = jnp.roll(u, -1, axis=axis).at[_last(u, axis)].set(0.0)
-    backward = jnp.roll(u, 1, axis=axis).at[_first(axis)].set(0.0)
-    lap = lap + (forward - 2.0 * u + backward) / (spacing * spacing)
-  return lap
-
-
 def _first(axis: int):
   """An index selecting the first slice along `axis`."""
   return (slice(None),) * axis + (0,)
@@ -696,14 +674,6 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
             grid_params.cx, grid_params.cy, grid_params.cz
         )
     )
-
-    self._use_a_inv = mg_config.use_a_inv
-
-    # Kept in array axis order rather than named z, x, y: `grid_spacings` is
-    # already in `data_axis_order`, so axis 0 is whichever axis comes first,
-    # not necessarily z. Naming them otherwise invites a transposition that
-    # would be invisible on a cubic grid.
-    self._spacings = tuple(grid_params.grid_spacings)
 
   def _hierarchy(self, shape: tuple[int, ...], fine_operator):
     """Builds the operator for every level, coarsest last.

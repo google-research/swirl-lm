@@ -80,6 +80,12 @@ _DEFAULT_SOLVER_PARAMS = (
 # Number of drho filter applications.
 _DEFAULT_NUM_D_RHO_FILTER = 3
 
+# The immersed boundary's fluid indicator, one in fluid and zero in solid.
+# @TODO: Looked up by name rather than imported since the method lives in a
+# module only some branches carry (not yet on main).
+# `mass_source` is handled the same way below.
+_INTERIOR_MASK_KEY = 'ib_interior_mask'
+
 # Neumann BC spec for all 3 dimensions (used for drho filtering).
 _NEUMANN_BC_ALL: halo_exchange_utils.BoundaryConditionsSpec = (
     (
@@ -184,6 +190,16 @@ class Pressure:
 
     # Set the initial flow-dependent pressure BCs.
     self._update_pressure_bc()
+
+    # Hand the solver the conditions `dp` is posed with, from the same call
+    # `_dp_halo_update_fn` makes, so the two cannot drift. Multigrid reads
+    # these to build the exchanges for its coarse levels, which run at their
+    # own shapes and so cannot reuse the closure passed to `solve`.
+    #
+    # After `_update_pressure_bc` for the same reason the reprojection
+    # decision below is: `_build_dp_bc` reads `self._bc['p']`, which that call
+    # is what populates.
+    self._solver.boundary_conditions = self._build_dp_bc()
 
     # Conjugate gradient reprojects onto the range of the operator by removing
     # the mean, which is right for an all-Neumann problem, whose null space is
@@ -668,6 +684,9 @@ class Pressure:
   def _max_iterations(self) -> int:
     """The iteration limit the configured solver was given.
 
+    Multigrid uses `num_iterations`, counting V-cycles rather than
+    iterations.
+
     Returns:
       The limit, or 0 if the selected solver does not declare one.
     """
@@ -675,7 +694,10 @@ class Pressure:
     if selected is None:
       return 0
     option = getattr(self._solver_option, selected)
-    return getattr(option, 'max_iterations', 0)
+    for field in ('max_iterations', 'num_iterations'):
+      if getattr(option, field, 0):
+        return getattr(option, field)
+    return 0
 
   def _report_poisson_residual(
       self,
@@ -780,6 +802,9 @@ class Pressure:
     correction. For a constant-density case with no mass source `rhs_phys`
     is the divergence term, so the two formulations coincide.
 
+    **Restricted to the fluid** by masking with the ib_interior_mask. Intended
+    to report continuity in the fluid domain only.
+
     Called only when `params.log_poisson_residual` is set. The correction is
     recomputed rather than shared with `correction_step`, so this must stay in
     step with `velocity.correction_step` if that changes.
@@ -821,7 +846,13 @@ class Pressure:
         additional_states,
     )
 
+    # One in fluid, zero in solid; absent when the case has no body, in which
+    # case every cell counts and the numbers are what they always were.
+    fluid = additional_states.get(_INTERIOR_MASK_KEY)
+
     def norm(field: ScalarField) -> jax.Array:
+      if fluid is not None:
+        field = field * fluid
       interior = halo_exchange.set_halos_to_zero(
           field, halo_width, self._grid_params
       )
@@ -838,12 +869,35 @@ class Pressure:
     # term and these reduce to the divergence before and after.
     before = norm(physical_rhs)
     after = norm(physical_rhs - (divergence_term - divergence_after))
-    jax.debug.print(
-        'Continuity: before={before:.3e} after={after:.3e} ratio={ratio:.3e}',
-        before=before,
-        after=after,
-        ratio=after / jnp.where(before > 0.0, before, 1.0),
-    )
+    ratio = after / jnp.where(before > 0.0, before, 1.0)
+    if fluid is None:
+      jax.debug.print(
+          'Continuity: before={before:.3e} after={after:.3e} ratio={ratio:.3e}',
+          before=before,
+          after=after,
+          ratio=ratio,
+      )
+    else:
+      # The fraction counted, so the line says what it measured rather than
+      # leaving a reader to infer it from which case produced the log.
+      counted = jnp.squeeze(
+          common_ops.global_mean(
+              fluid,
+              mesh,
+              halo_width,
+              halo_width,
+              halo_width,
+              self._grid_params,
+          )
+      )
+      jax.debug.print(
+          'Continuity: before={before:.3e} after={after:.3e} '
+          'ratio={ratio:.3e} fluid={fluid:.3f}',
+          before=before,
+          after=after,
+          ratio=ratio,
+          fluid=counted,
+      )
 
   def _dp_halo_update_fn(
       self,

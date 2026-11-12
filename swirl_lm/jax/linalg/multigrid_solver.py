@@ -32,17 +32,28 @@ It implements a V-cycle multigrid method with weighted Jacobi smoothing,
 standard restriction (full weighting), and prolongation (bilinear
 interpolation).
 
+Coarsening is per axis. Each level halves whichever axes can be halved and
+leaves the rest at full resolution, so the grid does not have to be a power
+of two and a thin axis does not cap the hierarchy at the depth it alone can
+reach. For an operator whose spacing is far larger along one axis that is not
+a concession but the right coarse space: the smoother leaves error that is
+smooth only along the strongly coupled axes, and those are the axes the
+coarse grid has to represent.
+
 This is the JAX port of `swirl_lm.linalg.multigrid`. The multigrid algorithm
 operates on single-device 3D arrays using JAX operations.
 """
 
 
-from typing import Callable
+import functools
+from typing import Callable, NamedTuple
 
 import jax
 import jax.numpy as jnp
+from swirl_lm.jax.communication import halo_exchange
 from swirl_lm.jax.linalg import base_poisson_solver
 from swirl_lm.jax.linalg import poisson_solver_pb2
+from swirl_lm.jax.utility import common_ops
 from swirl_lm.jax.utility import get_kernel_fn
 from swirl_lm.jax.utility import grid_parametrization
 from swirl_lm.jax.utility import types
@@ -50,134 +61,540 @@ from swirl_lm.jax.utility import types
 ScalarField = types.ScalarField
 
 
-def _zero_borders(x: jnp.ndarray) -> jnp.ndarray:
-  """Zeros out the borders of the given 3D array (width 1)."""
-  inner = x[1:-1, 1:-1, 1:-1]
-  return jnp.pad(inner, ((1, 1), (1, 1), (1, 1)), mode='constant')
+def _first(axis: int):
+  """An index selecting the first slice along `axis`."""
+  return (slice(None),) * axis + (0,)
 
 
-def _laplacian_3d(
-    u: jnp.ndarray,
-    dz: float,
-    dx: float,
-    dy: float,
+def _last(u: jnp.ndarray, axis: int):
+  """An index selecting the last slice along `axis`."""
+  return (slice(None),) * axis + (u.shape[axis] - 1,)
+
+
+def _interior_diagonal(
+    operator, shape: tuple[int, ...]
 ) -> jnp.ndarray:
-  """Computes the 3D Laplacian using second-order finite differences.
+  """The diagonal entry of a translation-invariant stencil operator.
 
-  Uses interior stencil with zero-padded shifts to enforce Dirichlet BCs.
+  Weighted Jacobi needs the diagonal of whatever operator it is smoothing. A
+  Galerkin operator has no closed form for it, but away from the boundary
+  these operators are translation invariant, so one probe suffices: apply the
+  operator to a unit impulse and read the value back at the same cell. The
+  boundary rows differ, and the damping absorbs that.
 
   Args:
-    u: Input 3D array.
-    dz: Grid spacing in z.
-    dx: Grid spacing in x.
-    dy: Grid spacing in y.
+    operator: The linear operator.
+    shape: The grid shape at this level.
 
   Returns:
-    The 3D Laplacian of u.
+    The diagonal entry, as a scalar.
   """
-
-  # Shift up/down along each axis using slicing + zero padding.
-  def shift_fwd(arr, axis):
-    """Shift forward: arr[i] -> arr[i+1], pad zero at end."""
-    slices = [slice(None)] * 3
-    slices[axis] = slice(1, None)
-    pad_widths = [(0, 0)] * 3
-    pad_widths[axis] = (0, 1)
-    return jnp.pad(arr[tuple(slices)], pad_widths, mode='constant')
-
-  def shift_bwd(arr, axis):
-    """Shift backward: arr[i] -> arr[i-1], pad zero at start."""
-    slices = [slice(None)] * 3
-    slices[axis] = slice(None, -1)
-    pad_widths = [(0, 0)] * 3
-    pad_widths[axis] = (1, 0)
-    return jnp.pad(arr[tuple(slices)], pad_widths, mode='constant')
-
-  lap = (shift_fwd(u, 0) - 2.0 * u + shift_bwd(u, 0)) / (dz * dz)
-  lap = lap + (shift_fwd(u, 1) - 2.0 * u + shift_bwd(u, 1)) / (dx * dx)
-  lap = lap + (shift_fwd(u, 2) - 2.0 * u + shift_bwd(u, 2)) / (dy * dy)
-  return lap
+  centre = tuple(extent // 2 for extent in shape)
+  impulse = jnp.zeros(shape, jnp.float32).at[centre].set(1.0)
+  return operator(impulse)[centre]
 
 
-def _weighted_jacobi_smooth(
+def _smooth(
     u: jnp.ndarray,
     b: jnp.ndarray,
-    dz: float,
-    dx: float,
-    dy: float,
+    operator,
+    diagonal: jnp.ndarray,
     weight: float,
     n_smooth: int,
 ) -> jnp.ndarray:
-  """Applies n_smooth iterations of weighted Jacobi smoothing.
-
-  Solves L(u) = b with: u_new = u + weight * (b - L(u)) / diag_coeff.
+  """Applies `n_smooth` weighted Jacobi sweeps against `operator`.
 
   Args:
-    u: Current iterate.
-    b: Right hand side.
-    dz: Grid spacing in z.
-    dx: Grid spacing in x.
-    dy: Grid spacing in y.
-    weight: Jacobi relaxation weight (typically 2/3).
-    n_smooth: Number of smoothing iterations.
+    u: The current iterate.
+    b: The right hand side.
+    operator: The linear operator at this level.
+    diagonal: Its diagonal entry, from `_interior_diagonal`.
+    weight: The damping factor; 2/3 is the usual choice.
+    n_smooth: How many sweeps.
 
   Returns:
-    Smoothed iterate.
+    The smoothed iterate.
   """
-  diag_coeff = -2.0 * (1.0 / (dz * dz) + 1.0 / (dx * dx) + 1.0 / (dy * dy))
 
-  def body_fn(i: int, u: jnp.ndarray) -> jnp.ndarray:
-    del i
-    residual = b - _laplacian_3d(u, dz, dx, dy)
-    u = u + weight * residual / diag_coeff
-    return _zero_borders(u)
+  def sweep(_, current):
+    return current + weight * (b - operator(current)) / diagonal
 
-  return jax.lax.fori_loop(0, n_smooth, body_fn, u)
+  return jax.lax.fori_loop(0, n_smooth, sweep, u)
 
 
-def _restrict(fine: jnp.ndarray) -> jnp.ndarray:
-  """Full-weighting restriction from fine grid to coarse grid.
+_XYZ = ('x', 'y', 'z')
 
-  Uses standard 3D full-weighting stencil (average of 2x2x2 block).
+
+def _make_exchange(mesh, grid_params, boundary_conditions):
+  """Builds `(u, axis) -> (beyond_low, beyond_high)` for any level's shape.
+
+  Transfers need a plane, which is produced by a halo exchange of width one.
+  Uses the neighbour's edge plane at an inter-device seam, and the boundary
+  condition's own plane at a face of the domain. One mechanism covers both,
+  which is why the ghost factors this replaces could not be made to work, since
+  at a seam there is no factor relating the cell outside a block to the cell
+  inside it.
+
+  `inplace_halo_exchange` serves every level unchanged because it reads all
+  extents from `array.shape` and takes the halo width as an argument,
+  consulting `grid_params` only for the axis-order permutation. The width is
+  one here regardless of the caller's, since one plane is all a transfer
+  reaches.
+
+  Three axis orders meet in this function and they do not agree, so each is
+  indexed by name rather than by position:
+
+  * `axis` is an index into the array, so the exchange is told
+    `data_axis_order[axis]`;
+  * `grid_params.periodic_dims` is in data axis order, indexed by `axis`;
+  * `boundary_conditions` comes from `Pressure._build_dp_bc`, which is in
+    x, y, z order, indexed by the axis's name.
 
   Args:
-    fine: Fine grid array of shape (nz, nx, ny).
+    mesh: The device mesh.
+    grid_params: The grid parametrization, for the axis-order permutation.
+    boundary_conditions: The conditions the problem is posed with, per axis in
+      x, y, z order, as `Pressure._build_dp_bc` returns them.
 
   Returns:
-    Coarse grid array of shape (nz//2+1, nx//2+1, ny//2+1) approximately.
+    A function taking a field and an array axis and returning the two planes
+    immediately outside that axis's faces.
   """
-  # Simple injection-style restriction: take every other point from the
-  # interior, pad with zeros.
-  inner = fine[1:-1, 1:-1, 1:-1]
-  coarse_inner = inner[::2, ::2, ::2]
-  return jnp.pad(coarse_inner, ((1, 1), (1, 1), (1, 1)), mode='constant')
+
+  def exchange(u: jnp.ndarray, axis: int):
+    axis_name = grid_params.data_axis_order[axis]
+    widths = [(0, 0)] * 3
+    widths[axis] = (1, 1)
+    padded = halo_exchange.inplace_halo_exchange(
+        jnp.pad(u, widths),
+        axes=(axis_name,),
+        mesh=mesh,
+        grid_params=grid_params,
+        periodic_dims=[grid_params.periodic_dims[axis]],
+        boundary_conditions=(boundary_conditions[_XYZ.index(axis_name)],),
+        halo_width=1,
+    )
+    return padded[_first(axis)], padded[_last(padded, axis)]
+
+  return exchange
+
+
+def _coarsen_operator(error, fine_operator, exchange, axes):
+  """`R A P`, the Galerkin coarse operator built from `fine_operator`.
+
+  `axes` has to be the same subset the cycle restricts and prolongates with
+  at this level.
+
+  Args:
+    error: The coarse field to apply it to.
+    fine_operator: The operator one level finer.
+    exchange: Supplies the planes outside each face, from `_make_exchange`.
+    axes: The axes coarsened between the fine level and this one.
+
+  Returns:
+    The coarse operator applied to `error`.
+  """
+  return _restrict(
+      fine_operator(_prolongate(error, exchange, axes)), exchange, axes
+  )
+
+
+def _shift_up(
+    u: jnp.ndarray, axis: int, beyond_high: jnp.ndarray
+) -> jnp.ndarray:
+  """`u[i+1]`, taking `beyond_high` in place of the cell past the last.
+
+  A plane rather than a factor times the edge cell. Everything inside the
+  domain can be written either way, but only a plane can carry a neighbouring
+  device's data, and a factor cannot: at an inter-device seam there is no
+  multiple of this block's edge cell that equals the neighbour's first cell.
+  Taking the plane is what will let the same code serve a partitioned grid.
+
+  Args:
+    u: The field.
+    axis: The axis to shift along.
+    beyond_high: What lies immediately past the high face, shaped like one
+      slice of `u` along `axis`.
+
+  Returns:
+    The shifted field.
+  """
+  shifted = jnp.roll(u, -1, axis=axis)
+  return shifted.at[_last(u, axis)].set(beyond_high)
+
+
+def _shift_down(
+    u: jnp.ndarray, axis: int, beyond_low: jnp.ndarray
+) -> jnp.ndarray:
+  """`u[i-1]`, taking `beyond_low` in place of the cell before the first.
+
+  See `_shift_up` for why this is a plane and not a factor.
+
+  Args:
+    u: The field.
+    axis: The axis to shift along.
+    beyond_low: What lies immediately before the low face, shaped like one
+      slice of `u` along `axis`.
+
+  Returns:
+    The shifted field.
+  """
+  shifted = jnp.roll(u, 1, axis=axis)
+  return shifted.at[_first(axis)].set(beyond_low)
+
+
+def _interleave(even: jnp.ndarray, odd: jnp.ndarray, axis: int) -> jnp.ndarray:
+  """Weaves `even` and `odd` back together along `axis`."""
+  stacked = jnp.stack([even, odd], axis=axis + 1)
+  shape = list(even.shape)
+  shape[axis] = even.shape[axis] * 2
+  return stacked.reshape(shape)
+
+
+def _prolongate_axis(coarse: jnp.ndarray, axis: int, exchange) -> jnp.ndarray:
+  """Interpolates linearly along one axis, doubling its length.
+
+  Cell centred, so each coarse cell covers two fine cells and each of those
+  takes three quarters from the cell it sits in and one quarter from the
+  neighbour it leans towards. Beyond the ends that neighbour is zero, which
+  is the homogeneous Dirichlet condition the rest of the cycle assumes.
+
+  Linear rather than piecewise constant because for Poisson the orders of
+  restriction and prolongation must sum to more than two; constant paired
+  with averaging sums to exactly two, which leaves the per-cycle convergence
+  degrading as the grid grows.
+
+  Args:
+    coarse: The coarse field.
+    axis: The axis to refine.
+    exchange: Supplies the planes outside each face.
+
+  Returns:
+    The field with `axis` twice as long.
+  """
+  beyond_low, beyond_high = exchange(coarse, axis)
+  lower = 0.75 * coarse + 0.25 * _shift_down(coarse, axis, beyond_low)
+  upper = 0.75 * coarse + 0.25 * _shift_up(coarse, axis, beyond_high)
+  return _interleave(lower, upper, axis)
+
+
+def _restrict_axis(fine: jnp.ndarray, axis: int, exchange) -> jnp.ndarray:
+  """The exact transpose of `_prolongate_axis`, halving the axis.
+
+  With `lower[i] = 3/4 c[i] + 1/4 c[i-1]` and
+  `upper[i] = 3/4 c[i] + 1/4 c[i+1]`, gathering the coefficient of `c[i]`
+  in `<f, P c>` gives
+
+      (P^T f)[i] = 3/4 (lower[i] + upper[i])
+                 + 1/4 lower[i+1] + 1/4 upper[i-1].
+
+  Args:
+    fine: The fine field. `axis` must have even length.
+    axis: The axis to coarsen.
+    exchange: Supplies the planes outside each face.
+
+  Returns:
+    The field with `axis` halved.
+  """
+  lower = jax.lax.slice_in_dim(fine, 0, fine.shape[axis], stride=2, axis=axis)
+  upper = jax.lax.slice_in_dim(fine, 1, fine.shape[axis], stride=2, axis=axis)
+
+  # What lies past each end. The transpose takes it from the ghost `c[-1]`
+  # appearing inside `lower[0]`, and `c[N]` inside `upper[N-1]`, so the plane
+  # is the exchange's (of the half it belongs to). Note the crossing: the
+  # plane past the high face of `lower` is exchanged from `upper`, and vice
+  # versa. Writing them the other way round keeps adjointness only where the
+  # outside cell is zero, so a Dirichlet face would look correct while a
+  # Neumann one silently was not.
+  _, beyond_high = exchange(upper, axis)
+  beyond_low, _ = exchange(lower, axis)
+  return (
+      0.75 * (lower + upper)
+      + 0.25 * _shift_up(lower, axis, beyond_high)
+      + 0.25 * _shift_down(upper, axis, beyond_low)
+  )
+
+
+def _restrict(
+    fine: jnp.ndarray, exchange, axes: tuple[int, ...]
+) -> jnp.ndarray:
+  """Restricts by transposing the prolongation along each axis in `axes`.
+
+  Being the exact transpose is what the coarse-grid correction rests on: it
+  makes the correction minimise the error over the coarse space rather than
+  merely change it. The operators this replaced were plain injection against
+  an interpolating prolongation, giving ratios of 1.12, 0.068 and 4.47 on
+  fine grids of 8, 16 and 32 where a consistent pair gives one constant.
+
+  Adjointness survives any subset: the per-axis restriction is the exact
+  transpose of the per-axis prolongation, and factors acting on different
+  axes commute, so the composite over a subset is the transpose of the
+  composite over that same subset whatever order they are applied in.
+
+  Args:
+    fine: The fine field, of even length along each axis in `axes`.
+    exchange: Supplies the planes outside each face.
+    axes: The axes to coarsen. Axes outside it are passed through untouched.
+
+  Returns:
+    The coarse field, half the length along each axis in `axes`.
+  """
+  coarse = fine
+  for axis in axes:
+    coarse = _restrict_axis(coarse, axis, exchange)
+  return coarse
 
 
 def _prolongate(
-    coarse: jnp.ndarray, fine_shape: tuple[int, ...]
+    coarse: jnp.ndarray, exchange, axes: tuple[int, ...]
 ) -> jnp.ndarray:
-  """Bilinear prolongation from coarse grid to fine grid.
-
-  Uses trilinear interpolation to map from coarse to fine grid.
+  """Interpolates onto the fine grid along each axis in `axes`.
 
   Args:
-    coarse: Coarse grid array.
-    fine_shape: Target fine grid shape.
+    coarse: The coarse field.
+    exchange: Supplies the planes outside each face.
+    axes: The axes to refine. Axes outside it are passed through untouched.
 
   Returns:
-    Prolongated array at fine grid resolution.
+    The fine field, twice the length along each axis in `axes`.
   """
-  # Extract interior of coarse grid.
-  coarse_inner = coarse[1:-1, 1:-1, 1:-1]
+  fine = coarse
+  for axis in axes:
+    fine = _prolongate_axis(fine, axis, exchange)
+  return fine
 
-  # Target interior shape.
-  fz, fx, fy = fine_shape[0] - 2, fine_shape[1] - 2, fine_shape[2] - 2
 
-  # Use nearest-neighbor upsampling then pad. For a proper multigrid
-  # implementation, this would use trilinear interpolation. For now,
-  # jax.image.resize provides this.
-  fine_inner = jax.image.resize(coarse_inner, (fz, fx, fy), method='linear')
-  return jnp.pad(fine_inner, ((1, 1), (1, 1), (1, 1)), mode='constant')
+# The Galerkin coarse operator spans five points along each **coarsened**
+# axis, so the coarsest grid has to hold at least that; eight is the first
+# power of two that does. This is a bound on the *global* coarse extent,
+# which is what the stencil sees. It was measured on one device, where global
+# and per-core are identical.
+#
+# It bounds coarsened axes only, and an axis the hierarchy never halves keeps
+# the three-point stencil it started with, so there is no five-point support to
+# clip and a short axis cannot clip one. A four-cell span is safe for exactly
+# that reason.
+_MIN_COARSEST_EXTENT = 8
+
+# The smallest a per-core block may become. Two cells would be enough for the
+# transfers, which only de-interleave with stride two, but not for
+# `_interior_diagonal`: every device probes its own local center, so the
+# probes sit one block apart, and the Galerkin operator reaches two cells. At
+# four the supports touch while the readback points stay clear of each other.
+_MIN_PER_CORE_EXTENT = 4
+
+# TODO: 5 coarsenings diverges, need to investigate.
+# It counts coarsenings rather than axis halvings because every candidate
+# scales with the number of nested `R A P` wrappings, and a level adds one of
+# those however many axes it touches.
+_MAX_COARSENINGS = 4
+
+
+class _Level(NamedTuple):
+  """One level of the hierarchy, with the step down to the next."""
+
+  shape: tuple[int, ...]
+  operator: Callable[[jnp.ndarray], jnp.ndarray]
+  diagonal: jnp.ndarray
+  # The axes halved between this level and the next, empty on the coarsest.
+  # Recorded forwards because that is the direction every reader needs: the
+  # same tuple is bound into the next level's Galerkin operator and used by
+  # both transfers of the cycle that descends from here.
+  coarsen_axes: tuple[int, ...]
+
+
+def _coarsened(shape: tuple[int, ...], axes: tuple[int, ...]):
+  """`shape` with the axes in `axes` halved and the rest left alone."""
+  return tuple(
+      extent // 2 if axis in axes else extent
+      for axis, extent in enumerate(shape)
+  )
+
+
+def _coarsenable_axes(
+    shape: tuple[int, ...],
+    cores: tuple[int, ...],
+    coarsest: tuple[int, ...],
+) -> tuple[int, ...]:
+  """The axes that can be halved and leave a usable grid.
+
+  Coarsening is per axis: an axis that cannot be halved is kept at full
+  resolution while the others are halved.
+
+  The coarsest shape bounds the **global** extent to accommodate the
+  five-point Galerkin stencil. `_MIN_PER_CORE_EXTENT` bounds the local block,
+  because `_interior_diagonal` probes each device's own centre and the probes
+  have to stay clear of one another.
+
+  `shape`, `cores` and `coarsest` must be in the same axis order, and the
+  returned indices are in that order. Whether the result is empty does not
+  depend on that order, which is what lets the constructor ask the question
+  in x, y, z order while the hierarchy works in array axis order.
+
+  Args:
+    shape: The current per-core grid shape, unknowns only.
+    cores: Devices along each axis.
+    coarsest: The smallest global extent each axis may be taken to.
+
+  Returns:
+    The indices of the coarsenable axes, ascending.
+  """
+  return tuple(
+      axis
+      for axis, (extent, cores_, coarsest_) in enumerate(
+          zip(shape, cores, coarsest)
+      )
+      if extent % 2 == 0
+      and extent // 2 >= _MIN_PER_CORE_EXTENT
+      and cores_ * (extent // 2) >= coarsest_
+  )
+
+
+def _coarsening_plan(
+    shape: tuple[int, ...],
+    cores: tuple[int, ...],
+    coarsest: tuple[int, ...],
+) -> list[tuple[int, ...]]:
+  """The axes to halve at each level, finest first.
+
+  The depth cap is enforced here, as the bound on this loop, rather than inside
+  `_coarsenable_axes`. The predicate stays a local, order-free test on one
+  shape; how many levels have already been taken is a property of the path to
+  that shape, not of the shape, and folding the two together would also cost
+  the partition-invariance argument its readability.
+
+  Args:
+    shape: The finest per-core grid shape, unknowns only.
+    cores: Devices along each axis.
+    coarsest: The smallest global extent each axis may be taken to.
+
+  Returns:
+    One tuple of axes per coarsening, at most `_MAX_COARSENINGS` of them.
+    Empty if nothing can be coarsened.
+  """
+  plan = []
+  current = shape
+  while len(plan) < _MAX_COARSENINGS:
+    axes = _coarsenable_axes(current, cores, coarsest)
+    if not axes:
+      break
+    plan.append(axes)
+    current = _coarsened(current, axes)
+  return plan
+
+
+def _validate_coarsenable(
+    grid_params: grid_parametrization.GridParametrization,
+    coarsest_xyz: tuple[int, ...],
+) -> None:
+  """Refuses a grid that wants coarsening but admits none.
+
+  Coarsening is per axis. An axis that cannot be halved is simply kept at full
+  resolution. Two edge cases may occur:
+  - A grid already at or below `coarsest_subgrid_shape` on every axis
+    has nothing to coarsen: the V-cycle correctly degenerates to its
+    smoother.
+  - A grid above that floor which still cannot be halved (e.g., odd node extent,
+    or split into per-core blocks too small for the diagonal probe) is refused
+    here rather than silently costing a hierarchy's compile time to run weighted
+    Jacobi.
+
+  Order is in x, y, z rather than array axis order.
+
+  Args:
+    grid_params: The grid parametrization.
+    coarsest_xyz: The coarsest global extent per axis, in x, y, z order,
+      before it is permuted into array axis order.
+
+  Raises:
+    ValueError: If no axis can be halved and the grid is not already at the
+      coarsest shape, naming why each axis cannot be halved.
+  """
+  interior = (grid_params.core_nx, grid_params.core_ny, grid_params.core_nz)
+  cores = (grid_params.cx, grid_params.cy, grid_params.cz)
+  if _coarsenable_axes(interior, cores, coarsest_xyz):
+    return
+
+  # Already at the floor on every axis: nothing to coarsen, nothing wrong.
+  if all(
+      cores_ * extent <= coarsest_
+      for extent, cores_, coarsest_ in zip(interior, cores, coarsest_xyz)
+  ):
+    return
+
+  halo = grid_params.halo_width
+  reasons = []
+  for axis, (extent, cores_, coarsest_) in enumerate(
+      zip(interior, cores, coarsest_xyz)
+  ):
+    name = f'dim_{axis}'
+    if extent % 2:
+      reasons.append(
+          f'{name} is {extent}, which is odd; set `grid_size.{name}` to '
+          f'{extent + 1 + 2 * halo} for an interior of {extent + 1}'
+      )
+    elif extent // 2 < _MIN_PER_CORE_EXTENT:
+      reasons.append(
+          f'{name} is {extent} per core, which halves to {extent // 2}, '
+          f'below the floor of {_MIN_PER_CORE_EXTENT} that the diagonal '
+          f'probe needs; set `grid_size.{name}` to '
+          f'{2 * _MIN_PER_CORE_EXTENT + 2 * halo} or more'
+      )
+    else:
+      # Only offer to lower the floor when there is room to lower it.
+      remedy = (
+          f'raise `grid_size.{name}`'
+          if coarsest_ <= _MIN_COARSEST_EXTENT
+          else (
+              f'raise `grid_size.{name}` or lower '
+              f'`coarsest_subgrid_shape.dim_{axis}` to as little as '
+              f'{_MIN_COARSEST_EXTENT}'
+          )
+      )
+      reasons.append(
+          f'{name} is {extent} per core on {cores_} cores, which halves to a '
+          f'global {cores_ * (extent // 2)}, below the coarsest extent '
+          f'{coarsest_}; {remedy}'
+      )
+
+  raise ValueError(
+      'The multigrid solver cannot halve a single axis of this grid, so its '
+      "V-cycle would be weighted Jacobi with a hierarchy's compile time on "
+      f'top, and got a per-core interior of {interior}. An axis is coarsened '
+      f'while it is even, stays at {_MIN_PER_CORE_EXTENT} cells or more per '
+      'core once halved, and keeps a global extent of at least '
+      f'`coarsest_subgrid_shape`, which is {coarsest_xyz}. '
+      + '; '.join(reasons)
+      + f'. Note `grid_size` counts the halos, so the interior is '
+      f'`grid_size - 2 * {halo}`. Coarsening is per axis, so one axis is '
+      'enough and a thin periodic span does not have to be widened. Use the '
+      'Jacobi or conjugate gradient solver for a grid that cannot give one.'
+  )
+
+
+def _validate_coarsest_shape(shape: tuple[int, ...]) -> None:
+  """Requires the coarsest grid to be wide enough to hold the coarse stencil.
+
+  The Galerkin operators are not three-point. Linear prolongation paired with
+  averaging restriction widens a three-point fine stencil to five points per
+  axis, which cannot be represented on a coarse grid of four cells.
+
+  Args:
+    shape: The coarsest subgrid shape, in array axis order.
+
+  Raises:
+    ValueError: If any extent is below `_MIN_COARSEST_EXTENT`.
+  """
+  if all(extent >= _MIN_COARSEST_EXTENT for extent in shape):
+    return
+  raise ValueError(
+      f'The multigrid solver needs a coarsest subgrid of at least '
+      f'{_MIN_COARSEST_EXTENT} cells per axis, and got {shape}. The Galerkin '
+      'coarse operator spans five points per axis, so a smaller grid clips it '
+      'and the coarse-grid correction stops solving the problem it was handed. '
+      f'Set `coarsest_subgrid_shape` to {_MIN_COARSEST_EXTENT} or more on '
+      'every axis.'
+  )
 
 
 class MultigridSolver(base_poisson_solver.PoissonSolver):
@@ -188,6 +605,7 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
       grid_params: grid_parametrization.GridParametrization,
       kernel_op: get_kernel_fn.ApplyKernelOp,
       solver_option: poisson_solver_pb2.PoissonSolver,
+      use_stretched_grid: tuple[bool, ...] = (False, False, False),
   ):
     """Initializes the multigrid solver.
 
@@ -195,8 +613,29 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
       grid_params: The grid parametrization.
       kernel_op: An object holding a library of kernel operations.
       solver_option: The solver configuration proto.
+      use_stretched_grid: Whether each dimension is stretched. Accepted so
+        that the factory can pass it; this solver cannot honour it and says
+        so rather than returning a plausible wrong answer.
+
+    Raises:
+      NotImplementedError: If any dimension uses a stretched grid.
     """
     super().__init__(grid_params, kernel_op, solver_option)
+
+    # The cycle carries one spacing per axis, and the coarse operators are
+    # built by halving it. A stretched grid has a spacing that varies cell by
+    # cell, supplied through `additional_states`, which nothing here reads.
+    # Jacobi handles it, via `_generate_weights_and_modified_rhs`; until this
+    # does too, refuse.
+    if any(use_stretched_grid):
+      raise NotImplementedError(
+          'The multigrid solver does not support stretched grids: it holds a '
+          'single spacing per axis and halves it on each coarsening, whereas '
+          f'{tuple(use_stretched_grid)} asks for a spacing that varies per '
+          'cell. Use the Jacobi or conjugate gradient solver, which read the '
+          'scale factors from `additional_states`.'
+      )
+
     mg_config = solver_option.multigrid
 
     self._num_iterations = mg_config.num_iterations
@@ -204,84 +643,112 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
     self._weight = mg_config.weight
     self._n_coarse = mg_config.n_coarse
 
-    # Coarsest subgrid shape (stop coarsening when any dim <= this).
+    # Coarsest shape: coarsening stops when halving any axis would take the
+    # *global* extent below this. Named `coarsest_subgrid_shape` in the proto,
+    # which reads as per-core, but the bound it expresses is on the stencil and
+    # the stencil spans the global grid. The two coincide on one device, which
+    # is where the value came from. Held in array axis order, like every other
+    # triple here, so the proto's x, y and z are permuted rather than assumed:
+    # the previous `(dim_z, dim_x, dim_y)` hard-coded `data_axis_order == 'zxy'`
+    # which is the required order in TensorFlow.
     if mg_config.HasField('coarsest_subgrid_shape'):
       cs = mg_config.coarsest_subgrid_shape
-      self._coarsest_shape = (cs.dim_z, cs.dim_x, cs.dim_y)
+      coarsest_xyz = (cs.dim_x, cs.dim_y, cs.dim_z)
     else:
-      self._coarsest_shape = (4, 4, 4)
+      coarsest_xyz = (_MIN_COARSEST_EXTENT,) * 3
+    self._coarsest_shape = tuple(
+        grid_params.to_data_axis_order(*coarsest_xyz)
+    )
+    _validate_coarsest_shape(self._coarsest_shape)
 
-    self._use_a_inv = mg_config.use_a_inv
+    # Refuse a grid no axis of which can be halved. Checked here rather than
+    # at the top of the constructor because it needs the coarsest shape, and
+    # asked in x, y, z order (the order `coarsest_xyz` is still in) so
+    # that the message can name the `grid_size` fields the caller set.
+    _validate_coarsenable(grid_params, coarsest_xyz)
 
-    # Grid spacings.
-    spacings = grid_params.grid_spacings
-    self._dz = spacings[0]
-    self._dx = spacings[1]
-    self._dy = spacings[2]
-
-  def _can_coarsen(self, shape: tuple[int, ...]) -> bool:
-    """Checks if the grid can be coarsened further."""
-    # Interior shape (excluding borders).
-    interior = tuple(s - 2 for s in shape)
-    return all(
-        s > c and s % 2 == 0 for s, c in zip(interior, self._coarsest_shape)
+    # Devices per axis, in array axis order, so the hierarchy can reason about
+    # the global extent rather than the per-core one.
+    self._cores = tuple(
+        grid_params.to_data_axis_order(
+            grid_params.cx, grid_params.cy, grid_params.cz
+        )
     )
 
-  def _v_cycle(
-      self,
-      u: jnp.ndarray,
-      b: jnp.ndarray,
-      dz: float,
-      dx: float,
-      dy: float,
-  ) -> jnp.ndarray:
-    """Performs one V-cycle of the multigrid method.
+  def _hierarchy(self, shape: tuple[int, ...], fine_operator):
+    """Builds the operator for every level, coarsest last.
+
+    The coarse operators are Galerkin, `A_coarse = R A_fine P`, rather than
+    the Laplacian rediscretised at twice the spacing. Rediscretisation is
+    only consistent when it happens to agree with the Galerkin product, which
+    it does for a piecewise constant transfer pair, where the two differ by
+    exactly a factor of two and the stencils match. It does not agree for a
+    linear prolongation: there the Galerkin stencil is wider than three
+    points, the measured ratio drifts with the grid, and no scalar can reconcile
+    them. Defining the coarse operator by the transfers removes the question.
 
     Args:
-      u: Current iterate.
-      b: Right hand side.
-      dz: Grid spacing in z.
-      dx: Grid spacing in x.
-      dy: Grid spacing in y.
+      shape: The finest grid shape, unknowns only.
+      fine_operator: The operator on the finest level, which carries the
+        boundary conditions. Every coarse operator is derived from it, so the
+        conditions propagate down the hierarchy without being restated.
 
     Returns:
-      Updated iterate after one V-cycle.
+      A list of `_Level`, finest first.
     """
-    fine_shape = u.shape
-
-    # Pre-smooth.
-    u = _weighted_jacobi_smooth(u, b, dz, dx, dy, self._weight, self._n_smooth)
-
-    if not self._can_coarsen(fine_shape):
-      # At coarsest level: do extra smoothing.
-      u = _weighted_jacobi_smooth(
-          u, b, dz, dx, dy, self._weight, self._n_smooth * 4
+    plan = _coarsening_plan(shape, self._cores, self._coarsest_shape)
+    levels = []
+    operator = fine_operator
+    current = shape
+    # One record per coarsening, plus the coarsest.
+    for axes in (*plan, ()):
+      levels.append(
+          _Level(current, operator, _interior_diagonal(operator, current), axes)
       )
-      return u
+      if axes:
+        operator = functools.partial(
+            _coarsen_operator,
+            fine_operator=operator,
+            exchange=self._exchange,
+            axes=axes,
+        )
+        current = _coarsened(current, axes)
+    return levels
 
-    # Compute residual.
-    residual = b - _laplacian_3d(u, dz, dx, dy)
-    residual = _zero_borders(residual)
+  def _v_cycle(self, levels, index: int, u, b):
+    """Performs one V-cycle starting at `levels[index]`.
 
-    # Restrict residual to coarse grid.
-    residual_c = _restrict(residual)
+    Args:
+      levels: The hierarchy from `_hierarchy`.
+      index: Which level to start on, 0 being finest.
+      u: The current iterate.
+      b: The right hand side.
 
-    # Solve on coarse grid (recursively or with extra smoothing).
-    err_c = jnp.zeros_like(residual_c)
-    for _ in range(self._n_coarse):
-      err_c = self._v_cycle(err_c, residual_c, dz * 2, dx * 2, dy * 2)
+    Returns:
+      The iterate after one cycle.
+    """
+    level = levels[index]
+    operator, diagonal = level.operator, level.diagonal
+    axes = level.coarsen_axes
+    u = _smooth(u, b, operator, diagonal, self._weight, self._n_smooth)
 
-    # Prolongate error correction to fine grid.
-    err_f = _prolongate(err_c, fine_shape)
+    if not axes:
+      # Nothing coarser to fall back on, so smooth harder instead. Testing
+      # the axes rather than the position in the list also rules out
+      # descending through a transfer pair that would do nothing.
+      return _smooth(
+          u, b, operator, diagonal, self._weight, self._n_smooth * 4
+      )
 
-    # Correct.
-    u = u + err_f
-    u = _zero_borders(u)
+    coarse_residual = _restrict(b - operator(u), self._exchange, axes)
+    coarse_error = jnp.zeros_like(coarse_residual)
+    for _ in range(max(self._n_coarse, 1)):
+      coarse_error = self._v_cycle(
+          levels, index + 1, coarse_error, coarse_residual
+      )
 
-    # Post-smooth.
-    u = _weighted_jacobi_smooth(u, b, dz, dx, dy, self._weight, self._n_smooth)
-
-    return u
+    u = u + _prolongate(coarse_error, self._exchange, axes)
+    return _smooth(u, b, operator, diagonal, self._weight, self._n_smooth)
 
   def solve(
       self,
@@ -291,30 +758,113 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
       halo_update_fn: Callable[[ScalarField], ScalarField] | None = None,
       additional_states: dict[str, jax.Array] | None = None,
   ) -> base_poisson_solver.PoissonSolverSolution:
-    """Solves the Poisson equation using multigrid V-cycles.
+    """Solves the Poisson equation with multigrid V-cycles.
+
+    The halos are stripped on the way in and restored on the way out, so the
+    cycle works on unknowns alone, with the boundary conditions applied by
+    `halo_update_fn` inside the operator. The transfers reach one cell past
+    each face and get it from an exchange of their own, at that level's shape
+    and a halo width of one, so the coarse grids are partitioned too: at an
+    inter-device seam the plane is the neighbour's, at a face of the domain it
+    is the boundary condition's.
+
+    Coarsening is per axis: each level halves the axes that can be halved and
+    leaves the rest, so an axis too short or too odd to coarsen stops itself
+    rather than the hierarchy. The depth is currently capped at
+    `_MAX_COARSENINGS`.
+
+    The bottom of the hierarchy is smoothed rather than solved, so how small
+    the coarsest grid gets is a cost in convergence per cycle rather than an
+    error. An axis that never coarsens keeps its full extent there, which on
+    a quasi-two-dimensional grid is the bulk of what the bottom level holds.
 
     Args:
-      rhs: The right hand side of the Poisson equation.
-      p0: Initial guess for the solution.
-      mesh: A jax Mesh object representing the device topology.
-      halo_update_fn: Optional function to update halos. Not used.
-      additional_states: Additional static fields. Not used.
+      rhs: The right hand side.
+      p0: The initial guess.
+      mesh: The device mesh.
+      halo_update_fn: The boundary conditions. Defaults to homogeneous
+        Neumann, matching the other solvers.
+      additional_states: Not used; a stretched grid is rejected in
+        `__init__` rather than silently ignored here.
 
     Returns:
-      A dict with the solution, residual norm, and iteration count.
+      The solution, the residual norm and the cycle count.
     """
-    del mesh, halo_update_fn, additional_states
+    del additional_states
 
-    x = p0
+    halo = self._grid_params.halo_width
+    interior = (slice(halo, -halo),) * 3
+
+    if halo_update_fn is None:
+      halo_update_fn = base_poisson_solver._halo_update_homogeneous_neumann(  # pylint: disable=protected-access
+          mesh, self._grid_params
+      )
+
+    def fine_operator(unknowns: jnp.ndarray) -> jnp.ndarray:
+      """The Laplacian subject to the configured boundary conditions.
+
+      Deliberately the same composition conjugate gradient uses: pad the
+      unknowns back out to a full array, let `halo_update_fn` fill the halos
+      with whatever the boundary conditions say, take the Laplacian, discard
+      the halos again. The cycle sees only unknowns; the conditions live
+      entirely in this function, and the Galerkin construction carries them
+      to every coarser level.
+
+      Args:
+        unknowns: The interior field.
+
+      Returns:
+        The operator applied to it, interior only.
+      """
+      padded = jnp.pad(unknowns, ((halo, halo),) * 3)
+      result = self._laplacian(padded, halo_update=halo_update_fn)
+      return halo_exchange.set_halos_to_zero(
+          result, halo, self._grid_params
+      )[interior]
+
+    # The transfers have to agree with the operator about what lies outside
+    # each face. While they assumed Dirichlet regardless, a Neumann problem
+    # converged two to three orders of magnitude worse than a Dirichlet one
+    # and degraded as the grid grew.
+    if not self.boundary_conditions:
+      raise ValueError(
+          'The multigrid solver needs the boundary conditions the problem is '
+          'posed with, and `boundary_conditions` is empty. `solve` is given a '
+          'halo update, which applies them but cannot be asked what they are, '
+          'and the coarse levels exchange at their own shapes so they cannot '
+          'reuse it. `Pressure` sets this from `_build_dp_bc`; a caller '
+          'constructing the solver directly must set it too.'
+      )
+    self._exchange = _make_exchange(
+        mesh, self._grid_params, self.boundary_conditions
+    )
+
+    b = rhs[interior]
+    x = p0[interior]
+
+    levels = self._hierarchy(b.shape, fine_operator)
     for _ in range(self._num_iterations):
-      x = self._v_cycle(x, rhs, self._dz, self._dx, self._dy)
+      x = self._v_cycle(levels, 0, x, b)
 
-    # Compute final residual.
-    residual = rhs - _laplacian_3d(x, self._dz, self._dx, self._dy)
-    residual_l2 = float(jnp.sqrt(jnp.sum(residual**2)))
-
+    residual = b - fine_operator(x)
+    # Restore the halos which were zeroed by `jnp.pad`.
+    # `velocity.correction_step` takes a centred difference of the returned
+    # field with no exchange in between, so a cleared halo becomes a one-sided
+    # jump at every interface instead of a gradient.
     return {
-        base_poisson_solver.X: x,
-        base_poisson_solver.RESIDUAL_L2_NORM: residual_l2,
-        base_poisson_solver.ITERATIONS: float(self._num_iterations),
+        base_poisson_solver.X: halo_update_fn(
+            jnp.pad(x, ((halo, halo),) * 3)
+        ),
+        # Reduced across devices, not a local sum: with `out_specs=P()` an
+        # unreduced norm silently returns whichever shard the caller happens
+        # to read. `global_dot` rather than `compute_norm`, which all-gathers
+        # to produce a scalar. `residual` is interior-only (both `b` and the
+        # operator's output carry the unknowns alone) so no cell is counted
+        # twice and the halos need no clearing first.
+        base_poisson_solver.RESIDUAL_L2_NORM: jnp.sqrt(
+            common_ops.global_dot(residual, residual, mesh)
+        ),
+        base_poisson_solver.ITERATIONS: jnp.asarray(
+            self._num_iterations, jnp.int32
+        ),
     }

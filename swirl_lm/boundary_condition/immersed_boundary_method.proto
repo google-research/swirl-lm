@@ -124,8 +124,130 @@ message FeedbackForce1DInterp {
   optional float damping_coeff = 3 [default = 1.0];
 }
 
+// A point or a vector in physical space.
+message Vec3 {
+  optional float x = 1 [default = 0.0];
+  optional float y = 2 [default = 0.0];
+  optional float z = 3 [default = 0.0];
+}
+
+// One solid body, described by its signed distance function. Several of these
+// compose by union, so a scene is built by listing them.
+//
+// This replaces the height-field description used previously, which could
+// only represent a surface that is single-valued in z and so ruled out
+// cylinders, prisms and anything overhanging.
+message IBGeometry {
+  // A sphere, which is a circle on a grid that is flat along one axis.
+  message Sphere {
+    optional Vec3 center = 1;
+    optional float radius = 2;
+  }
+
+  // A rectangular prism, a cube when the half extents are equal. The rotation
+  // is applied about the centre, as intrinsic rotations about x, then y,
+  // then z, in degrees.
+  message Box {
+    optional Vec3 center = 1;
+    optional Vec3 half_extents = 2;
+    optional Vec3 rotation_deg = 3;
+  }
+
+  // A circular cylinder about an arbitrary axis, which need not be a grid
+  // direction. Omitting `height` gives an infinite cylinder, which is the
+  // right choice for a spanwise cylinder in a domain that is periodic along
+  // the axis.
+  message Cylinder {
+    optional Vec3 base = 1;
+    optional Vec3 axis = 2;
+    optional float radius = 3;
+    optional float height = 4;
+  }
+
+  // Terrain given by an elevation z = h(x, y), with the fluid above. The
+  // profile is resolved by the example that owns the geometry.
+  message HeightField {
+    optional string profile = 1;
+  }
+
+  oneof shape {
+    Sphere sphere = 1;
+    Box box = 2;
+    Cylinder cylinder = 3;
+    HeightField height_field = 4;
+  }
+}
+
+// Parameters required by the ghost-point method of Ghias, Mittal and Dong,
+// J. Comput. Phys. 225 (2007) 528-553. The value in each solid cell adjacent
+// to the fluid is set so that the boundary condition holds on the surface
+// itself, giving a sharp interface rather than a smeared forcing region.
+message GhostPointMethod {
+  // How the computed ghost value reaches the solver.
+  enum Enforcement {
+    // Assign the ghost value directly, as in the paper. No tunable constant.
+    DIRECT = 1;
+    // Relax towards it with `-damping_coeff * (u - u_ghost)`, matching the
+    // other forcing-based methods here. The boundary is then satisfied only
+    // approximately, and the result depends on `damping_coeff`.
+    FORCING = 2;
+  }
+
+  // Variables for which the ghost-point method is applied.
+  repeated IBVariableInfo variables = 1;
+  // The bodies, combined by union.
+  repeated IBGeometry geometry = 2;
+  optional Enforcement enforcement = 3 [default = DIRECT];
+  // Used by FORCING only.
+  optional float damping_coeff = 4 [default = 10.0];
+  // Repetitions of the ghost-value update per application. More than one
+  // matters only where the interpolation stencil of one ghost cell contains
+  // another, which the paper resolves inside its coupled solve.
+  optional int32 num_sweeps = 5 [default = 2];
+  // Fall back to a pure central difference in fluid cells next to the solid,
+  // so the wider convection stencil never reaches deep into the body.
+  optional bool blend_convection = 6 [default = true];
+  // Hold the solid cells the method does not set -- everything deeper than
+  // the one ghost layer -- at each variable's boundary value, instead of
+  // letting the momentum equation integrate them.
+  //
+  // Those cells are not part of the solution: nothing constrains them, yet
+  // the pressure gradient inside the body accelerates them anyway, and
+  // their divergence feeds straight back into the Poisson right-hand side.
+  // On a thin body that is a curiosity. On a scene where the solid is a
+  // quarter of the domain it is fatal: measured on terrain plus buildings,
+  // the deep interior reached 13 m/s two steps after starting from rest and
+  // the run was NaN by step 20.
+  //
+  // **Off by default, and measured to be harmful at every clamp depth
+  // tried.** The solver integrates momentum in solid cells as well, so a
+  // held cell feeds its neighbour on the next step and the resulting step
+  // in the field marches outwards until the fluid's own stencils read it --
+  // `DIFFUSION_SCHEME_CENTRAL_5` reaches two cells and, unlike convection,
+  // is not blended near the body. On flat ground under a 5 m/s wind the
+  // clamped run was clean for 25 steps, five times too fast by 100 and
+  // non-finite by 200, while the unclamped run held the inflow value
+  // exactly. Left alone the solid stays smooth, which is what wide stencils
+  // need; `deep_interior_mask` honours `_STENCIL_REACH` but that is not
+  // enough to make this safe.
+  //
+  // `direct_forcing` does the same thing unconditionally through the
+  // right-hand side, which is worth bearing in mind before using it here.
+  //
+  // Requires `write_interior_mask`, which supplies the mask.
+  optional bool clamp_interior = 10 [default = false];
+  // Helper fields written to the output. The masks default on because they
+  // are routinely used in post-processing to cut the body out of a plot; the
+  // signed distance is off by default. All three are static, so they cost a
+  // little space in every checkpoint, which is the price of having them in
+  // the file at all. The packed index and weight arrays are never written.
+  optional bool write_interior_mask = 8 [default = true];
+  optional bool write_ghost_mask = 9 [default = true];
+  optional bool write_signed_distance = 7 [default = false];
+}
+
 // Parameters required by the immersed boundary method.
-// Next id: 7
+// Next id: 8
 message ImmersedBoundaryMethod {
   oneof type {
     CartesianGridMethod cartesian_grid = 1;
@@ -134,5 +256,6 @@ message ImmersedBoundaryMethod {
     DirectForcingMethod direct_forcing = 4;
     DirectForcing1DInterp direct_forcing_1d_interp = 6;
     FeedbackForce1DInterp feedback_force_1d_interp = 5;
+    GhostPointMethod ghost_point = 7;
   }
 }

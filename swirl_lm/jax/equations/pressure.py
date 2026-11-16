@@ -185,6 +185,16 @@ class Pressure:
     # Set the initial flow-dependent pressure BCs.
     self._update_pressure_bc()
 
+    # Hand the solver the conditions `dp` is posed with, from the same call
+    # `_dp_halo_update_fn` makes, so the two cannot drift. Multigrid reads
+    # these to build the exchanges for its coarse levels, which run at their
+    # own shapes and so cannot reuse the closure passed to `solve`.
+    #
+    # After `_update_pressure_bc` for the same reason the reprojection
+    # decision below is: `_build_dp_bc` reads `self._bc['p']`, which that call
+    # is what populates.
+    self._solver.boundary_conditions = self._build_dp_bc()
+
     # Conjugate gradient reprojects onto the range of the operator by removing
     # the mean, which is right for an all-Neumann problem, whose null space is
     # the constant, and wrong for one with a Dirichlet face, where the mean is
@@ -192,10 +202,11 @@ class Pressure:
     # subtract mean, unless explicitly configured otherwise.
     #
     # Decision needs to be made after `_update_pressure_bc`, which turns
-    # `pressure_outlet` into the Dirichlet face that makes the operator
-    # non-singular. Deciding before it reads the boundary conditions as
-    # configured rather than as they end up (i.e., flow-dependent), and every
-    # case that pins its outlet would reproject when it must not. The solver
+    # `pressure_outlet` and the upper gravity wall under
+    # `PRESSURE_BUOYANCY_BALANCING` into the Dirichlet faces that make the
+    # operator non-singular. Deciding before it reads the boundary conditions
+    # as configured rather than as they end up (i.e., flow-dependent), and
+    # every case that pins a face would reproject when it must not. The solver
     # holds the option message by reference and reads `reprojection` when it
     # solves, so settling it here still reaches it.
     if self._solver_option.HasField('conjugate_gradient'):
@@ -210,7 +221,9 @@ class Pressure:
     - PERIODIC: No BC (handled by halo exchange periodicity).
     - INFLOW: Neumann (dp/dn = 0, 2nd order).
     - OUTFLOW: Dirichlet (p = 0) if pressure_outlet enabled, else Neumann.
-    - WALL (non-slip, slip, shear): Neumann (dp/dn = 0).
+    - WALL (non-slip, slip, shear): Neumann (dp/dn = 0), except the upper
+      gravity wall under `PRESSURE_BUOYANCY_BALANCING` with
+      `update_p_bc_by_flow`, which uses Dirichlet.
 
     The diffusion contribution to the wall-normal momentum equation is zero at
     the wall (see detailed analysis in TF pressure module), so the wall
@@ -259,11 +272,26 @@ class Pressure:
             )
 
         elif bt in wall_types:
-          # Homogeneous Neumann BC for pressure at walls.
-          bc_p[dim][face] = (  # pyrefly: ignore[unsupported-operation]
-              halo_exchange_utils.BCType.NEUMANN,
-              0.0,
-          )
+          # Upper gravity wall uses Dirichlet under buoyancy-balanced BCs when
+          # flow-dependent pressure BC updates are enabled; other wall faces
+          # use homogeneous Neumann.
+          if (
+              dim == self._params.g_dim
+              and face == 1
+              and self._params.pressure is not None
+              and self._params.pressure.update_p_bc_by_flow
+              and self._params.pressure.vertical_bc_treatment
+              == pressure_pb2.Pressure.PRESSURE_BUOYANCY_BALANCING
+          ):
+            bc_p[dim][face] = (  # pyrefly: ignore[unsupported-operation]
+                halo_exchange_utils.BCType.DIRICHLET,
+                0.0,
+            )
+          else:
+            bc_p[dim][face] = (  # pyrefly: ignore[unsupported-operation]
+                halo_exchange_utils.BCType.NEUMANN,
+                0.0,
+            )
 
         else:
           bc_p[dim][face] = (  # pyrefly: ignore[unsupported-operation]
@@ -668,6 +696,9 @@ class Pressure:
   def _max_iterations(self) -> int:
     """The iteration limit the configured solver was given.
 
+    Multigrid uses `num_iterations`, counting V-cycles rather than
+    iterations.
+
     Returns:
       The limit, or 0 if the selected solver does not declare one.
     """
@@ -675,7 +706,10 @@ class Pressure:
     if selected is None:
       return 0
     option = getattr(self._solver_option, selected)
-    return getattr(option, 'max_iterations', 0)
+    for field in ('max_iterations', 'num_iterations'):
+      if getattr(option, field, 0):
+        return getattr(option, field)
+    return 0
 
   def _report_poisson_residual(
       self,

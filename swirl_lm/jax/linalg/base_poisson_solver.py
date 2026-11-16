@@ -34,7 +34,7 @@ in a distributed setting.
 """
 
 import abc
-from typing import Callable
+from typing import Any, Callable
 
 import jax
 from jax import sharding
@@ -121,7 +121,17 @@ class PoissonSolver(object):
     self._grid_params = grid_params
     self._kernel_op = kernel_op
     self._solver_option = solver_option
-    self.boundary_conditions = []
+    # The boundary conditions the problem is posed with, as a
+    # `BoundaryConditionsSpec`. The caller sets this; an empty list means it
+    # did not. `solve` is handed a `halo_update_fn` instead, which is enough
+    # to apply the conditions but not to inspect them, and multigrid needs to
+    # inspect them: its coarse levels exchange halos at their own shapes and
+    # widths, which means building their own exchange rather than reusing the
+    # caller's closure. Declared here rather than on `MultigridSolver` for use
+    # with every solver.
+    self.boundary_conditions: (
+        halo_exchange.BoundaryConditionsSpec | list[Any]
+    ) = []
 
   def _laplacian_terms(
       self,

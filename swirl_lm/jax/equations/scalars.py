@@ -351,6 +351,16 @@ class Scalars:
       updated_scalars = dict(
           self._ib.update_states(updated_scalars, additional_states)
       )
+      # Exchange again: the update changed cells that another replica holds a
+      # copy of, so without this every neighbour's halo copy is stale and the
+      # next operator to read it gets a pre-boundary-condition value. Only
+      # matters where the body straddles a device seam, which is exactly
+      # where it is hardest to notice. See the same correction in
+      # `velocity.prediction_step`.
+      updated_scalars = {
+          name: self.exchange_scalar_halos(value, name, mesh)
+          for name, value in updated_scalars.items()
+      }
 
     return updated_scalars, mass_source
 

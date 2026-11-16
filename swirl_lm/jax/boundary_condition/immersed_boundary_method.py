@@ -49,6 +49,7 @@ import jax.numpy as jnp
 import numpy as np
 from swirl_lm.boundary_condition import immersed_boundary_method_pb2
 from swirl_lm.jax.base import parameters as parameters_lib
+from swirl_lm.jax.boundary_condition import immersed_boundary_ghost_point as ghost_point
 from swirl_lm.jax.utility import types
 
 ScalarField = types.ScalarField
@@ -94,6 +95,40 @@ def ib_info_map(
     )
 
 
+def required_keys(params: parameters_lib.SwirlLMParameters) -> list[str]:
+  """Returns the additional state keys the configured IB method needs.
+
+  A method declares the state it needs, so that a configuration does not have
+  to list the method's internal arrays by hand. Methods that declare nothing,
+  and a configuration without an immersed boundary, give an empty list.
+
+  Args:
+    params: The simulation parameters.
+
+  Returns:
+    The additional state keys to allocate.
+  """
+  return ghost_point.required_keys(params)
+
+
+def exclude_from_checkpoint(key: str) -> bool:
+  """Whether `key` is immersed boundary state that checkpoints leave out.
+
+  The packed index and weight arrays of the ghost-point method are the case
+  in point: five-dimensional, meaningless outside `shard_map`, and
+  unchanging. The helper fields -- the masks and the signed distance -- are
+  ordinary 3D states and are kept, because they are what post-processing uses
+  to cut the body out of a plot.
+
+  Args:
+    key: A state name.
+
+  Returns:
+    True if the key should be left out of checkpoints.
+  """
+  return ghost_point.is_geometry_key(key)
+
+
 class ImmersedBoundaryMethod:
   """A library of the immersed boundary method for the JAX solver."""
 
@@ -108,6 +143,15 @@ class ImmersedBoundaryMethod:
         boundary_models := params.boundary_models
     ) is not None, '`boundary_models` must be set in the config.'
     self._ib_params = boundary_models.ib
+    if (
+        self.type == 'ghost_point'
+        and self._ib_params.ghost_point.enforcement
+        == immersed_boundary_method_pb2.GhostPointMethod.ENFORCEMENT_UNKNOWN
+    ):
+      raise ValueError(
+          '`ghost_point.enforcement` must be DIRECT or FORCING, or left unset'
+          ' to select DIRECT.'
+      )
 
   @property
   def type(self) -> str:
@@ -128,8 +172,6 @@ class ImmersedBoundaryMethod:
     Returns:
       Updated states dictionary.
     """
-    del additional_states  # Unused.
-
     if self.type in ('cartesian_grid', 'mac'):
       # Full cartesian_grid/mac methods require multi-device halo exchange.
       # For now, return states unchanged.
@@ -139,6 +181,15 @@ class ImmersedBoundaryMethod:
           self.type,
       )
       return dict(states)
+    elif self.type == 'ghost_point':
+      config = self._ib_params.ghost_point
+      if (
+          config.enforcement
+          != immersed_boundary_method_pb2.GhostPointMethod.DIRECT
+      ):
+        # The forcing variant contributes through `update_forcing` instead.
+        return dict(states)
+      return self._apply_ghost_point(states, additional_states)
     elif self.type in (
         'sponge',
         'direct_forcing',
@@ -168,6 +219,8 @@ class ImmersedBoundaryMethod:
         'mac',
         'direct_forcing',
         'direct_forcing_1d_interp',
+        # The ghost-point geometry is static, so nothing is recomputed here.
+        'ghost_point',
     ):
       return dict(additional_states)
     elif self.type == 'sponge':
@@ -203,6 +256,14 @@ class ImmersedBoundaryMethod:
         'feedback_force_1d_interp',
     ):
       return dict(additional_states)
+    elif self.type == 'ghost_point':
+      config = self._ib_params.ghost_point
+      if (
+          config.enforcement
+          != immersed_boundary_method_pb2.GhostPointMethod.FORCING
+      ):
+        return dict(additional_states)
+      return self._apply_ghost_point_forcing(states, additional_states)
     elif self.type == 'direct_forcing':
       return self._apply_direct_forcing_method(states, additional_states)
     elif self.type == 'direct_forcing_1d_interp':
@@ -262,12 +323,129 @@ class ImmersedBoundaryMethod:
       if ib_boundary_mask is not None:
         output['ib_boundary'] = ib_boundary_mask
 
+    elif self.type == 'ghost_point':
+      # The geometry and any enabled output fields come from
+      # `GhostPointGeometry.initial_states`, which the example calls. Only
+      # the force buffers belong here, and only for the forcing variant.
+      config = self._ib_params.ghost_point
+      if (
+          config.enforcement
+          == immersed_boundary_method_pb2.GhostPointMethod.FORCING
+      ):
+        for variable in config.variables:
+          output[self.ib_force_name(variable.name)] = zeros
+
     elif self.type == 'direct_forcing':
       for variable in self._ib_params.direct_forcing.variables:
         rhs_name = self.ib_rhs_name(variable.name)
         output[rhs_name] = zeros
 
     return output
+
+  def _bc_name(self, variable) -> str:
+    """Maps an `IBVariableInfo` boundary type onto a ghost-point condition."""
+    info = immersed_boundary_method_pb2.IBVariableInfo
+    if variable.bc == info.DIRICHLET:
+      return 'dirichlet'
+    if variable.bc == info.NEUMANN:
+      return 'neumann'
+    raise ValueError(
+        f'The ghost-point method supports DIRICHLET and NEUMANN; variable '
+        f'{variable.name!r} asks for '
+        f'{info.BoundaryConditionType.Name(variable.bc)}. NEUMANN_Z assumes a '
+        'single fluid-solid interface along z, which is exactly the terrain '
+        'assumption this method exists to remove; use NEUMANN.'
+    )
+
+  def _apply_ghost_point(
+      self,
+      states: ScalarFieldMap,
+      additional_states: ScalarFieldMap,
+  ) -> dict[str, ScalarField]:
+    """Assigns the ghost-cell values, Ghias et al. (2007) Eq. 26.
+
+    Args:
+      states: Flow field variables.
+      additional_states: Helper variables, carrying the geometry.
+
+    Returns:
+      `states` with each configured variable's ghost cells overwritten.
+    """
+    config = self._ib_params.ghost_point
+    geom = ghost_point.from_additional_states(additional_states)
+    updated = dict(states)
+
+    clamp = None
+    if config.clamp_interior:
+      if ghost_point.INTERIOR_MASK_KEY not in additional_states:
+        raise ValueError(
+            '`clamp_interior` needs the fluid mask, so it also needs '
+            f'`write_interior_mask`. {ghost_point.INTERIOR_MASK_KEY!r} is '
+            'not in `additional_states`.'
+        )
+      clamp = ghost_point.deep_interior_mask(
+          additional_states[ghost_point.INTERIOR_MASK_KEY], geom
+      )
+
+    for variable in config.variables:
+      if variable.name not in updated:
+        continue
+      zeta, gamma = ghost_point.coefficients_for(
+          geom, self._bc_name(variable), variable.value
+      )
+      updated[variable.name] = ghost_point.apply_local(
+          updated[variable.name],
+          geom,
+          zeta,
+          gamma,
+          num_sweeps=config.num_sweeps,
+      )
+      if clamp is not None:
+        # After the sweeps, so the interpolation still reads whatever the
+        # previous application left in the deep cells rather than a value
+        # this one just wrote.
+        updated[variable.name] = jnp.where(
+            clamp, variable.value, updated[variable.name]
+        )
+    return updated
+
+  def _apply_ghost_point_forcing(
+      self,
+      states: ScalarFieldMap,
+      additional_states: ScalarFieldMap,
+  ) -> dict[str, ScalarField]:
+    """Relaxes towards the ghost-cell values instead of assigning them.
+
+    Args:
+      states: Flow field variables.
+      additional_states: Helper variables, carrying the geometry.
+
+    Returns:
+      `additional_states` with each configured variable's force term set.
+    """
+    config = self._ib_params.ghost_point
+    geom = ghost_point.from_additional_states(additional_states)
+    updated = dict(additional_states)
+    for variable in config.variables:
+      if variable.name not in states:
+        continue
+      zeta, gamma = ghost_point.coefficients_for(
+          geom, self._bc_name(variable), variable.value
+      )
+      damping = (
+          variable.damping_coeff
+          if variable.HasField('damping_coeff')
+          else config.damping_coeff
+      )
+      updated[self.ib_force_name(variable.name)] = ghost_point.forcing(
+          states[variable.name],
+          geom,
+          zeta,
+          gamma,
+          damping,
+          num_sweeps=config.num_sweeps,
+      )
+    return updated
 
   @staticmethod
   def ib_force_name(var_name: str) -> str:

@@ -111,8 +111,8 @@ from jax.sharding import PartitionSpec as P  # pylint: disable=g-importing-membe
 import numpy as np
 from swirl_lm.base import parameters_pb2
 from swirl_lm.jax.base import parameters as parameters_lib
+from swirl_lm.jax.boundary_condition import boundary_condition
 from swirl_lm.jax.boundary_condition import boundary_condition_utils
-from swirl_lm.jax.boundary_condition import nonreflecting_boundary
 from swirl_lm.jax.core import simulation as simulation_lib
 from swirl_lm.jax.io import checkpoint as checkpoint_lib
 from swirl_lm.jax.physics.lpt import lpt
@@ -174,6 +174,16 @@ def create_mesh(
   # each mesh axis name matches its partition count.
   mesh_shape = gp.to_data_axis_order(gp.cx, gp.cy, gp.cz)
   num_devices = gp.cx * gp.cy * gp.cz
+  # Taking a prefix of `jax.devices()` means a computation_shape smaller than
+  # the machine runs happily on a subset and leaves the rest idle, with
+  # nothing to show for it but the wall-clock time. Say so.
+  if jax.device_count() > num_devices:
+    logging.warning(
+        'computation_shape is %dx%dx%d = %d, but %d %s devices are '
+        'available; the other %d will be idle.',
+        gp.cx, gp.cy, gp.cz, num_devices, jax.device_count(),
+        jax.default_backend(), jax.device_count() - num_devices,
+    )
   devices = mesh_utils.create_device_mesh(
       mesh_shape, devices=jax.devices()[:num_devices]
   )
@@ -212,6 +222,16 @@ def _get_state_keys(
 
   # Add LPT keys if configured.
   additional_keys += lpt.required_keys(params.lpt)
+
+  # Add the keys the boundary conditions need. Their internal arrays are
+  # solver internals, so a configuration should not have to name them; the
+  # boundary conditions declare them instead. Keys a config already lists --
+  # `ib_interior_mask` is a common one -- are not duplicated.
+  additional_keys += [
+      key
+      for key in boundary_condition.required_keys(params)
+      if key not in additional_keys
+  ]
 
   # Add stretched grid keys. In JAX all fields are 3D arrays, so scale
   # factors go into helper_var_keys and 3D coordinates into additional_keys.
@@ -317,8 +337,8 @@ def _init_fn(
   if customized_init_fn is not None:
     states.update(customized_init_fn(params, logical_coordinates))
 
-  # Add nonreflecting BC states.
-  states.update(nonreflecting_boundary.nonreflecting_bc_state_init_fn(params))
+  # Add the states the boundary conditions maintain.
+  states.update(boundary_condition.initial_states(params))
 
   return states
 
@@ -614,7 +634,7 @@ def _update_additional_states(
 
   Mirrors TF `_update_additional_states`. Performs:
     1. Clear `src_*` source terms from the previous step.
-    2. Update nonreflecting BC states.
+    2. Update boundary condition states.
     3. Update LPT states.
     4. Call user-defined `additional_states_update_fn`.
 
@@ -637,9 +657,9 @@ def _update_additional_states(
     if varname.startswith('src_'):
       updated[varname] = jnp.zeros_like(updated[varname])
 
-  # 2. Update nonreflecting BC states.
+  # 2. Update boundary condition states.
   updated.update(
-      nonreflecting_boundary.nonreflecting_bc_state_update_fn(
+      boundary_condition.update_additional_states(
           params, essential_states, additional_states, step_id  # pyrefly: ignore[bad-argument-type]
       )
   )
@@ -666,8 +686,8 @@ def _update_additional_states(
 
     # `updated` is passed in rather than the original `additional_states`, and
     # the result is merged rather than substituted. Both matter: the user
-    # function has to see the cleared source terms and the fresh nonreflecting
-    # boundary condition states, and rebinding `updated` here would discard
+    # function has to see the cleared source terms and the fresh boundary
+    # condition states, and rebinding `updated` here would discard
     # steps 1 and 2 outright. The TF original gets away with the same
     # substitution because there `updated` is an alias of `additional_states`
     # and those steps mutate it in place; this port copies the dict, which
@@ -876,12 +896,20 @@ def _save_checkpoint(
       if TIME_VARNAME in states
       else step * grid_params.dt
   )
+  # Boundary conditions may keep solver internals in the state that do not
+  # belong in a checkpoint. Which keys those are is the boundary condition
+  # library's call; everything else is written.
   checkpoint_lib.save(
       states,
       grid_params,
       step=step,
       path=ckpt_path,
       sim_time=sim_time,
+      fields=[
+          key
+          for key in states
+          if not boundary_condition.exclude_from_checkpoint(key)
+      ],
   )
   logging.info('Checkpoint saved: %s', ckpt_path)
 
@@ -897,6 +925,8 @@ def run_simulation(
     num_steps_per_cycle: int = 1,
     checkpoint_dir: str | None = None,
     checkpoint_interval: int = 0,
+    probe_fn: Callable[[dict[str, ScalarField]], jax.Array] | None = None,
+    probe_sink: Callable[[np.ndarray], None] | None = None,
 ) -> dict[str, ScalarField]:
   """Runs the simulation for the given number of steps.
 
@@ -934,6 +964,16 @@ def run_simulation(
     checkpoint_dir: Directory for zarr checkpoints. If None, no checkpointing.
     checkpoint_interval: Save a checkpoint every N cycles. 0 = no periodic
       saves.
+    probe_fn: An optional diagnostic evaluated on the state after every step,
+      inside `shard_map`, returning a scalar. Use it for anything that has to
+      be sampled at the step rate -- a shedding frequency, say -- where
+      checkpointing is the wrong instrument by orders of magnitude: a full
+      checkpoint is tens of megabytes and a frequency needs a sample every few
+      tens of steps. The function runs per replica, so it must reduce across
+      devices itself, typically with `jax.lax.psum`.
+    probe_sink: Called once per cycle with that cycle's samples, as a NumPy
+      array of length `num_steps_per_cycle`. Accumulating them is the
+      caller's business.
 
   Returns:
     The final states dict (globally-sharded arrays).
@@ -1046,13 +1086,13 @@ def run_simulation(
   def _shard_map_cycle_body(
       state: dict[str, ScalarField],
       init_step_id: jax.Array,
-  ) -> dict[str, ScalarField]:
+  ) -> tuple[dict[str, ScalarField], jax.Array]:
     """Step body that runs inside shard_map (per-device)."""
 
     def step_body(
         carry: tuple[dict[str, ScalarField], jax.Array],
         _: None,
-    ) -> tuple[tuple[dict[str, ScalarField], jax.Array], None]:
+    ) -> tuple[tuple[dict[str, ScalarField], jax.Array], jax.Array]:
       state_carry, step_id = carry
 
       # Split state into essential and additional.
@@ -1125,22 +1165,34 @@ def run_simulation(
           _stateless_update_if_present(state_carry, updated_state)
       )
 
-      return (new_state, step_id + 1), None
+      # `lax.scan` stacks whatever the body returns as its second value, so
+      # a per-step diagnostic costs one scalar per step and one host transfer
+      # per cycle. Checkpointing instead is the wrong instrument by orders of
+      # magnitude: resolving a shedding period needs a sample every few tens
+      # of steps, and a full checkpoint is tens of megabytes.
+      sample = (
+          jnp.zeros((), jnp.float32)
+          if probe_fn is None
+          else jnp.asarray(probe_fn(new_state), jnp.float32)
+      )
+      return (new_state, step_id + 1), sample
 
     init_carry = (state, init_step_id)
-    (final_state, _), _ = jax.lax.scan(
+    (final_state, _), samples = jax.lax.scan(
         step_body, init_carry, None, length=num_steps_per_cycle
     )
-    return final_state
+    return final_state, samples
 
   # Build the JIT-compiled shard_map function.
   # init_step_id is a scalar, replicated across all devices.
+  # The probe samples are reduced across devices inside the body, so they
+  # come out replicated.
   _jit_one_cycle = jax.jit(
       shard_map.shard_map(
           _shard_map_cycle_body,
           mesh=mesh,
           in_specs=(in_specs, spec_replicated),
-          out_specs=out_specs,
+          out_specs=(out_specs, spec_replicated),
           check_rep=False,
       )
   )
@@ -1164,10 +1216,13 @@ def run_simulation(
 
     # Time the compute portion of each cycle.
     compute_start = time.time()
-    state = _jit_one_cycle(state, init_step_id)
+    state, samples = _jit_one_cycle(state, init_step_id)
     # Block until computation completes (for accurate timing).
     jax.block_until_ready(state)
     compute_time = time.time() - compute_start
+
+    if probe_fn is not None and probe_sink is not None:
+      probe_sink(np.asarray(samples))
 
     steps_completed += num_steps_per_cycle
 

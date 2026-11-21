@@ -953,6 +953,8 @@ def run_simulation(
     checkpoint_interval: int = 0,
     probe_fn: Callable[[dict[str, ScalarField]], jax.Array] | None = None,
     probe_sink: Callable[[np.ndarray], None] | None = None,
+    profile_dir: str | None = None,
+    profile_cycle: int = 1,
 ) -> dict[str, ScalarField]:
   """Runs the simulation for the given number of steps.
 
@@ -1000,6 +1002,13 @@ def run_simulation(
       caller's business.
     checkpoint_interval: Save a checkpoint every N cycles. 0 = no periodic
       saves.
+    profile_dir: Where to write an XProf trace of one cycle. None, the
+      default, profiles nothing and costs nothing. Every process writes its
+      own trace of its own devices.
+    profile_cycle: The cycle to trace. Never cycle 0: that one compiles the
+      step function, so its trace is the compiler's and holds next to no
+      device work. One cycle is enough, and the whole run would be far too
+      large to open.
 
   Returns:
     The final states dict (globally-sharded arrays).
@@ -1234,6 +1243,14 @@ def run_simulation(
       dict(mesh.shape),
   )
 
+  # Fail here rather than run to completion and write no trace.
+  if profile_dir is not None and not 0 < profile_cycle < num_cycles:
+    raise ValueError(
+        f'profile_cycle={profile_cycle} is not a cycle this run reaches after'
+        f' the compilation: it has to lie in [1, {num_cycles - 1}], so a'
+        ' profiling run needs at least two cycles.'
+    )
+
   # Main simulation loop (Python cycle loop).
   steps_completed = 0
 
@@ -1244,12 +1261,28 @@ def run_simulation(
   for cycle_idx in range(num_cycles):
     init_step_id = jnp.int32(steps_completed)
 
-    # Time the compute portion of each cycle.
+    # The window has to close after the block below and not after the
+    # dispatch, or it records a queue of launches and no device work.
+    tracing = profile_dir is not None and cycle_idx == profile_cycle
+    if tracing:
+      jax.profiler.start_trace(profile_dir)
+      logging.info('Tracing cycle %d into %s.', cycle_idx, profile_dir)
+
+    # Time the compute portion of each cycle. The annotation names the cycle
+    # in the trace and costs nothing while no trace is open.
     compute_start = time.time()
-    state, samples = _jit_one_cycle(state, init_step_id)
-    # Block until computation completes (for accurate timing).
-    jax.block_until_ready(state)
+    with jax.profiler.StepTraceAnnotation('cycle', step_num=cycle_idx):
+      state, samples = _jit_one_cycle(state, init_step_id)
+      # Block until computation completes (for accurate timing).
+      jax.block_until_ready(state)
     compute_time = time.time() - compute_start
+
+    if tracing:
+      jax.profiler.stop_trace()
+      # The traced cycle pays the profiler's overhead, so read its
+      # `compute_time` as a trace artifact and not as a measurement.
+      logging.info('Trace of cycle %d written under %s.',
+                   cycle_idx, profile_dir)
 
     if probe_fn is not None and probe_sink is not None:
       probe_sink(np.asarray(samples))

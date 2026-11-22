@@ -33,6 +33,7 @@ dependencies = [
     "scipy",
     "six",
     "tensorflow",
+    "xarray",
 ]
 
 # This is set automatically by flit using `swirl_lm.__version__`

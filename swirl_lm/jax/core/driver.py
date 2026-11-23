@@ -1002,9 +1002,10 @@ def run_simulation(
       caller's business.
     checkpoint_interval: Save a checkpoint every N cycles. 0 = no periodic
       saves.
-    profile_dir: Where to write an XProf trace of one cycle. None, the
-      default, profiles nothing and costs nothing. Every process writes its
-      own trace of its own devices.
+    profile_dir: Where to write an XProf trace of one cycle. Default is None
+      (no profiling). Under more than one process each writes into its own
+      `process_NNN` subdirectory, because the profiler names its files after the
+      host and processes sharing a node would otherwise overwrite one another.
     profile_cycle: The cycle to trace. Never cycle 0: that one compiles the
       step function, so its trace is the compiler's and holds next to no
       device work. One cycle is enough, and the whole run would be far too
@@ -1242,6 +1243,12 @@ def run_simulation(
       num_cycles,
       dict(mesh.shape),
   )
+
+  # Separate directories by process.
+  if profile_dir is not None and jax.process_count() > 1:
+    profile_dir = os.path.join(
+        profile_dir, f'process_{jax.process_index():03d}'
+    )
 
   # Fail here rather than run to completion and write no trace.
   if profile_dir is not None and not 0 < profile_cycle < num_cycles:

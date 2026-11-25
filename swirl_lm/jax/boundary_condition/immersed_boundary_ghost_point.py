@@ -11,6 +11,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """Ghost-point geometry for the sharp-interface immersed boundary method.
 
 Implements the precomputation for the ghost-cell method of Ghias, Mittal and
@@ -67,7 +81,7 @@ coordinate array, so stretched grids work without a special case. On a uniform
 grid the result is identical to `ip // h`.
 """
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 import dataclasses
 from typing import Any, NamedTuple
 
@@ -80,7 +94,7 @@ from swirl_lm.jax.utility import signed_distance as sdf_lib
 # along each of the three data axes. The ordering fixes the column order of
 # `corner_index` and `alpha` and must match `_trilinear_weights`.
 _CORNERS = tuple(
-    (i, j, k) for i in (0, 1) for j in (0, 1) for k in (0, 1)
+    (i, j, k) for i in (0, 1) for j in (0, 1) for k in (0, 1)  # pylint: disable=g-complex-comprehension
 )
 
 # The image point must lie far enough beyond the body intercept to keep the
@@ -117,6 +131,7 @@ class GhostPoints:
       `self_weight`.
     self_weight: `(n,)` the interpolation weight that fell on the ghost cell
       itself, zero for the common case where it did not.
+    bi_weight: `(n,)` the interpolation weight at the body intercept.
     zeta_dirichlet: `(n,)` the extrapolation slope `-1/(m-1)` for a Dirichlet
       condition, which is `-1` wherever the probe was not capped.
     separation: `(n,)` the distance from the ghost cell to the point its
@@ -210,7 +225,7 @@ class GhostPoints:
     return msg
 
 
-def interior_mask(
+def get_interior_mask(
     phi: sdf_lib.SignedDistanceFn,
     coords: Sequence[np.ndarray],
     dims: Sequence[int] = (0, 1, 2),
@@ -1064,9 +1079,9 @@ def geometry_from_proto(
         'The ghost-point method needs at least one `geometry` entry.'
     )
 
-  spheres: list[tuple] = []
-  boxes: list[tuple] = []
-  cylinders: list[tuple] = []
+  spheres: list[tuple] = []  # pylint: disable=g-bare-generic
+  boxes: list[tuple] = []  # pylint: disable=g-bare-generic
+  cylinders: list[tuple] = []  # pylint: disable=g-bare-generic
   terrain: list[sdf_lib.SignedDistanceFn] = []
 
   for message in messages:
@@ -1299,7 +1314,7 @@ def deep_interior_mask(
 
 
 def from_additional_states(
-    additional_states: dict[str, jax.Array],
+    additional_states: Mapping[str, jax.Array],
 ) -> ShardedGhostPoints:
   """Recovers this replica's geometry from `additional_states`.
 
@@ -1517,7 +1532,7 @@ def _build_packed(
       valid=np.zeros(flat_shape, np.float32),
   )
   for flat_pos, geom in enumerate(per_replica):
-    i0, i1, i2 = np.unravel_index(flat_pos, counts)
+    i0, i1, i2 = np.unravel_index(flat_pos, counts)  # pylint: disable=unbalanced-tuple-unpacking
     n = geom.num_ghost_points
     if n == 0:
       continue
@@ -1537,7 +1552,7 @@ def required_keys(params) -> list[str]:
   """State keys the ghost-point method needs, if it is configured.
 
   Returns an empty list for every other immersed boundary type and when no
-  immersed boundary is configured at all, so the driver can call this
+  immersed boundary is configured at all, so it can be called
   unconditionally. This follows `lpt.required_keys`: a model declares the
   state it needs rather than every configuration having to list the solver's
   internal arrays by hand.

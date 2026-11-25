@@ -1,3 +1,19 @@
+# Copyright 2026 The swirl_lm Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Run the fire simulation."""
+
 from absl import app
 from absl import flags
 from google.protobuf import text_format
@@ -9,7 +25,7 @@ from swirl_lm.jax.core import distribution
 from swirl_lm.jax.core import driver as driver_lib
 from swirl_lm.jax.examples.fire import fire
 
-jax.config.update("jax_enable_x64", False)
+jax.config.update('jax_enable_x64', False)
 
 _NUM_CYCLES = flags.DEFINE_integer(
     'num_cycles',
@@ -43,7 +59,7 @@ def _make_params() -> parameters_lib.SwirlLMParameters:
   # Initialize empty instance
   config = parameters_pb2.SwirlLMParameters()
 
-  with open(FLAGS.config_filepath, "r") as file:
+  with open(FLAGS.config_filepath, 'r') as file:
     text_data = file.read()
     text_format.Parse(text_data, config)
   return parameters_lib.SwirlLMParameters(config)

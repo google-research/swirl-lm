@@ -11,6 +11,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """Signed distance functions for immersed boundary geometry.
 
 A geometry is a callable `phi(xyz) -> scalar` taking a point as an array of
@@ -29,9 +43,9 @@ This representation is what lets the immersed boundary work for arbitrary
 shapes. The previous TensorFlow implementation described the body as a height
 field `z = h(x, y)` and obtained the wall-normal projection from a gradient
 derived by hand for each profile, which confines it to terrain: a cylinder or a
-cube is not a function of `(x, y)`. Here the surface normal comes from `jax.grad`
-(see `normal`), so adding a shape means writing its distance function and
-nothing else.
+cube is not a function of `(x, y)`. Here the surface normal comes from
+`jax.grad` (see `normal`), so adding a shape means writing its distance function
+and nothing else.
 
 Shapes compose. `union`, `intersection` and `difference` are the usual
 constructive-solid-geometry operators, and `translate`/`rotate` move a shape
@@ -144,7 +158,9 @@ def box(
   c = _as_point(center)
   h = _as_point(half_extents)
   if bool(jnp.any(h <= 0.0)):
-    raise ValueError(f'`half_extents` must all be positive, got {half_extents}.')
+    raise ValueError(
+        f'`half_extents` must all be positive, got {half_extents}.'
+    )
 
   rot = None if rotation_deg is None else _rotation_matrix(rotation_deg)
 
@@ -215,7 +231,9 @@ def cylinder(
   return phi
 
 
-def plane(point: Sequence[float], normal_vec: Sequence[float]) -> SignedDistanceFn:
+def plane(
+    point: Sequence[float], normal_vec: Sequence[float]
+) -> SignedDistanceFn:
   """A half-space, with the fluid on the side the normal points toward.
 
   Args:
@@ -230,7 +248,9 @@ def plane(point: Sequence[float], normal_vec: Sequence[float]) -> SignedDistance
   n = _as_point(normal_vec)
   norm = jnp.linalg.norm(n)
   if float(norm) < _EPS:
-    raise ValueError(f'`normal_vec` must have non-zero length, got {normal_vec}.')
+    raise ValueError(
+        f'`normal_vec` must have non-zero length, got {normal_vec}.'
+    )
   n = n / norm
 
   def phi(xyz: jax.Array) -> jax.Array:

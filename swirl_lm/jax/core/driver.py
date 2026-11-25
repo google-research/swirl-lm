@@ -111,9 +111,8 @@ from jax.sharding import PartitionSpec as P  # pylint: disable=g-importing-membe
 import numpy as np
 from swirl_lm.base import parameters_pb2
 from swirl_lm.jax.base import parameters as parameters_lib
+from swirl_lm.jax.boundary_condition import boundary_condition
 from swirl_lm.jax.boundary_condition import boundary_condition_utils
-from swirl_lm.jax.boundary_condition import immersed_boundary_ghost_point as ghost_point_lib
-from swirl_lm.jax.boundary_condition import nonreflecting_boundary
 from swirl_lm.jax.core import simulation as simulation_lib
 from swirl_lm.jax.io import checkpoint as checkpoint_lib
 from swirl_lm.jax.physics.lpt import lpt
@@ -243,13 +242,13 @@ def _get_state_keys(
   # Add LPT keys if configured.
   additional_keys += lpt.required_keys(params.lpt)
 
-  # Add the immersed boundary ghost-point keys if that method is configured.
-  # The geometry arrays are solver internals, so a configuration should not
-  # have to name them; the model declares them instead. Keys a config already
-  # lists -- `ib_interior_mask` is a common one -- are not duplicated.
+  # Add the keys the boundary conditions need. Their internal arrays are
+  # solver internals, so a configuration should not have to name them; the
+  # boundary conditions declare them instead. Keys a config already lists --
+  # `ib_interior_mask` is a common one -- are not duplicated.
   additional_keys += [
       key
-      for key in ghost_point_lib.required_keys(params)
+      for key in boundary_condition.required_keys(params)
       if key not in additional_keys
   ]
 
@@ -357,8 +356,8 @@ def _init_fn(
   if customized_init_fn is not None:
     states.update(customized_init_fn(params, logical_coordinates))
 
-  # Add nonreflecting BC states.
-  states.update(nonreflecting_boundary.nonreflecting_bc_state_init_fn(params))
+  # Add the states the boundary conditions maintain.
+  states.update(boundary_condition.initial_states(params))
 
   return states
 
@@ -654,7 +653,7 @@ def _update_additional_states(
 
   Mirrors TF `_update_additional_states`. Performs:
     1. Clear `src_*` source terms from the previous step.
-    2. Update nonreflecting BC states.
+    2. Update boundary condition states.
     3. Update LPT states.
     4. Call user-defined `additional_states_update_fn`.
 
@@ -677,9 +676,9 @@ def _update_additional_states(
     if varname.startswith('src_'):
       updated[varname] = jnp.zeros_like(updated[varname])
 
-  # 2. Update nonreflecting BC states.
+  # 2. Update boundary condition states.
   updated.update(
-      nonreflecting_boundary.nonreflecting_bc_state_update_fn(
+      boundary_condition.update_additional_states(
           params, essential_states, additional_states, step_id  # pyrefly: ignore[bad-argument-type]
       )
   )
@@ -706,8 +705,8 @@ def _update_additional_states(
 
     # `updated` is passed in rather than the original `additional_states`, and
     # the result is merged rather than substituted. Both matter: the user
-    # function has to see the cleared source terms and the fresh nonreflecting
-    # boundary condition states, and rebinding `updated` here would discard
+    # function has to see the cleared source terms and the fresh boundary
+    # condition states, and rebinding `updated` here would discard
     # steps 1 and 2 outright. The TF original gets away with the same
     # substitution because there `updated` is an alias of `additional_states`
     # and those steps mutate it in place; this port copies the dict, which
@@ -916,15 +915,11 @@ def _save_checkpoint(
       if TIME_VARNAME in states
       else step * grid_params.dt
   )
-  # The immersed boundary's packed index and weight arrays are solver
-  # internals: five-dimensional, meaningless outside `shard_map`, and
-  # unchanging. Its *fields* -- the masks and the signed distance -- are
-  # ordinary 3D states and are kept, because they are what post-processing
-  # uses to cut the body out of a plot.
-
-  # Logged before the write as well as after to detect potentially  stalled
-  # `to_zarr`.
+  # Logged before the write too, so a stalled `to_zarr` shows.
   logging.info('Writing checkpoint: %s', ckpt_path)
+  # Boundary conditions may keep solver internals in the state that do not
+  # belong in a checkpoint. Which keys those are is the boundary condition
+  # library's call; everything else is written.
   checkpoint_lib.save(
       states,
       grid_params,
@@ -934,7 +929,7 @@ def _save_checkpoint(
       fields=[
           key
           for key in states
-          if not ghost_point_lib.is_geometry_key(key)
+          if not boundary_condition.exclude_from_checkpoint(key)
       ],
   )
   logging.info('Checkpoint saved: %s', ckpt_path)
@@ -990,6 +985,8 @@ def run_simulation(
     num_steps_per_cycle: Number of time steps per cycle. Higher values reduce
       Python loop overhead but delay IO. Default is 1.
     checkpoint_dir: Directory for zarr checkpoints. If None, no checkpointing.
+    checkpoint_interval: Save a checkpoint every N cycles. 0 = no periodic
+      saves.
     probe_fn: An optional diagnostic evaluated on the state after every step,
       inside `shard_map`, returning a scalar. Use it for anything that has to
       be sampled at the step rate -- a shedding frequency, say -- where
@@ -1000,8 +997,6 @@ def run_simulation(
     probe_sink: Called once per cycle with that cycle's samples, as a NumPy
       array of length `num_steps_per_cycle`. Accumulating them is the
       caller's business.
-    checkpoint_interval: Save a checkpoint every N cycles. 0 = no periodic
-      saves.
     profile_dir: Where to write an XProf trace of one cycle. Default is None
       (no profiling). Under more than one process each writes into its own
       `process_NNN` subdirectory, because the profiler names its files after the
@@ -1122,13 +1117,13 @@ def run_simulation(
   def _shard_map_cycle_body(
       state: dict[str, ScalarField],
       init_step_id: jax.Array,
-  ) -> dict[str, ScalarField]:
+  ) -> tuple[dict[str, ScalarField], jax.Array]:
     """Step body that runs inside shard_map (per-device)."""
 
     def step_body(
         carry: tuple[dict[str, ScalarField], jax.Array],
         _: None,
-    ) -> tuple[tuple[dict[str, ScalarField], jax.Array], None]:
+    ) -> tuple[tuple[dict[str, ScalarField], jax.Array], jax.Array]:
       state_carry, step_id = carry
 
       # Split state into essential and additional.

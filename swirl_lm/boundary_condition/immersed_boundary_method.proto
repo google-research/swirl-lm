@@ -185,6 +185,8 @@ message IBGeometry {
 message GhostPointMethod {
   // How the computed ghost value reaches the solver.
   enum Enforcement {
+    // Not a valid choice. Leaving `enforcement` unset selects DIRECT.
+    ENFORCEMENT_UNKNOWN = 0;
     // Assign the ghost value directly, as in the paper. No tunable constant.
     DIRECT = 1;
     // Relax towards it with `-damping_coeff * (u - u_ghost)`, matching the
@@ -254,8 +256,8 @@ message ImmersedBoundaryMethod {
     MarkerAndCellMethod mac = 2;
     RayleighDampingMethod sponge = 3;
     DirectForcingMethod direct_forcing = 4;
-    DirectForcing1DInterp direct_forcing_1d_interp = 6;
-    FeedbackForce1DInterp feedback_force_1d_interp = 5;
+    DirectForcing1DInterp direct_forcing_1d_interp = 6;  // NOLINT: legacy name
+    FeedbackForce1DInterp feedback_force_1d_interp = 5;  // NOLINT: legacy name
     GhostPointMethod ghost_point = 7;
   }
 }

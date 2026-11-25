@@ -34,7 +34,7 @@ in a distributed setting.
 """
 
 import abc
-from typing import Callable
+from typing import Any, Callable
 
 import jax
 from jax import sharding
@@ -129,7 +129,9 @@ class PoissonSolver(object):
     # widths, which means building their own exchange rather than reusing the
     # caller's closure. Declared here rather than on `MultigridSolver` for use
     # with every solver.
-    self.boundary_conditions = []
+    self.boundary_conditions: (
+        halo_exchange.BoundaryConditionsSpec | list[Any]
+    ) = []
 
   def _laplacian_terms(
       self,

@@ -11,6 +11,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """Flow past a circular cylinder, the immersed boundary validation case.
 
 This is the case Ghias, Mittal and Dong use to validate their ghost-cell
@@ -46,11 +60,11 @@ Eq. 32, which is not implemented. `recirculation_length` and
 import math
 from typing import Any
 
+from google.protobuf import text_format
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from google.protobuf import text_format
 from swirl_lm.base import parameters_pb2
 from swirl_lm.jax.base import parameters as parameters_lib
 from swirl_lm.jax.boundary_condition import immersed_boundary_ghost_point
@@ -101,7 +115,9 @@ class Cylinder:
 
     # Physical extents. The cylinder sits `length_upstream` diameters from
     # the inflow so the wake has room to develop downstream.
-    self.lx = (self.case.length_upstream + self.case.length_downstream) * diameter
+    self.lx = (
+        self.case.length_upstream + self.case.length_downstream
+    ) * diameter
     self.ly = 2.0 * self.case.half_width * diameter
     self.lz = self.case.span * diameter
     self.center = (
@@ -146,7 +162,7 @@ class Cylinder:
     # The immersed boundary. The geometry comes from the generated config, so
     # the solver and the diagnostics below describe the same body.
     self.geometry_fn = immersed_boundary_ghost_point.geometry_from_proto(
-        self.params.boundary_models.ib.ghost_point.geometry
+        self.params.boundary_models.ib.ghost_point.geometry  # pylint: disable=attribute-error
     )
     self._ghost_points: Any = None
 
@@ -365,8 +381,8 @@ class Cylinder:
       return f'boundary_conditions {{\n  name: "{name}"\n{body}\n}}'
 
     pressure_faces = '\n'.join(
-        f'  boundary_info {{ dim: {d} location: {l} '
-        'type: BC_TYPE_NEUMANN value: 0.0 }'
+        '  boundary_info '  # pylint: disable=g-complex-comprehension
+        f'{{ dim: {d} location: {l} type: BC_TYPE_NEUMANN value: 0.0 }}'
         for d in (0, 1)
         for l in (0, 1)
     )
@@ -464,7 +480,7 @@ boundary_models {{
       The `GhostPointGeometry` for this case.
     """
     if self._ghost_points is None:
-      config = self.params.boundary_models.ib.ghost_point
+      config = self.params.boundary_models.ib.ghost_point  # pylint: disable=attribute-error
       self._ghost_points = immersed_boundary_ghost_point.GhostPointGeometry(
           self.geometry_fn,
           self.gp,
@@ -657,7 +673,11 @@ boundary_models {{
     # removes that quantisation.
     offset = 0.0
     if 0 < peak < spectrum.size - 1:
-      left, middle, right = spectrum[peak - 1], spectrum[peak], spectrum[peak + 1]
+      left, middle, right = (
+          spectrum[peak - 1],
+          spectrum[peak],
+          spectrum[peak + 1],
+      )
       denominator = left - 2.0 * middle + right
       if abs(denominator) > 1e-30:
         offset = 0.5 * (left - right) / denominator

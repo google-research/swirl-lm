@@ -35,15 +35,67 @@ interpolation).
 Coarsening is per axis. Each level halves whichever axes can be halved and
 leaves the rest at full resolution, so the grid does not have to be a power
 of two and a thin axis does not cap the hierarchy at the depth it alone can
-reach. For an operator whose spacing is far larger along one axis that is not
-a concession but the right coarse space: the smoother leaves error that is
-smooth only along the strongly coupled axes, and those are the axes the
-coarse grid has to represent.
+reach. The axes are chosen by extent and parity alone, never by spacing, so
+this is not semi-coarsening matched to an anisotropic operator, and a
+hierarchy that can be built is not thereby one the cycle converges on; see
+"Known limitations" below.
+
+Nothing is padded or interpolated to make an extent a power of two. An axis is
+halved while its per-core interior extent (`grid_size` less the halos) is even
+and the result stays at or above the floors in `_coarsenable_axes`; after that
+it is carried at the extent it reached while the other axes go on. With the
+default floor of 8 on one device, 24 goes to 12 and stops (6 is below the
+floor), 36 goes to 18 and then to 9 (odd), 30 goes to 15, and 15 is never
+halved. The price is paid at the bottom of the hierarchy, which is smoothed
+rather than solved and is now longer than 8 along that axis, so the smoothest
+error there is removed more slowly; an extent with few factors of two
+(250 = 2 * 125) pays the most. A grid on which no axis can be halved is
+rejected in the constructor.
+
+Known limitations. The smoother is weighted Jacobi with one weight for every
+level, and the bottom level is smoothed rather than solved. A level that
+halves only some of the axes leaves a coarse operator that is anisotropic even
+on a grid of uniform spacing, and on such an operator this smoother can be
+unstable at the default weight (see the TODO in `_smooth`). The constructor
+accepts every grid below, and `solve` does not check its result, so a
+diverged solve returns `inf` or NaN rather than raising. Measured with the
+default weight of 2/3, uniform spacing and Dirichlet faces on the long axes,
+unless noted; the tests named are in `multigrid_solver_test`:
+
+* All axes halved together, at least on the first level (16^3, 32^3,
+  18 x 16 x 16, 24 x 32 x 32): converges, the residual falling by a factor of
+  about 0.21 per cycle.
+* Quasi-two-dimensional with one coarsening, the thin span never being halved
+  (16 x 16 x 4, 16 x 16 x 2): converges, at 0.37 to 0.38 per cycle over the
+  first six cycles.
+* Quasi-two-dimensional with two coarsenings (32 x 32 x 4, 32 x 32 x 2,
+  24 x 40 x 4): diverges. After six cycles the residual has overflowed on the
+  32 x 32 grids with a periodic span and exceeds 1e11 on the others; after 30
+  it is NaN on every one. On 32 x 32 x 4 with a periodic span a weight of 0.4
+  converges and 0.5 does not (`test_quasi_two_dimensional_grid_converges`).
+* Quasi-one-dimensional, a single axis being halved two or three times
+  (64 x 8 x 8, 64 x 4 x 4, 64 x 2 x 2, 48 x 4 x 4): stagnates. The residual
+  falls, but after 30 cycles the error is still more than half of the
+  solution, and a lower weight does not help
+  (`test_quasi_one_dimensional_grid_converges`).
+* Spacing along one axis half that along the others (32 x 16 x 16, mixed
+  faces): diverges (`test_anisotropic_grid_converges`).
+
+Until these are fixed, do not use this solver on a quasi-one- or
+quasi-two-dimensional grid whose long axes are halved more than once, or on
+an anisotropic grid.
 
 This is the JAX port of `swirl_lm.linalg.multigrid`. The multigrid algorithm
 operates on single-device 3D arrays using JAX operations.
 """
 
+
+# pylint: disable=g-bad-todo
+# TODO: The V-cycle is symmetric (R = P^T, matching pre- and
+# post-smoothing), so it can serve as the `preconditioner` of
+# `conjugate_gradient_solver`, which would also bring CG's reprojection and
+# tolerance handling. Offer that, and benchmark wall-clock time against
+# `fast_diagonalization_solver` on constant-coefficient grids.
 
 import functools
 from typing import Callable, NamedTuple
@@ -89,6 +141,10 @@ def _interior_diagonal(
   Returns:
     The diagonal entry, as a scalar.
   """
+  # TODO: The impulse is float32 regardless of the field's dtype; take
+  # the dtype from the caller. The probe also runs on every `solve` (once per
+  # level, at fine-grid cost because the operators are nested); compute the
+  # diagonal once, or analytically from assembled stencils.
   centre = tuple(extent // 2 for extent in shape)
   impulse = jnp.zeros(shape, jnp.float32).at[centre].set(1.0)
   return operator(impulse)[centre]
@@ -115,6 +171,17 @@ def _smooth(
   Returns:
     The smoothed iterate.
   """
+  # TODO: A fixed `weight` is unstable on the Galerkin levels: there
+  # lambda_max(D^-1 A) reaches 2.8 to 5.1 (2.0 on the fine grid), so
+  # `weight * lambda_max > 2` and each sweep amplifies the most oscillatory
+  # mode; anisotropic grids diverge (`test_anisotropic_grid_converges`), and so
+  # do uniform quasi-two-dimensional grids once two levels halve the long axes
+  # alone (`test_quasi_two_dimensional_grid_converges`; on 32 x 32 x 4 a weight
+  # of 0.4 converges and 0.5 does not). Scale the weight per level by a bound
+  # on the spectrum, e.g. the Gershgorin bound `||A e||_1 / |a_ii|` read from
+  # the same probe as `_interior_diagonal` (exactly 2 on the fine grid, so
+  # `weight * 2 / bound` leaves it unchanged there), or switch to a Chebyshev
+  # smoother.
 
   def sweep(_, current):
     return current + weight * (b - operator(current)) / diagonal
@@ -160,6 +227,10 @@ def _make_exchange(mesh, grid_params, boundary_conditions):
     A function taking a field and an array axis and returning the two planes
     immediately outside that axis's faces.
   """
+  # TODO: Each call pads the whole field to obtain two planes, and
+  # `_restrict_axis` makes two calls and keeps one plane of each. Derive the
+  # planes from the edge planes and the boundary condition on an unpartitioned
+  # axis, and `ppermute` only the edge planes on a partitioned one.
 
   def exchange(u: jnp.ndarray, axis: int):
     axis_name = grid_params.data_axis_order[axis]
@@ -194,6 +265,13 @@ def _coarsen_operator(error, fine_operator, exchange, axes):
   Returns:
     The coarse operator applied to `error`.
   """
+  # TODO: Nesting makes every coarse operator cost a fine-grid Laplacian,
+  # its halo exchange and 2k transfers, so coarse levels never get cheaper and
+  # a V-cycle costs several times the optimal work. The fine operator is a
+  # Kronecker sum and P is a tensor product, so the Galerkin operator is
+  # exactly `sum_d A_d ⊗ M_e ⊗ M_f` with `A_d <- P_d^T A_d P_d`,
+  # `M_d <- P_d^T M_d P_d` (pentadiagonal 1D factors, boundary rows included).
+  # Assemble those factors once and apply them in O(N_k).
   return _restrict(
       fine_operator(_prolongate(error, exchange, axes)), exchange, axes
   )
@@ -219,6 +297,8 @@ def _shift_up(
   Returns:
     The shifted field.
   """
+  # TODO: `roll` computes a wrap-around that `.at[].set` then discards;
+  # concatenate a slice with the plane instead. Same in `_shift_down`.
   shifted = jnp.roll(u, -1, axis=axis)
   return shifted.at[_last(u, axis)].set(beyond_high)
 
@@ -296,6 +376,16 @@ def _restrict_axis(fine: jnp.ndarray, axis: int, exchange) -> jnp.ndarray:
   Returns:
     The field with `axis` halved.
   """
+  # TODO: Not the transpose on a periodic face or at an inter-device
+  # seam. The crossing below is right where the outside cell is a reflection
+  # (Neumann) or zero (Dirichlet), but where it is a copy of another cell the
+  # transpose needs `lower`'s own neighbour. The cycle is then non-symmetric
+  # and depends on the partition
+  # (`test_restriction_is_the_transpose_of_prolongation_periodic`,
+  # `test_one_cycle_is_symmetric_with_periodic_faces_and_seams`). Define the
+  # restriction as the transpose of `_prolongate` (e.g. `jax.vjp`), which is
+  # exact for every boundary and seam and needs one reverse exchange per axis
+  # instead of two.
   lower = jax.lax.slice_in_dim(fine, 0, fine.shape[axis], stride=2, axis=axis)
   upper = jax.lax.slice_in_dim(fine, 1, fine.shape[axis], stride=2, axis=axis)
 
@@ -372,8 +462,10 @@ def _prolongate(
 #
 # It bounds coarsened axes only, and an axis the hierarchy never halves keeps
 # the three-point stencil it started with, so there is no five-point support to
-# clip and a short axis cannot clip one. A four-cell span is safe for exactly
-# that reason.
+# clip and a short axis cannot clip one. A four-cell span is safe from
+# clipping for exactly that reason, and that is all it is safe from: how the
+# cycle behaves on a grid with such a span is under "Known limitations" in the
+# module docstring.
 _MIN_COARSEST_EXTENT = 8
 
 # The smallest a per-core block may become. Two cells would be enough for the
@@ -387,6 +479,10 @@ _MIN_PER_CORE_EXTENT = 4
 # It counts coarsenings rather than axis halvings because every candidate
 # scales with the number of nested `R A P` wrappings, and a level adds one of
 # those however many axes it touches.
+# TODO: Likely candidates: the smoother instability noted in `_smooth`
+# (lambda_max(D^-1 A) grows with depth), and float32 cancellation from
+# evaluating each coarse operator through the fine one. Lift the cap once the
+# coarse operators are assembled and the smoother weight is bounded.
 _MAX_COARSENINGS = 4
 
 
@@ -439,6 +535,11 @@ def _coarsenable_axes(
   Returns:
     The indices of the coarsenable axes, ascending.
   """
+  # TODO: Axes are chosen by extent and parity alone, never by spacing,
+  # so a strongly anisotropic grid coarsens its weakly coupled axes too and
+  # point Jacobi cannot smooth what is left. Coarsen only the axes whose
+  # spacing is within about sqrt(2) of the smallest (as PFMG does), or add
+  # line relaxation along the strongly coupled axis.
   return tuple(
       axis
       for axis, (extent, cores_, coarsest_) in enumerate(
@@ -499,6 +600,11 @@ def _validate_coarsenable(
     here rather than silently costing a hierarchy's compile time to run weighted
     Jacobi.
 
+  Passing this check says that a hierarchy can be built, not that the cycle
+  converges on it. A quasi-one- or quasi-two-dimensional grid passes, since
+  its long axes can be halved, and then stagnates or diverges; see "Known
+  limitations" in the module docstring.
+
   Order is in x, y, z rather than array axis order.
 
   Args:
@@ -543,7 +649,7 @@ def _validate_coarsenable(
     else:
       # Only offer to lower the floor when there is room to lower it.
       remedy = (
-          f'raise `grid_size.{name}`'
+          f'raise `grid_size.{name}`'  # pylint: disable=g-long-ternary
           if coarsest_ <= _MIN_COARSEST_EXTENT
           else (
               f'raise `grid_size.{name}` or lower '
@@ -566,9 +672,13 @@ def _validate_coarsenable(
       f'`coarsest_subgrid_shape`, which is {coarsest_xyz}. '
       + '; '.join(reasons)
       + f'. Note `grid_size` counts the halos, so the interior is '
-      f'`grid_size - 2 * {halo}`. Coarsening is per axis, so one axis is '
-      'enough and a thin periodic span does not have to be widened. Use the '
-      'Jacobi or conjugate gradient solver for a grid that cannot give one.'
+      f'`grid_size - 2 * {halo}`. Coarsening is per axis, so one axis that '
+      'can be halved is enough for the grid to be accepted. Accepted is not '
+      'the same as converging: on a grid that keeps a thin span while its '
+      'other axes are halved more than once (quasi-one- or '
+      'quasi-two-dimensional), the cycle stagnates or diverges at the default '
+      '`weight`. Use the Jacobi or conjugate gradient solver for a grid that '
+      'cannot give an axis to halve, and for such a thin grid.'
   )
 
 
@@ -598,7 +708,13 @@ def _validate_coarsest_shape(shape: tuple[int, ...]) -> None:
 
 
 class MultigridSolver(base_poisson_solver.PoissonSolver):
-  """Multigrid Poisson solver using V-cycle with Jacobi smoothing."""
+  """Multigrid Poisson solver using V-cycle with Jacobi smoothing.
+
+  Converges on grids whose axes are halved together. It accepts, but stagnates
+  or diverges on, quasi-one- and quasi-two-dimensional grids whose long axes
+  are halved more than once, and anisotropic grids; see "Known limitations" in
+  the module docstring.
+  """
 
   def __init__(
       self,
@@ -638,6 +754,8 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
 
     mg_config = solver_option.multigrid
 
+    # TODO: `use_a_inv` (default true) and `boundary_condition` in the
+    # proto are read nowhere; honour them or reject them.
     self._num_iterations = mg_config.num_iterations
     self._n_smooth = mg_config.n_smooth
     self._weight = mg_config.weight
@@ -736,11 +854,22 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
       # Nothing coarser to fall back on, so smooth harder instead. Testing
       # the axes rather than the position in the list also rules out
       # descending through a transfer pair that would do nothing.
+      # TODO: Solve here instead of smoothing. A few Jacobi sweeps
+      # barely reduce the smoothest error on a coarsest grid that can still be
+      # 16^3 or more, so convergence degrades as the grid grows. With
+      # assembled Kronecker factors this is an exact fast-diagonalization
+      # solve (pseudo-inverse when singular); otherwise a fixed number of CG
+      # iterations.
       return _smooth(
           u, b, operator, diagonal, self._weight, self._n_smooth * 4
       )
 
     coarse_residual = _restrict(b - operator(u), self._exchange, axes)
+    # TODO: The first pre-smoothing sweep on this zero guess computes
+    # `operator(0)`; start it as `weight * b / diagonal`. Also replace the
+    # Python loops here and over `num_iterations` in `solve` with
+    # `lax.fori_loop`: unrolled, the trace grows with
+    # `num_iterations * n_coarse**levels`.
     coarse_error = jnp.zeros_like(coarse_residual)
     for _ in range(max(self._n_coarse, 1)):
       coarse_error = self._v_cycle(
@@ -777,6 +906,15 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
     the coarsest grid gets is a cost in convergence per cycle rather than an
     error. An axis that never coarsens keeps its full extent there, which on
     a quasi-two-dimensional grid is the bulk of what the bottom level holds.
+
+    The cycle is not guaranteed to converge on every grid the constructor
+    accepts. On a quasi-two-dimensional grid whose long axes are halved twice
+    it diverges at the default weight, and on a quasi-one-dimensional grid it
+    stagnates; see "Known limitations" in the module docstring. Nothing here
+    checks for that: the cycles are run to `num_iterations` regardless, and a
+    diverged solve returns `inf` or NaN in the solution and the residual norm
+    rather than raising, so a caller on such a grid has to check the returned
+    residual itself.
 
     Args:
       rhs: The right hand side.
@@ -835,10 +973,17 @@ class MultigridSolver(base_poisson_solver.PoissonSolver):
           'reuse it. `Pressure` sets this from `_build_dp_bc`; a caller '
           'constructing the solver directly must set it too.'
       )
+    # pylint: disable=g-bad-todo
+    # TODO: Pass the exchange to `_hierarchy` and `_v_cycle` explicitly
+    # rather than storing it on `self` inside a traced function.
     self._exchange = _make_exchange(
         mesh, self._grid_params, self.boundary_conditions
     )
 
+    # TODO: With no Dirichlet face the operator is singular and nothing
+    # removes the mean: any mean in `b` cannot be reduced, so the residual
+    # floors and `x` drifts by a constant every sweep. Remove the global mean
+    # from `b` in that case, as conjugate gradient's `reprojection` does.
     b = rhs[interior]
     x = p0[interior]
 

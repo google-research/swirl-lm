@@ -11,6 +11,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """A simulation of a grassland fire over terrain (JAX port).
 
 This mirrors the TensorFlow `swirl_lm.example.fire.fire.Fire` class: the
@@ -208,7 +222,7 @@ class Fire:
 
     # The immersed boundary method for the terrain representation.
     self.ib = (
-        immersed_boundary_method.ImmersedBoundaryMethod(self.config)
+        immersed_boundary_method.ImmersedBoundaryMethod(self.config)  # pylint: disable=g-long-ternary
         if self.config.boundary_models is not None
         and self.config.boundary_models.HasField('ib')
         else None
@@ -439,6 +453,10 @@ class Fire:
     ax_z = gp.get_axis_index('z')
 
     def pmfc(value_fn, pad_mode='SYMMETRIC'):
+      if value_fn is None:
+        raise ValueError(
+            'pmfc called with value_fn=None, which is not allowed.'
+        )
       return self._partial_mesh_for_core(
           params, logical_coordinates, value_fn, pad_mode
       )
@@ -453,6 +471,8 @@ class Fire:
       )
     else:
       terrain_height_fn = lambda xx, yy, zz, lx, ly, lz: jnp.zeros_like(zz)
+      flow_field_mask_fn = None
+      ib_boundary_mask_fn = None
 
     def rho_f_init_fn(xx, yy, zz, lx, ly, lz):
       """Generates the initial `rho_f` field."""
@@ -748,7 +768,7 @@ class Fire:
     if self.include_fire:
       # Update the turbulent kinetic energy for the combustion source term.
       tke_update_fn = turbulent_kinetic_energy.tke_update_fn_manager(
-          self.config.combustion.wood.tke
+          self.config.combustion.wood.tke  # pylint: disable=attribute-error
       )
       updated.update(
           tke_update_fn(
@@ -764,7 +784,7 @@ class Fire:
       # Update the solid states and the reaction source terms for the
       # potential temperature and the oxygen mass fraction.
       updated.update(
-          self.combustion.dry_wood_update_fn(
+          self.combustion.dry_wood_update_fn(  # pylint: disable=attribute-error
               rho_f_init=additional_states.get('rho_f_init')
           )(
               replica_id=jnp.int32(0),

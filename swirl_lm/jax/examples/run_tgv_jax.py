@@ -11,6 +11,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """Run a small Taylor-Green Vortex case with the JAX Swirl-LM solver.
 
 This is a standalone version of
@@ -31,16 +45,16 @@ On MacOS, only CPU is supported! Run with:
 from __future__ import annotations
 
 import argparse
-import time
 from collections.abc import Sequence
+import time
 
 from google.protobuf import text_format
 import jax
 from jax.experimental import shard_map
 import jax.experimental.mesh_utils
 import jax.numpy as jnp
-from jax.sharding import Mesh
-from jax.sharding import PartitionSpec as P
+from jax.sharding import Mesh  # pylint: disable=g-importing-member
+from jax.sharding import PartitionSpec as P  # pylint: disable=g-importing-member
 from swirl_lm.base import parameters_pb2
 from swirl_lm.jax.base import parameters as parameters_lib
 from swirl_lm.jax.core import simulation as simulation_lib
@@ -192,7 +206,9 @@ def _validate_final_state(states: dict[str, jax.Array]) -> None:
   """Raises an exception if required variables are absent or non-finite."""
   missing = [key for key in _STATE_KEYS if key not in states]
   if missing:
-    raise RuntimeError(f"Simulation output is missing state variables: {missing}")
+    raise RuntimeError(
+        f"Simulation output is missing state variables: {missing}"
+    )
 
   non_finite = [
       key for key in _STATE_KEYS if not bool(jnp.all(jnp.isfinite(states[key])))
@@ -269,6 +285,7 @@ def run_tgv(
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+  """Parses command-line arguments."""
   parser = argparse.ArgumentParser(
       description="Run a small single-device Taylor-Green Vortex in JAX."
   )

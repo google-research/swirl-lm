@@ -95,6 +95,40 @@ def ib_info_map(
     )
 
 
+def required_keys(params: parameters_lib.SwirlLMParameters) -> list[str]:
+  """Returns the additional state keys the configured IB method needs.
+
+  A method declares the state it needs, so that a configuration does not have
+  to list the method's internal arrays by hand. Methods that declare nothing,
+  and a configuration without an immersed boundary, give an empty list.
+
+  Args:
+    params: The simulation parameters.
+
+  Returns:
+    The additional state keys to allocate.
+  """
+  return ghost_point.required_keys(params)
+
+
+def exclude_from_checkpoint(key: str) -> bool:
+  """Whether `key` is immersed boundary state that checkpoints leave out.
+
+  The packed index and weight arrays of the ghost-point method are the case
+  in point: five-dimensional, meaningless outside `shard_map`, and
+  unchanging. The helper fields -- the masks and the signed distance -- are
+  ordinary 3D states and are kept, because they are what post-processing uses
+  to cut the body out of a plot.
+
+  Args:
+    key: A state name.
+
+  Returns:
+    True if the key should be left out of checkpoints.
+  """
+  return ghost_point.is_geometry_key(key)
+
+
 class ImmersedBoundaryMethod:
   """A library of the immersed boundary method for the JAX solver."""
 
@@ -109,6 +143,15 @@ class ImmersedBoundaryMethod:
         boundary_models := params.boundary_models
     ) is not None, '`boundary_models` must be set in the config.'
     self._ib_params = boundary_models.ib
+    if (
+        self.type == 'ghost_point'
+        and self._ib_params.ghost_point.enforcement
+        == immersed_boundary_method_pb2.GhostPointMethod.ENFORCEMENT_UNKNOWN
+    ):
+      raise ValueError(
+          '`ghost_point.enforcement` must be DIRECT or FORCING, or left unset'
+          ' to select DIRECT.'
+      )
 
   @property
   def type(self) -> str:

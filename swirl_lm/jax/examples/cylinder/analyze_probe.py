@@ -11,7 +11,21 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Re-reads a saved wake probe and reports the shedding frequency.
+
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+r"""Re-reads a saved wake probe and reports the shedding frequency.
 
 The probe record is written by `cylinder_main` as `wake_probe.npy`, one
 sample per step. The frequency can be re-examined without repeating the
@@ -86,7 +100,7 @@ def main(_):
       signal.size * simulation.dt * simulation.u_inf
   )
   verdict = (
-      'consistent with the window lengths'
+      'consistent with the window lengths'  # pylint: disable=g-long-ternary
       if spread < 4.0 * finest_bin
       else 'larger than the window lengths explain, so the record probably '
       'still contains transient'

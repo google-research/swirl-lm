@@ -8,7 +8,6 @@ The present case is used as validation of the immersed boundary method
 and as a simple test case to examine the convergence of different
 Poisson solvers.
 
-
 ## How to run
 
 The case can be run via the provided runner `run_cylinder.sh` or by
@@ -221,9 +220,9 @@ between 0.162 and 0.168 (see Fig. 12, p. 546).
 
 For reference, Strouhal numbers at different solver settings are provided
 in the table below. All simulations were run at `Re = 100` on the same mesh,
-640 x 400 x 4 points decomposed over 2x2x1 GPUs (A100), with `num_sub_iterations: 3`
-(cluster: NERSC Perlmutter, Lawrence Berkeley National Laboratory,
-interactive queue).
+640 x 400 x 4 points decomposed over 2x2x1 GPUs (A100), with
+`num_sub_iterations: 3` (cluster: NERSC Perlmutter, Lawrence Berkeley National
+Laboratory, interactive queue).
 Times are `compute_time` per 200-step cycle at steady state; cycle 0 carries
 the JIT compile and is excluded. The Poisson column is the total minus the
 6.49 s that is not the pressure solve. St is computed from 4000 samples,
@@ -240,7 +239,8 @@ about ten shedding periods.
 | Multigrid | 2 | 2 | 1 V-cycle | 9.82 | 3.44x | 3.33 | 0.1658 |
 | **Multigrid** | **2** | **1** | **1 V-cycle** | **7.42** | **4.56x** | **0.93** | **0.1659** |
 
-The last row is obtained by running the simulation with `cylinder_multigrid.pbtxt`.
+The last row is obtained by running the simulation with
+`cylinder_multigrid.pbtxt`.
 At that setting the pressure solve is 12% of the step, against 81% for the
 validated conjugate gradient setting, and the remaining headroom over a free
 Poisson solve is 1.14x.

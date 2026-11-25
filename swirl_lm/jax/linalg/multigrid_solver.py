@@ -227,8 +227,7 @@ def _make_exchange(mesh, grid_params, boundary_conditions):
     A function taking a field and an array axis and returning the two planes
     immediately outside that axis's faces.
   """
-  # TODO: Each call pads the whole field to obtain two planes, and
-  # `_restrict_axis` makes two calls and keeps one plane of each. Derive the
+  # TODO: Each call pads the whole field to obtain two planes. Derive the
   # planes from the edge planes and the boundary condition on an unpartitioned
   # axis, and `ppermute` only the edge planes on a partitioned one.
 
@@ -376,28 +375,14 @@ def _restrict_axis(fine: jnp.ndarray, axis: int, exchange) -> jnp.ndarray:
   Returns:
     The field with `axis` halved.
   """
-  # TODO: Not the transpose on a periodic face or at an inter-device
-  # seam. The crossing below is right where the outside cell is a reflection
-  # (Neumann) or zero (Dirichlet), but where it is a copy of another cell the
-  # transpose needs `lower`'s own neighbour. The cycle is then non-symmetric
-  # and depends on the partition
-  # (`test_restriction_is_the_transpose_of_prolongation_periodic`,
-  # `test_one_cycle_is_symmetric_with_periodic_faces_and_seams`). Define the
-  # restriction as the transpose of `_prolongate` (e.g. `jax.vjp`), which is
-  # exact for every boundary and seam and needs one reverse exchange per axis
-  # instead of two.
   lower = jax.lax.slice_in_dim(fine, 0, fine.shape[axis], stride=2, axis=axis)
   upper = jax.lax.slice_in_dim(fine, 1, fine.shape[axis], stride=2, axis=axis)
 
-  # What lies past each end. The transpose takes it from the ghost `c[-1]`
-  # appearing inside `lower[0]`, and `c[N]` inside `upper[N-1]`, so the plane
-  # is the exchange's (of the half it belongs to). Note the crossing: the
-  # plane past the high face of `lower` is exchanged from `upper`, and vice
-  # versa. Writing them the other way round keeps adjointness only where the
-  # outside cell is zero, so a Dirichlet face would look correct while a
-  # Neumann one silently was not.
-  _, beyond_high = exchange(upper, axis)
-  beyond_low, _ = exchange(lower, axis)
+  # `lower[N]` and `upper[-1]` are the fine field's own ghosts, `f[2N]` and
+  # `f[-1]`: the neighbour's cell at a seam or periodic wrap, the
+  # condition's at a face. Exact wherever a ghost copies one cell or is zero,
+  # which covers every condition `_build_dp_bc` emits; not `NEUMANN_2`.
+  beyond_low, beyond_high = exchange(fine, axis)
   return (
       0.75 * (lower + upper)
       + 0.25 * _shift_up(lower, axis, beyond_high)

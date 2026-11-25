@@ -46,6 +46,7 @@ from google.protobuf import text_format
 import jax
 import numpy as np
 
+from swirl_lm.jax.core import distribution
 from swirl_lm.jax.core import driver as driver_lib
 from swirl_lm.jax.examples.cylinder import cylinder
 from swirl_lm.jax.examples.cylinder import cylinder_pb2
@@ -121,12 +122,25 @@ def _check_device_count(case: cylinder_pb2.CylinderCase) -> None:
   wanted = case.cores_x * case.cores_y * case.cores_z
   available = jax.device_count()
   if available < wanted:
+    if jax.process_count() > 1:
+      # `device_count` is already the whole job here, so the shortfall is in
+      # the allocation, not in anything the process could set.
+      remedy = (
+          f'This {jax.process_count()}-process job has '
+          f'{jax.local_device_count()} device(s) per process; ask the '
+          f'scheduler for {wanted} in total.'
+      )
+    else:
+      remedy = (
+          'On GPU, request more devices from the scheduler, or launch one '
+          'task per device so the processes can join into one job; on CPU, '
+          f'set XLA_FLAGS=--xla_force_host_platform_device_count={wanted}.'
+      )
     raise ValueError(
         f'The configuration asks for {wanted} cores '
         f'({case.cores_x}x{case.cores_y}x{case.cores_z}) but JAX sees '
         f'{available} device(s) on the {jax.default_backend()} backend. '
-        'On GPU, request more devices from the scheduler; on CPU, set '
-        f'XLA_FLAGS=--xla_force_host_platform_device_count={wanted}.'
+        + remedy
     )
   if available > wanted:
     logging.warning(
@@ -140,6 +154,10 @@ def _check_device_count(case: cylinder_pb2.CylinderCase) -> None:
 
 
 def main(_):
+  # Before anything that touches the XLA backend, `_check_device_count`
+  # included -- otherwise each node would see only its own GPUs.
+  distribution.initialize()
+
   case = _make_case()
   _check_device_count(case)
   simulation = cylinder.Cylinder(case)
@@ -147,7 +165,9 @@ def main(_):
   params.log_poisson_residual = _LOG_POISSON_RESIDUAL.value
   logging.info('%s', simulation.summary())
 
-  if _DUMP_CONFIG.value and FLAGS.checkpoint_dir:
+  # One writer: every process derives the identical configuration, so letting
+  # them all write would have them truncating the same file concurrently.
+  if _DUMP_CONFIG.value and FLAGS.checkpoint_dir and jax.process_index() == 0:
     os.makedirs(FLAGS.checkpoint_dir, exist_ok=True)
     path = os.path.join(FLAGS.checkpoint_dir, 'derived_config.pbtxt')
     with open(path, 'w') as f:
@@ -173,7 +193,9 @@ def main(_):
   # Below about Re = 47 the wake is steady and the bubble length is the
   # quantity to compare; above it the wake sheds and the bubble length
   # oscillates, so it is reported but should not be read as a validation.
-  if FLAGS.checkpoint_dir and signal.size:
+  # The probe is `psum`-reduced inside the cycle, so every process holds the
+  # same record. One of them writes it.
+  if FLAGS.checkpoint_dir and signal.size and jax.process_index() == 0:
     path = os.path.join(FLAGS.checkpoint_dir, 'wake_probe.npy')
     np.save(path, signal)
     logging.info('Wake probe record (%d samples) written to %s',

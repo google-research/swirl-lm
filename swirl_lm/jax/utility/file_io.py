@@ -18,10 +18,10 @@ import csv
 import logging
 import os.path
 
+from etils import epath
 from google.protobuf import message
 import numpy as np
 from swirl_lm.jax.utility import file_pb2
-import tensorflow as tf
 
 
 
@@ -34,10 +34,10 @@ def parse_csv_file(
     path: Path of the csv file.
 
   Returns:
-    A dictionary mapping column names to a `tf.Tensor` of the column values.
+    A dictionary mapping column names to an array of the column values.
   """
   out = {}
-  with tf.io.gfile.GFile(path, 'r') as f:
+  with epath.Path(path).open('r') as f:
     for i, row in enumerate(csv.DictReader(f)):
       for key, value in row.items():
         out.setdefault(key, []).append(float(value))
@@ -58,7 +58,7 @@ def _load_from_path(path: str) -> str:
   Returns:
     The contents of the file.
   """
-  with tf.io.gfile.GFile(path, 'r') as f:
+  with epath.Path(path).open('r') as f:
     contents = f.read()
   logging.info('Loaded file `%s` from file system.', path)
   return contents
@@ -131,5 +131,6 @@ def copy_files(files: list[file_pb2.File], output_dir: str) -> None:
       continue
     seen_paths.add(source_file.path)
     target_name = unique_basename(source_file.path)
-    with tf.io.gfile.GFile(os.path.join(output_dir, target_name), 'w') as f:
+    target = epath.Path(output_dir) / target_name
+    with target.open('w') as f:
       f.write(load_file(source_file))

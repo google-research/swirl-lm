@@ -168,12 +168,31 @@ def create_mesh(
 
   Returns:
     A JAX Mesh suitable for shard_map execution.
+
+  Raises:
+    ValueError: If a multi-process job's decomposition does not cover every
+      device.
   """
   gp = params.grid_params
   # Reorder (cx, cy, cz) from (x, y, z) order to data_axis_order so that
   # each mesh axis name matches its partition count.
   mesh_shape = gp.to_data_axis_order(gp.cx, gp.cy, gp.cz)
   num_devices = gp.cx * gp.cy * gp.cz
+  # Across processes an unused device is not merely wasted. The prefix can
+  # exclude every device of some process, which then holds no shard of the
+  # state yet still enters the compiled cycle, and the job hangs instead of
+  # failing -- the worst outcome in a batch queue. Refuse it.
+  if jax.process_count() > 1 and jax.device_count() != num_devices:
+    raise ValueError(
+        f'computation_shape is {gp.cx}x{gp.cy}x{gp.cz} = {num_devices}, but '
+        f'this {jax.process_count()}-process job has {jax.device_count()} '
+        f'{jax.default_backend()} devices '
+        f'({jax.local_device_count()} per process). A multi-process run must '
+        'use every device: set cores_x/cores_y/cores_z so their product is '
+        f'{jax.device_count()}, or launch '
+        f'{num_devices // max(jax.local_device_count(), 1)} '
+        f'task(s) of {jax.local_device_count()} device(s).'
+    )
   # Taking a prefix of `jax.devices()` means a computation_shape smaller than
   # the machine runs happily on a subset and leaves the rest idle, with
   # nothing to show for it but the wall-clock time. Say so.
@@ -896,6 +915,8 @@ def _save_checkpoint(
       if TIME_VARNAME in states
       else step * grid_params.dt
   )
+  # Logged before the write too, so a stalled `to_zarr` shows.
+  logging.info('Writing checkpoint: %s', ckpt_path)
   # Boundary conditions may keep solver internals in the state that do not
   # belong in a checkpoint. Which keys those are is the boundary condition
   # library's call; everything else is written.
@@ -927,6 +948,8 @@ def run_simulation(
     checkpoint_interval: int = 0,
     probe_fn: Callable[[dict[str, ScalarField]], jax.Array] | None = None,
     probe_sink: Callable[[np.ndarray], None] | None = None,
+    profile_dir: str | None = None,
+    profile_cycle: int = 1,
 ) -> dict[str, ScalarField]:
   """Runs the simulation for the given number of steps.
 
@@ -974,6 +997,14 @@ def run_simulation(
     probe_sink: Called once per cycle with that cycle's samples, as a NumPy
       array of length `num_steps_per_cycle`. Accumulating them is the
       caller's business.
+    profile_dir: Where to write an XProf trace of one cycle. Default is None
+      (no profiling). Under more than one process each writes into its own
+      `process_NNN` subdirectory, because the profiler names its files after the
+      host and processes sharing a node would otherwise overwrite one another.
+    profile_cycle: The cycle to trace. Never cycle 0: that one compiles the
+      step function, so its trace is the compiler's and holds next to no
+      device work. One cycle is enough, and the whole run would be far too
+      large to open.
 
   Returns:
     The final states dict (globally-sharded arrays).
@@ -1208,18 +1239,52 @@ def run_simulation(
       dict(mesh.shape),
   )
 
+  # Separate directories by process.
+  if profile_dir is not None and jax.process_count() > 1:
+    profile_dir = os.path.join(
+        profile_dir, f'process_{jax.process_index():03d}'
+    )
+
+  # Fail here rather than run to completion and write no trace.
+  if profile_dir is not None and not 0 < profile_cycle < num_cycles:
+    raise ValueError(
+        f'profile_cycle={profile_cycle} is not a cycle this run reaches after'
+        f' the compilation: it has to lie in [1, {num_cycles - 1}], so a'
+        ' profiling run needs at least two cycles.'
+    )
+
   # Main simulation loop (Python cycle loop).
   steps_completed = 0
+
+  # Step of the most recent checkpoint, so the final save can skip a store the
+  # last cycle already wrote.
+  last_checkpoint_step = -1
 
   for cycle_idx in range(num_cycles):
     init_step_id = jnp.int32(steps_completed)
 
-    # Time the compute portion of each cycle.
+    # The window has to close after the block below and not after the
+    # dispatch, or it records a queue of launches and no device work.
+    tracing = profile_dir is not None and cycle_idx == profile_cycle
+    if tracing:
+      jax.profiler.start_trace(profile_dir)
+      logging.info('Tracing cycle %d into %s.', cycle_idx, profile_dir)
+
+    # Time the compute portion of each cycle. The annotation names the cycle
+    # in the trace and costs nothing while no trace is open.
     compute_start = time.time()
-    state, samples = _jit_one_cycle(state, init_step_id)
-    # Block until computation completes (for accurate timing).
-    jax.block_until_ready(state)
+    with jax.profiler.StepTraceAnnotation('cycle', step_num=cycle_idx):
+      state, samples = _jit_one_cycle(state, init_step_id)
+      # Block until computation completes (for accurate timing).
+      jax.block_until_ready(state)
     compute_time = time.time() - compute_start
+
+    if tracing:
+      jax.profiler.stop_trace()
+      # The traced cycle pays the profiler's overhead, so read its
+      # `compute_time` as a trace artifact and not as a measurement.
+      logging.info('Trace of cycle %d written under %s.',
+                   cycle_idx, profile_dir)
 
     if probe_fn is not None and probe_sink is not None:
       probe_sink(np.asarray(samples))
@@ -1267,6 +1332,7 @@ def run_simulation(
         and (cycle_idx + 1) % checkpoint_interval == 0
     ):
       _save_checkpoint(state, gp, steps_completed, checkpoint_dir)
+      last_checkpoint_step = steps_completed
 
     io_time = time.time() - io_start
     logging.info(
@@ -1275,11 +1341,13 @@ def run_simulation(
         io_time,
     )
 
-  # Save final checkpoint. `steps_completed` rather than `num_steps`: the
-  # cycle loop runs `num_steps // num_steps_per_cycle` cycles, so the two
-  # differ whenever that division has a remainder, and `num_steps` would
-  # label the file with steps that were never taken.
-  if checkpoint_dir:
+  # Save final checkpoint, unless the last cycle already wrote this step.
+  # `checkpoint_interval` dividing the cycle count would otherwise write the
+  # same store twice. Using `steps_completed` rather than `num_steps`: the cycle
+  # loop runs `num_steps // num_steps_per_cycle` cycles, so the two differ
+  # whenever that division has a remainder, and `num_steps` would label the file
+  # with steps that were never taken.
+  if checkpoint_dir and steps_completed != last_checkpoint_step:
     _save_checkpoint(state, gp, steps_completed, checkpoint_dir)
 
   logging.info('Simulation completed after %d steps.', steps_completed)

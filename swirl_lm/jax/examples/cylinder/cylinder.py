@@ -595,7 +595,9 @@ boundary_models {{
     """Strips halos and the duplicated device seams from a global field."""
     from swirl_lm.jax.utility import global_layout  # pylint: disable=g-import-not-at-top
 
-    return global_layout.strip_halos_global(np.asarray(field), self.gp)
+    return global_layout.strip_halos_global(
+        global_layout.to_host_array(field), self.gp
+    )
 
   def recirculation_length(self, state: ScalarFieldMap) -> float:
     """Length of the closed wake bubble, in diameters.

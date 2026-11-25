@@ -24,6 +24,7 @@ dependencies = [
     "absl-py",
     "attrs",
     "einops",
+    "etils[epath,epath-gcs]",
     "fancyflags",
     "h5py",
     "jax",

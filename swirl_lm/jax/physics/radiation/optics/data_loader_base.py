@@ -35,11 +35,11 @@ import abc
 import dataclasses
 import os
 
+from etils import epath
 import jax
 import jax.numpy as jnp
 import netCDF4 as nc
 import numpy as np
-from tensorflow.io import gfile
 
 # Type aliases for tensor and dimension maps.
 TensorMap = dict[str, jax.Array]
@@ -60,11 +60,13 @@ class DataLoaderBase(metaclass=abc.ABCMeta):
   @classmethod
   def _create_local_file(cls, cns_file_path: str) -> str:
     """Copies remote files locally so they can be ingested by netCDF reader."""
-    # Create local directory.
+    # Create local directory. `exist_ok` rather than the bare `makedirs` the
+    # branch implies: with several processes on one node the loser of the race
+    # arrives after the winner has created it.
     if os.path.exists(cls._NETCDF_DATA_DIR):
       assert os.path.isdir(cls._NETCDF_DATA_DIR)
     else:
-      os.makedirs(cls._NETCDF_DATA_DIR)
+      os.makedirs(cls._NETCDF_DATA_DIR, exist_ok=True)
     local_filename = os.path.join(
         cls._NETCDF_DATA_DIR, os.path.basename(cns_file_path)
     )
@@ -72,8 +74,7 @@ class DataLoaderBase(metaclass=abc.ABCMeta):
     if os.path.exists(local_filename):
       assert os.path.isfile(local_filename)
     else:
-      with gfile.GFile(local_filename, 'w') as local_file:
-        local_file.write(gfile.GFile(cns_file_path, mode='rb').read())
+      epath.Path(cns_file_path).copy(local_filename)
     return local_filename
 
   @classmethod

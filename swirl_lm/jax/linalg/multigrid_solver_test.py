@@ -584,13 +584,6 @@ class TransferTest(parameterized.TestCase):
 
     np.testing.assert_allclose(r, p.T, atol=1e-6)
 
-  # TODO(wqing): Known defect. `_restrict_axis` takes the plane past the high
-  # face of `lower` from `upper`'s exchange (and vice versa). That is the
-  # transpose only where the outside cell is a reflection or zero, i.e. a
-  # Neumann or Dirichlet face. Where it is a copy of another cell -- a periodic
-  # face or an inter-device seam -- the transpose needs `lower`'s own
-  # neighbour. Remove `expectedFailure` once fixed.
-  @unittest.expectedFailure
   def test_restriction_is_the_transpose_of_prolongation_periodic(self):
     exchange = _stub_exchange('periodic')
     fine_shape = (8, 6, 4)
@@ -1364,10 +1357,6 @@ class SolveTest(parameterized.TestCase):
     setup = _make_setup(bc_xyz=bc_xyz, num_iterations=1)
     self.assertLess(self._asymmetry(setup), 1e-5)
 
-  # TODO(wqing): Known defect; see
-  # `test_restriction_is_the_transpose_of_prolongation_periodic`. Measured
-  # asymmetry: 6.8e-4 periodic, 5.7e-3 on eight devices.
-  @unittest.expectedFailure
   def test_one_cycle_is_symmetric_with_periodic_faces_and_seams(self):
     for bc_xyz, cores_xyz in (
         (_BC_CASES['periodic'], (1, 1, 1)),
@@ -1457,12 +1446,6 @@ class SolveTest(parameterized.TestCase):
     expected = _solve_reference(rhs, _reference_matrices(setup))
     self.assertLess(_relative_error(x, expected), 5e-3)
 
-  # TODO(wqing): Known defect; see
-  # `test_restriction_is_the_transpose_of_prolongation_periodic`. At a seam the
-  # restriction is not the transpose of the prolongation, so the partitioned
-  # cycle is a different (and non-symmetric) operator from the single-device
-  # one, and their results differ well beyond roundoff.
-  @unittest.expectedFailure
   def test_result_does_not_depend_on_the_partition(self):
     for cores_xyz, coarsest_xyz in self._PARTITIONS:
       single = _make_setup(

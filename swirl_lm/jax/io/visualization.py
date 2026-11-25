@@ -34,6 +34,10 @@ both in-memory JAX arrays (during a simulation) and xarray Datasets
 All plotting functions return matplotlib Figure objects so they can be
 displayed inline in Colab or saved to disk.
 
+The live-state functions gather the field from the device mesh, which is a
+collective in a multi-process job: every process must call them, for the same
+fields in the same order. Only process 0 writes `save_path`.
+
 Usage:
   ```python
   from swirl_lm.jax.io import visualization as viz
@@ -184,7 +188,8 @@ def plot_slice(
     Matplotlib Figure object.
   """
   # Strip first, so that the index is interpreted against the interior.
-  arr = _to_interior(np.asarray(states[field_name]), grid_params)
+  arr = _to_interior(global_layout.to_host_array(states[field_name]),
+                     grid_params)
 
   if grid_params is not None:
     dao = tuple(grid_params.data_axis_order)
@@ -279,9 +284,9 @@ def plot_velocity_magnitude(
   Returns:
     Matplotlib Figure object.
   """
-  u = np.asarray(states['u'])
-  v = np.asarray(states['v'])
-  w = np.asarray(states['w'])
+  u = global_layout.to_host_array(states['u'])
+  v = global_layout.to_host_array(states['v'])
+  w = global_layout.to_host_array(states['w'])
   vmag = np.sqrt(u**2 + v**2 + w**2)
   vmag_states = {'|u|': vmag}
   return plot_slice(
@@ -338,7 +343,7 @@ def plot_overview(
     row, col = divmod(i, ncols)
     ax_plot = axes[row, col]
 
-    arr = _to_interior(np.asarray(states[fname]), grid_params)
+    arr = _to_interior(global_layout.to_host_array(states[fname]), grid_params)
     axis_idx = list(dao).index(axis)
     idx = index if index is not None else arr.shape[axis_idx] // 2
 
@@ -370,7 +375,9 @@ def plot_overview(
 
   fig.tight_layout()
 
-  if save_path is not None:
+  # Every process gathered the same data and drew the same figure, so only one
+  # may write it; concurrent writers would interleave in the same file.
+  if save_path is not None and jax.process_index() == 0:
     plot_path = epath.Path(save_path)
     with plot_path.open('wb') as f:
       plt.savefig(f, format='png')

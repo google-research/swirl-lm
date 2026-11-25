@@ -34,6 +34,7 @@ import jax
 
 from swirl_lm.base import parameters_pb2
 from swirl_lm.jax.base import parameters as parameters_lib
+from swirl_lm.jax.core import distribution
 from swirl_lm.jax.core import driver as driver_lib
 from swirl_lm.jax.examples.buoyant_bubble import buoyant_bubble
 
@@ -78,6 +79,10 @@ def _make_params() -> parameters_lib.SwirlLMParameters:
 
 
 def main(_):
+  # Before anything that touches the XLA backend, so a multi-node job sees
+  # every GPU rather than only its own.
+  distribution.initialize()
+
   params = _make_params()
   print(f'Apply preprocessing: {params.apply_preprocess}')
   print(f'Preprocessing step ID: {params.preprocess_step_id}')

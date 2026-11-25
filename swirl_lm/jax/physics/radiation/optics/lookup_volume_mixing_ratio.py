@@ -36,14 +36,14 @@ import dataclasses
 import json
 from typing import Callable, Optional
 
+from etils import epath
 import jax
 import jax.numpy as jnp
 from swirl_lm.jax.physics.radiation.optics import optics_utils
+from swirl_lm.jax.utility import file_io
 from swirl_lm.jax.utility import types
 from swirl_lm.physics.radiation.config import radiative_transfer_pb2
 from swirl_lm.physics.radiation.optics import constants
-from swirl_lm.utility import file_io
-from tensorflow.io import gfile
 
 ScalarField = types.ScalarField
 ScalarFieldMap = types.ScalarFieldMap
@@ -104,7 +104,8 @@ class LookupVolumeMixingRatio:
         constants.DRY_AIR_KEY: constants.DRY_AIR_VMR,
     }
     if proto.HasField('vmr_global_mean_filepath'):
-      with gfile.GFile(proto.vmr_global_mean_filepath, 'r') as f:
+      path = epath.Path(proto.vmr_global_mean_filepath)
+      with path.open('r') as f:
         global_means.update(json.loads(f.read()))
 
     kwargs = dict(

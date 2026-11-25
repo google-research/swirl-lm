@@ -45,13 +45,41 @@ This module provides that conversion and its exact inverse:
   - `strip_halos_global`: sharded layout -> contiguous unique points.
   - `inflate_to_global`: contiguous unique points -> sharded layout.
 
-Both operate on host NumPy arrays and never touch a device mesh.
+Both operate on host NumPy arrays. `to_host_array` is how one is obtained from
+a live state, and is the only function here that touches a device mesh.
 """
 
 from collections.abc import Sequence
 
+import jax
+from jax.experimental import multihost_utils
 import numpy as np
 from swirl_lm.jax.utility import grid_parametrization as gp_lib
+
+
+def to_host_array(arr: jax.Array) -> np.ndarray:
+  """Materializes a possibly-sharded state array on the host.
+
+  Within one process every shard is addressable and `np.asarray` gathers them.
+  In a multi-process job a 3D field spans devices this process cannot address,
+  and fetching it raises, so an explicit cross-process gather is needed.
+
+  A fully replicated array is exempt, because JAX tests for replication before
+  addressability. That covers every reduction to a scalar and every value an
+  in-`shard_map` `psum` returns, so those never reach the gather.
+
+  This is a collective: in a multi-process job every process must call it, for
+  the same arrays, in the same order.
+
+  Args:
+    arr: A state array, sharded or not.
+
+  Returns:
+    The full global value as a NumPy array.
+  """
+  if jax.process_count() > 1 and not getattr(arr, 'is_fully_addressable', True):
+    return np.asarray(multihost_utils.process_allgather(arr, tiled=True))
+  return np.asarray(arr)
 
 
 def _axis_sizes(
